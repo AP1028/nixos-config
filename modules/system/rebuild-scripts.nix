@@ -7,6 +7,7 @@ in {
     (pkgs.writeShellScriptBin "nixos-rebuild" ''
       set -euo pipefail
       CONFIG_DIR="${configDir}"
+      git config --global --add safe.directory "$CONFIG_DIR" 2>/dev/null || true
       cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
       echo "Staging files..."
       git add --all
