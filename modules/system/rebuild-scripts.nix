@@ -4,7 +4,7 @@
   configDir = config.local.configDir;
 in {
   environment.systemPackages = [
-    (pkgs.writeShellScriptBin "nixos-rebuild" ''
+    (pkgs.writeShellScriptBin "nixos-switch" ''
       set -euo pipefail
       CONFIG_DIR="${configDir}"
       git config --global --add safe.directory "$CONFIG_DIR" 2>/dev/null || true
@@ -28,14 +28,14 @@ in {
       sudo nixos-rebuild switch --flake "$CONFIG_DIR#${host}"
     '')
 
-    (pkgs.writeShellScriptBin "nixos-update" ''
+    (pkgs.writeShellScriptBin "nixos-update-flake" ''
       set -euo pipefail
       CONFIG_DIR="${configDir}"
       cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
       echo "Updating flake inputs..."
       nix flake update
       echo "Rebuilding..."
-      exec nixos-rebuild
+      exec nixos-switch
     '')
   ];
 }
