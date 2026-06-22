@@ -25,19 +25,19 @@ AVAILABLE_HOSTS=(asusg16 nixos-service-vm nixos-git-vm macbook)
 
 if [ -z "$HOST" ]; then
   CURRENT_HOSTNAME="$(hostname)"
-  if [ -n "''${HOSTNAME_MAP[$CURRENT_HOSTNAME]:-}" ]; then
-    HOST="''${HOSTNAME_MAP[$CURRENT_HOSTNAME]}"
+  if [ -n "${HOSTNAME_MAP[$CURRENT_HOSTNAME]:-}" ]; then
+    HOST="${HOSTNAME_MAP[$CURRENT_HOSTNAME]}"
     echo "Auto-detected host: $HOST (from hostname: $CURRENT_HOSTNAME)"
   else
     echo "Could not auto-detect host from hostname: $CURRENT_HOSTNAME"
     echo ""
     echo "Select a host to rebuild:"
-    for i in "''${!AVAILABLE_HOSTS[@]}"; do
-      echo "  $((i+1))) ''${AVAILABLE_HOSTS[$i]}"
+    for i in "${!AVAILABLE_HOSTS[@]}"; do
+      echo "  $((i+1))) ${AVAILABLE_HOSTS[$i]}"
     done
-    read -rp "Enter number (1-''${#AVAILABLE_HOSTS[@]}): " choice
+    read -rp "Enter number (1-${#AVAILABLE_HOSTS[@]}): " choice
     if [[ "$choice" =~ ^[1-4]$ ]]; then
-      HOST="''${AVAILABLE_HOSTS[$((choice-1))]}"
+      HOST="${AVAILABLE_HOSTS[$((choice-1))]}"
     else
       echo "Invalid selection."
       exit 1
@@ -50,8 +50,8 @@ if [ ! -f "$CONFIG_DIR/local.nix" ]; then
   DEFAULT_USER="$(whoami)"
   echo ""
   echo "First time setup: configure the main user for this machine."
-  read -rp "Username [''${DEFAULT_USER}]: " MAIN_USER
-  MAIN_USER="''${MAIN_USER:-$DEFAULT_USER}"
+  read -rp "Username [${DEFAULT_USER}]: " MAIN_USER
+  MAIN_USER="${MAIN_USER:-$DEFAULT_USER}"
   cat > "$CONFIG_DIR/local.nix" <<EOF
 { username = "$MAIN_USER"; configDir = "$CONFIG_DIR"; }
 EOF
@@ -63,7 +63,7 @@ cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
 echo "Staging files..."
 git add --all -- ':!local.nix'
 
-if git diff-index --quiet HEAD --; then
+if git diff --cached --quiet; then
   echo "No changes to commit."
 else
   COMMIT_MSG="Auto-commit from rebuild ($HOST): $(date '+%Y-%m-%d %H:%M:%S')"
