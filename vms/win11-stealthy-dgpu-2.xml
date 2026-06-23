@@ -1,6 +1,6 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>win11-stealthy-dgpu-2</name>
-  <uuid>5a4b9d12-4381-45f5-97b0-c59c154d3c5g</uuid>
+  <uuid>5a4b9d12-4381-45f5-97b0-c59c154d3c5e</uuid>
   <metadata>
     <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
       <libosinfo:os id="http://microsoft.com/win/11"/>
@@ -18,7 +18,7 @@
       <entry name='product'>ROG Zephyrus G16 GU605MY</entry>
       <entry name='version'>1.0</entry>
       <entry name='serial'>M12345678901234</entry>
-      <entry name='uuid'>5a4b9d12-4381-45f5-97b0-c59c154d3c5g</entry>
+      <entry name='uuid'>5a4b9d12-4381-45f5-97b0-c59c154d3c5e</entry>
       <entry name='sku'>GU605MY</entry>
       <entry name='family'>ROG Zephyrus</entry>
     </system>
