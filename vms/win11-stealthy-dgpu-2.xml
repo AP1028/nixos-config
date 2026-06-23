@@ -45,9 +45,15 @@
     <acpi/>
     <apic/>
     <hyperv mode="custom">
-      <relaxed state="on"/>
-      <vapic state="on"/>
-      <spinlocks state="on" retries="8191"/>
+      <relaxed state='on'/>
+      <vapic state='on'/>
+      <spinlocks state='on' retries='8191'/>
+      <vpindex state='on'/>
+      <runtime state='on'/>
+      <synic state='on'/>
+      <stimer state='on'/>
+      <reset state='on'/>
+      <frequencies state='on'/>
       <vendor_id state="on" value="GenuineIntel"/>
     </hyperv>
     <kvm>
@@ -240,7 +246,5 @@
     <qemu:arg value="file=/var/lib/libvirt/images/win11_iot_ltsc.qcow2,format=qcow2,if=none,id=drive-sata0"/>
     <qemu:arg value="-device"/>
     <qemu:arg value="ide-hd,bus=ide.0,drive=drive-sata0,id=sata0,model=Samsung SSD 870 EVO,serial=S5YJNX0W123456"/>
-    <qemu:arg value="-cpu"/>
-    <qemu:arg value="host,kvm=off"/>
   </qemu:commandline>
 </domain>
