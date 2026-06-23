@@ -40,6 +40,7 @@
         { definition = ../../vms/win11-stealthy.xml; active = false; }
         { definition = ../../vms/win11-stealthy-dgpu.xml; active = false; }
         { definition = ../../vms/win11-stealthy-dgpu-nvme.xml; active = false; }
+        { definition = ../../vms/win11-stealthy-dgpu-2.xml; active = false; }
         { definition = ../../vms/win11-virtio.xml; active = false; }
         { definition = ../../vms/win11-virtio-dgpu.xml; active = false; }
         { definition = ../../vms/win11-virtio-nvme.xml; active = false; }
