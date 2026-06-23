@@ -49,4 +49,8 @@
     ../../modules/env/common.nix
     ../../modules/env/no-internet.nix
   ];
+
+  home-manager.users.${config.local.username} = {
+    imports = [ ../../modules/home ];
+  };
 }

@@ -29,6 +29,16 @@
     nix-flatpak.url = "github:gmodena/nix-flatpak";
 
     apple-silicon.url = "github:nix-community/nixos-apple-silicon";
+
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    nixvirt = {
+      url = "github:AshleyYakeley/NixVirt";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {
@@ -39,6 +49,8 @@
     vscode-server,
     nix-flatpak,
     apple-silicon,
+    home-manager,
+    nixvirt,
     ...
   }: {
     nixosConfigurations = {
@@ -56,6 +68,9 @@
 
           ./modules/hardware/supergfxctl-overlay.nix
           ./modules/packages/winapps.nix
+
+          home-manager.nixosModules.home-manager
+          nixvirt.nixosModules.default
         ];
       };
 

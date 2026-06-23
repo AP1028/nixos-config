@@ -31,6 +31,32 @@
     };
   };
 
+  virtualisation.libvirt = {
+    enable = true;
+    connections."qemu:///system" = {
+      domains = [
+        { definition = ../../vms/win11-igpu.xml; active = false; }
+        { definition = ../../vms/win11-igpu-nvme.xml; active = false; }
+        { definition = ../../vms/win11-stealthy.xml; active = false; }
+        { definition = ../../vms/win11-stealthy-dgpu.xml; active = false; }
+        { definition = ../../vms/win11-stealthy-dgpu-nvme.xml; active = false; }
+        { definition = ../../vms/win11-virtio.xml; active = false; }
+        { definition = ../../vms/win11-virtio-dgpu.xml; active = false; }
+        { definition = ../../vms/win11-virtio-nvme.xml; active = false; }
+      ];
+      networks = [
+        { definition = ../../vms/network-default.xml; active = true; }
+      ];
+      pools = [
+        { definition = ../../vms/pool-default.xml; active = true; }
+        { definition = ../../vms/pool-Desktop.xml; active = true; }
+        { definition = ../../vms/pool-Downloads.xml; active = true; }
+        { definition = ../../vms/pool-nvram.xml; active = true; }
+        { definition = ../../vms/pool-synopsys.xml; active = true; }
+      ];
+    };
+  };
+
   # Podman with Docker-compatible CLI (for distrobox)
   virtualisation.podman = {
     enable = true;
