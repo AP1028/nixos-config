@@ -52,7 +52,6 @@
         { definition = ../../vms/pool-Desktop.xml; active = true; }
         { definition = ../../vms/pool-Downloads.xml; active = true; }
         { definition = ../../vms/pool-nvram.xml; active = true; }
-        { definition = ../../vms/pool-synopsys.xml; active = true; }
       ];
     };
   };
