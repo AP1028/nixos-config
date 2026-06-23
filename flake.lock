@@ -137,6 +137,26 @@
         "type": "github"
       }
     },
+    "home-manager": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1782166451,
+        "narHash": "sha256-SA7LyrayyZBvtzZnesnSLV7haciFuVLeZaX2hd5v4j4=",
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "rev": "471a1d2f840eb7fcbdfd541d99c13a64096f46db",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "type": "github"
+      }
+    },
     "i915-sriov-dkms": {
       "inputs": {
         "nixpkgs": [
@@ -259,6 +279,26 @@
         "type": "github"
       }
     },
+    "nixvirt": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1774166436,
+        "narHash": "sha256-Lr1R+tx8ZMiB+aBWyvCaeDaFGivhMMQEq9iGp4F43bI=",
+        "owner": "AshleyYakeley",
+        "repo": "NixVirt",
+        "rev": "bf291972bec36018f39e61b0915940628ba9054c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "AshleyYakeley",
+        "repo": "NixVirt",
+        "type": "github"
+      }
+    },
     "pre-commit": {
       "inputs": {
         "flake-compat": "flake-compat_2",
@@ -285,11 +325,13 @@
     "root": {
       "inputs": {
         "apple-silicon": "apple-silicon",
+        "home-manager": "home-manager",
         "i915-sriov-dkms": "i915-sriov-dkms",
         "lanzaboote": "lanzaboote",
         "nix-flatpak": "nix-flatpak",
         "nixos-23-11": "nixos-23-11",
         "nixpkgs": "nixpkgs_2",
+        "nixvirt": "nixvirt",
         "vscode-server": "vscode-server",
         "winapps": "winapps"
       }

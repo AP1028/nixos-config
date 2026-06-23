@@ -1,0 +1,18 @@
+<pool type='dir'>
+  <name>Downloads</name>
+  <uuid>29a76ab5-fe71-46a4-a4e1-2687499aaa44</uuid>
+  <capacity unit='bytes'>3999712219136</capacity>
+  <allocation unit='bytes'>1476633845760</allocation>
+  <available unit='bytes'>2523078373376</available>
+  <source>
+  </source>
+  <target>
+    <path>/home/tianyixia/Downloads</path>
+    <permissions>
+      <mode>0755</mode>
+      <owner>1000</owner>
+      <group>100</group>
+    </permissions>
+  </target>
+</pool>
+
