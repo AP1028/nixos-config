@@ -9,6 +9,12 @@ in {
     description = "Primary user name for this machine (set via local.nix)";
   };
 
+  options.local.description = lib.mkOption {
+    type = lib.types.str;
+    default = localConfig.description;
+    description = "Full name / description of the primary user (set via local.nix)";
+  };
+
   options.local.configDir = lib.mkOption {
     type = lib.types.str;
     default = localConfig.configDir;

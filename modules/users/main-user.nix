@@ -11,7 +11,7 @@
   users.users.${config.local.username} = {
     shell = pkgs.zsh;
     isNormalUser = true;
-    description = "Main User";
+    description = config.local.description;
     extraGroups = [
       "networkmanager"
       "wheel"
