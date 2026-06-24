@@ -54,8 +54,8 @@
   # Default to iGPU (Mesa) — use nvidia-offload for NVIDIA.
   # This keeps the dGPU free for VFIO passthrough without rogue
   # WebKit / Electron / Vulkan processes holding /dev/nvidia*.
-  environment.variables = {
-    __GLX_VENDOR_LIBRARY_NAME = "mesa";
-    __EGL_VENDOR_LIBRARY_FILENAMES = "/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json";
-  };
+  # environment.variables = {
+  #   __GLX_VENDOR_LIBRARY_NAME = "mesa";
+  #   __EGL_VENDOR_LIBRARY_FILENAMES = "/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json";
+  # };
 }
