@@ -3,3 +3,4 @@ result
 # local.nix is tracked as a template but auto-commit excludes it;
 # do NOT commit your personal values here.
 local.nix
+git-excluded/
