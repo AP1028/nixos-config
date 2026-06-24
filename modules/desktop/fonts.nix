@@ -8,7 +8,7 @@
 
   # Import your new local package file safely using conditional evaluation
   ms-fonts =
-    if builtins.pathExists ../../git-excluded/fonts/ms-fonts.zip
+    if builtins.pathExists /etc/nixos/git-excluded/fonts/ms-fonts.zip
     then pkgs.callPackage ../../packages/ms-fonts.nix {}
     else null;
 in {
