@@ -13,23 +13,15 @@
   };
 
   # Fix clash-verge GUI rendering (blank proxy page / core communication
-  # failed): the Nix wrapper doesn't set GST_PLUGIN_SYSTEM_PATH, so
-  # WebKitGTK can't find GStreamer plugins like "appsink" at runtime.
-  # This breaks the webview — the proxy page stays blank and the frontend
-  # JS never loads, causing "core communication failed".
+  # failed): WebKitGTK's DMABUF renderer fails on NVIDIA/Wayland systems,
+  # producing "AcceleratedSurfaceDMABuf was unable to construct a complete
+  # framebuffer".  This makes the webview render blank — the proxy page
+  # shows nothing and the frontend JS never loads.
   #
-  # We wrap the existing clash-verge C wrapper with another C wrapper
-  # (makeBinaryWrapper) that just adds GST_PLUGIN_SYSTEM_PATH.  The
-  # original wrapper still handles GIO/GDK/XDG.  Using a C wrapper
-  # (not a shell script) keeps the setcap chain intact for TUN mode.
-  programs.clash-verge.package = let
-    gstPluginPath = lib.concatStringsSep ":" [
-      "${pkgs.gst_all_1.gst-plugins-base}/lib/gstreamer-1.0"
-      "${pkgs.gst_all_1.gst-plugins-good}/lib/gstreamer-1.0"
-      "${pkgs.gst_all_1.gst-plugins-bad}/lib/gstreamer-1.0"
-      "${pkgs.gst_all_1.gstreamer}/lib/gstreamer-1.0"
-    ];
-  in pkgs.runCommand "clash-verge-rev-gst"
+  # WEBKIT_DISABLE_DMABUF_RENDERER=1 forces a fallback renderer that
+  # works on NVIDIA.  We wrap only the GUI binary with a C wrapper
+  # (makeBinaryWrapper) to keep the setcap chain intact for TUN mode.
+  programs.clash-verge.package = pkgs.runCommand "clash-verge-rev-dmabuf"
     {
       nativeBuildInputs = [pkgs.makeBinaryWrapper];
       inherit (pkgs.clash-verge-rev) meta;
@@ -41,7 +33,7 @@
         if [ "$name" = "clash-verge" ]; then
           makeBinaryWrapper "$bin" $out/bin/clash-verge \
             --inherit-argv0 \
-            --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : "${gstPluginPath}"
+            --set WEBKIT_DISABLE_DMABUF_RENDERER 1
         elif [ -L "$bin" ]; then
           ln -s "$(readlink "$bin")" $out/bin/"$name"
         else
@@ -56,8 +48,8 @@
     '';
 
   # ── Fallback: pin clash-verge to old nixpkgs ────────────────────
-  # If the GStreamer fix above doesn't resolve the blank proxy page,
-  # add a pinned nixpkgs input in flake.nix and use it here:
+  # If this fix doesn't resolve the issue, add a pinned nixpkgs input
+  # in flake.nix and use it here:
   #   programs.clash-verge.package = inputs.old-nixpkgs.clash-verge-rev;
   # Where old-nixpkgs.url = "github:NixOS/nixpkgs/567a49d";
 
