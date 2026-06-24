@@ -27,6 +27,7 @@
         mkdir -p "$FONT_DIR"
 
         # Wipe old copies so they stay fresh with system updates
+        chmod -R u+w "$FONT_DIR" 2>/dev/null || true
         rm -rf "$FONT_DIR"/*
 
         # Dynamically loop through every font available in the Nix system profile
