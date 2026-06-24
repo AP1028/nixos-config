@@ -25,7 +25,7 @@ in {
         fi
       fi
       echo "Starting NixOS rebuild for ${host}..."
-      sudo nixos-rebuild switch --flake "$CONFIG_DIR#${host}"
+      sudo nixos-rebuild switch --impure --flake "$CONFIG_DIR#${host}"
     '')
 
     (pkgs.writeShellScriptBin "nixos-update-flake" ''
