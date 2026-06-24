@@ -21,6 +21,9 @@
 
     nixos-23-11.url = "github:nixos/nixpkgs/nixos-23.11";
 
+    # Pinned old nixpkgs for clash-verge-rev rollback (blank proxy page fix)
+    old-nixpkgs.url = "github:NixOS/nixpkgs/567a49d1913ce81ac6e9582e3553dd90a955875f";
+
     vscode-server = {
       url = "github:nix-community/nixos-vscode-server";
       inputs.nixpkgs.follows = "nixpkgs";
