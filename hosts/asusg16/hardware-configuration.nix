@@ -44,10 +44,12 @@
   fileSystems."/swap" =
     { device = "/dev/disk/by-uuid/8a336b9c-8e1f-4c75-b921-632c807f91d9";
       fsType = "btrfs";
-      options = [ "noatime" "subvol=@swap" ];
+      options = [ "noatime" "nodatacow" "subvol=@swap" ];
     };
 
-  swapDevices = [ ];
+  swapDevices = [
+    { device = "/swap/swapfile"; size = 65536; }
+  ];
 
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
   hardware.cpu.intel.npu.enable = true;
