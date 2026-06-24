@@ -21,6 +21,9 @@
 
     nixos-23-11.url = "github:nixos/nixpkgs/nixos-23.11";
 
+    # Pinned to nixpkgs with clash-verge-rev 2.4.7 (2.5.1 has blank proxy regression)
+    old-nixpkgs.url = "github:NixOS/nixpkgs/9ae611a455b90cf061d8f332b977e387bda8e1ca";
+
     vscode-server = {
       url = "github:nix-community/nixos-vscode-server";
       inputs.nixpkgs.follows = "nixpkgs";
