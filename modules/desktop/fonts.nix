@@ -7,6 +7,9 @@
   harmonyos = pkgs.callPackage ../../packages/harmonyos-sans-font.nix {};
 in {
   fonts.packages = with pkgs; [
+    corefonts
+    vista-fonts
+
     noto-fonts
     noto-fonts-cjk-sans
     noto-fonts-cjk-serif
