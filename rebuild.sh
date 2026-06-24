@@ -82,4 +82,4 @@ else
 fi
 
 echo "Starting NixOS rebuild for $HOST..."
-sudo nixos-rebuild switch --flake "$CONFIG_DIR#$HOST"
+sudo nixos-rebuild switch --impure --flake "$CONFIG_DIR#$HOST"
