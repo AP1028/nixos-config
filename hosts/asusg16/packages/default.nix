@@ -57,6 +57,7 @@
     alejandra
     clang
     gcc
+    valgrind
     neovim
     nixd
     tmux
