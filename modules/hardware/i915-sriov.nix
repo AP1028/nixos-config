@@ -62,7 +62,7 @@
     "i915.enable_dpcd_backlight=1"
 
     # might fix hotplug problem
-    "i915.enable_psr=1"
+    # "i915.enable_psr=1"
   ];
 
   # Blacklist Xe driver so i915 can claim the GPU
