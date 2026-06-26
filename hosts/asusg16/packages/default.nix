@@ -8,10 +8,10 @@
     ../../../modules/packages/flatpak-bottles.nix
     ../../../modules/packages/flatpak-baidunetdisk.nix
     ../../../modules/packages/flatpak-flatseal.nix
-    ../../../modules/packages/flatpak-netease.nix
     ../../../modules/packages/davinci.nix
     ../../../modules/packages/onlyoffice.nix
     ../../../modules/packages/opencode.nix
+    ../../../modules/packages/wpsoffice.nix
   ];
 
   environment.systemPackages = with pkgs; [
@@ -30,7 +30,6 @@
     qalculate-qt
     pinta
     audacity
-    wpsoffice-cn
 
     discord
     feishu
