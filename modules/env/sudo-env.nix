@@ -1,6 +1,7 @@
 {config, pkgs, ...}: let
   sudo-env = pkgs.writeShellScriptBin "sudo-env" ''
-    exec sudo -u "$USER" zsh "$@"
+    sudo -v
+    exec zsh "$@"
   '';
 in {
   environment.systemPackages = [sudo-env];
