@@ -63,9 +63,9 @@
   }: {
     nixosConfigurations = {
       asusg16 = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
         specialArgs = {inherit inputs;};
         modules = [
+          { nixpkgs.hostPlatform = "x86_64-linux"; }
           ./hosts/asusg16/hardware-configuration.nix
           ./hosts/asusg16/default.nix
 
@@ -83,9 +83,9 @@
       };
 
       nixos-service-vm = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
         specialArgs = {inherit inputs;};
         modules = [
+          { nixpkgs.hostPlatform = "x86_64-linux"; }
           ./hosts/nixos-service-vm/hardware-configuration.nix
           ./hosts/nixos-service-vm/default.nix
 
@@ -94,9 +94,9 @@
       };
 
       nixos-git-vm = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
         specialArgs = {inherit inputs;};
         modules = [
+          { nixpkgs.hostPlatform = "x86_64-linux"; }
           ./hosts/nixos-git-vm/hardware-configuration.nix
           ./hosts/nixos-git-vm/default.nix
 
@@ -105,9 +105,9 @@
       };
 
       macbook = nixpkgs.lib.nixosSystem {
-        system = "aarch64-linux";
         specialArgs = {inherit inputs;};
         modules = [
+          { nixpkgs.hostPlatform = "aarch64-linux"; }
           ./hosts/macbook/hardware-configuration.nix
           ./hosts/macbook/default.nix
 

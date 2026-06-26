@@ -15,7 +15,7 @@
         WorkingDirectory = "/home/service/HelloNeoJournautics";
         path = [
           pkgs.tmux
-          inputs.nixos-23-11.legacyPackages.${pkgs.system}.graalvm-ce
+          inputs.nixos-23-11.legacyPackages.${pkgs.stdenv.hostPlatform.system}.graalvm-ce
           pkgs.bash
           pkgs.coreutils
         ];
