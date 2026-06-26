@@ -1,4 +1,8 @@
-{pkgs, ...}: {
+{
+  pkgs,
+  inputs,
+  ...
+}: {
   # Steam with Proton GE and CJK font support inside the runtime
   programs.steam = {
     enable = true;
