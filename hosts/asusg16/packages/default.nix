@@ -102,6 +102,7 @@
     distrobox
     input-remapper
     nvitop
+    # crystal-dock
 
     texlive.combined.scheme-full
   ];
