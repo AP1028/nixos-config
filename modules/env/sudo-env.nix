@@ -26,15 +26,12 @@ in
       fi
 
       COMMAND="$2"
-      PROMPT_TEXT="⚠️ OpenCode Agent is requesting root privileges to run:
-
-      $COMMAND
-
-      Enter your user password to authorize this action:"
+      TRUNCATED=$(echo "$COMMAND" | head -c 80)
+      [ "$TRUNCATED" != "$COMMAND" ] && TRUNCATED="$TRUNCATED..."
 
       export SUDO_ASKPASS="${askpassScript}"
 
-      exec sudo -k -A sh -c "$COMMAND"
+      exec sudo -k -A -p "[sudo-env] Password to run: $TRUNCATED" sh -c "$COMMAND"
     '')
   ];
 }
