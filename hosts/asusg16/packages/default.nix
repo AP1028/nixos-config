@@ -30,6 +30,7 @@
     qalculate-qt
     pinta
     audacity
+    wpsoffice-cn
 
     discord
     feishu
