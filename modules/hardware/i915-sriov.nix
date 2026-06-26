@@ -61,8 +61,11 @@
 
     "i915.enable_dpcd_backlight=1"
 
-    # might fix hotplug problem
-    # "i915.enable_psr=1"
+    # Prevent deep display sleep states (DC6 PHY refclk failures on Arrow Lake)
+    "i915.enable_dc=2"
+
+    # PSR is broken on Arrow Lake with out-of-tree i915-sriov
+    "i915.enable_psr=0"
   ];
 
   # Blacklist Xe driver so i915 can claim the GPU

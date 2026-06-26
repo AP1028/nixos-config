@@ -61,7 +61,7 @@
         libxkbcommon
         wayland
         libxshmfence
-        mesa.drivers
+        # mesa.drivers is deprecated; mesa already included above
         expat
         strace
         ltrace
