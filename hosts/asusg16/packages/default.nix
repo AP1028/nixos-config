@@ -105,6 +105,8 @@
     # crystal-dock
 
     texlive.combined.scheme-full
+
+    kdePackages.klassy
   ];
 
   programs.java = {
