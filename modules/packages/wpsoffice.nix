@@ -16,7 +16,7 @@
       sed -i "s|^Exec=.*|Exec=$out/bin/wps %f|" $out/share/applications/wps-office-wps.desktop
       sed -i "s|^Exec=.*|Exec=$out/bin/et %f|" $out/share/applications/wps-office-et.desktop
       sed -i "s|^Exec=.*|Exec=$out/bin/wpp %f|" $out/share/applications/wps-office-wpp.desktop
-      sed -i "s|^Exec=.*|Exec=$out/bin/wpspdf %f|" $out/share/applications/wps-office-wpspdf.desktop
+      sed -i "s|^Exec=.*|Exec=$out/bin/wpspdf %f|" $out/share/applications/wps-office-pdf.desktop
     '';
   };
 in {
