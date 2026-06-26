@@ -8,7 +8,7 @@
 
   askpassScript = pkgs.writeShellScript "desktop-askpass" ''
     if [ -x "${kdialogBin}" ]; then
-      ${kdialogBin} --password "$1"
+      ${kdialogBin} --password "$1" 2>/dev/null
     else
       echo "Error: Graphical pinentry tool not found." >&2
       exit 1
