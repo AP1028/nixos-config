@@ -48,7 +48,6 @@
     ../../modules/env/matlab-env.nix
     ../../modules/env/common.nix
     ../../modules/env/no-internet.nix
-    ../../modules/env/sudo-env.nix
   ];
 
   home-manager.users.${config.local.username} = {
