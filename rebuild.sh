@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ "$(id -u)" -eq 0 ]; then
+  echo "Do not run this script with sudo. It handles sudo internally where needed." >&2
+  exit 1
+fi
+
 CONFIG_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST="${1:-}"
 

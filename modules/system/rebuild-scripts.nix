@@ -6,6 +6,10 @@ in {
   environment.systemPackages = [
     (pkgs.writeShellScriptBin "nixos-switch" ''
       set -euo pipefail
+      if [ "$(id -u)" -eq 0 ]; then
+        echo "Do not run this script with sudo. It handles sudo internally where needed." >&2
+        exit 1
+      fi
       CONFIG_DIR="${configDir}"
       git config --global --add safe.directory "$CONFIG_DIR" 2>/dev/null || true
       cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
@@ -30,6 +34,10 @@ in {
 
     (pkgs.writeShellScriptBin "nixos-update-flake" ''
       set -euo pipefail
+      if [ "$(id -u)" -eq 0 ]; then
+        echo "Do not run this script with sudo. It handles sudo internally where needed." >&2
+        exit 1
+      fi
       CONFIG_DIR="${configDir}"
       cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
       echo "Updating flake inputs..."
