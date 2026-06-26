@@ -43,7 +43,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    nix-proton-cachyos.url = "github:kimjongbing/nix-proton-cachyos";
+    nix-gaming-edge = {
+      url = "github:powerofthe69/nix-gaming-edge";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {
