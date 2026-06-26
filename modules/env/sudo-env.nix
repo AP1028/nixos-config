@@ -8,4 +8,6 @@
   '';
 in {
   environment.systemPackages = [sudo-env];
+
+  security.sudo.extraConfig = "Defaults:${config.local.username} timestamp_type = global";
 }
