@@ -107,6 +107,7 @@
     texlive.combined.scheme-full
 
     quota
+    smartmontools
   ];
 
   programs.java = {
