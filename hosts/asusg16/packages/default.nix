@@ -108,6 +108,7 @@
 
     quota
     smartmontools
+    e2fsprogs
   ];
 
   programs.java = {
