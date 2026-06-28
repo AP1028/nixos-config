@@ -12,6 +12,7 @@
     ../../../modules/packages/onlyoffice.nix
     ../../../modules/packages/opencode.nix
     ../../../modules/packages/wpsoffice.nix
+    ../../../modules/packages/controller-rebind.nix
   ];
 
   environment.systemPackages = with pkgs; [

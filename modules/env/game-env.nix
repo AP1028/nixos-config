@@ -105,6 +105,9 @@
       at-spi2-core
       at-spi2-atk
       atk
+      webkitgtk_4_1
+      libavif
+      dav1d
 
       # ── Misc ──
       dbus
