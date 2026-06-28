@@ -136,7 +136,7 @@
       graphene
       json-glib
       libpsl
-      libsoup
+      libsoup_3
       re2
       snappy
       minizip
