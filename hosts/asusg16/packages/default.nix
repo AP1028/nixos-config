@@ -107,6 +107,7 @@
     # crystal-dock
 
     texlive.combined.scheme-full
+    dotnet-sdk_9
 
     quota
     smartmontools
