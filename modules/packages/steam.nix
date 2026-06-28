@@ -11,6 +11,12 @@
   programs.steam = {
     enable = true;
 
+    package = pkgs.steam.override {
+      extraLibraries = pkgs: with pkgs; [
+        attr # fixes libattr.so.1 ATTR_1.3 not found in Steam runtime
+      ];
+    };
+
     extraCompatPackages = with pkgs; [
       proton-ge-bin
       proton-cachyos
