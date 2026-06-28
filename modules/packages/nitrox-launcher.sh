@@ -9,4 +9,5 @@ mkdir -p "$NITROX_HOME"
 
 cd "$NITROX_HOME"
 export DOTNET_ROOT=@dotnetRoot@
+export LD_LIBRARY_PATH=@libPath@
 exec @nitroxSrc@/Nitrox.Launcher "$@"
