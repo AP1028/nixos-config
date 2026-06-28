@@ -13,7 +13,11 @@
 
     package = pkgs.steam.override {
       extraPkgs = pkgs: with pkgs; [
-        attr # fixes libattr.so.1 ATTR_1.3 not found in Steam runtime
+        attr
+        libcap
+        pkgsi686Linux.glibc
+        pkgsi686Linux.libcap
+        pkgsi686Linux.xz
       ];
     };
 
