@@ -23,6 +23,7 @@
 
     brave
     firefox
+    mpv
     kdePackages.okular
     marktext
     qbittorrent
@@ -109,6 +110,7 @@
     quota
     smartmontools
     e2fsprogs
+    ntfsprogs
   ];
 
   programs.java = {
