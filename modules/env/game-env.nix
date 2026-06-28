@@ -106,6 +106,8 @@
       expat
       nss
       nspr
+      cups
+      libsecret
       bzip2
       xz
       libgcrypt
@@ -115,6 +117,31 @@
       lz4
       libunwind
       elfutils
+    ];
+
+    multiPkgs = pkgs: with pkgs; [
+      glibc
+      zlib
+      libglvnd
+      libGL
+      stdenv.cc.cc.lib
+      libX11
+      libXext
+      libXrender
+      libXcursor
+      libXfixes
+      libXi
+      libxcb
+      alsa-lib
+      libpulseaudio
+      pipewire
+      cups
+      nss
+      nspr
+      fontconfig
+      freetype
+      expat
+      systemd
     ];
 
     extraBindMounts = {
