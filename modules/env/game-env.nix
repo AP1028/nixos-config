@@ -124,7 +124,6 @@
       elfutils
       xdg-utils
       xscreensaver
-      appmenu-gtk3-module
       libkrb5
       keyutils
       libbsd
