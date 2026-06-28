@@ -32,11 +32,25 @@
       substituteInPlace $out/bin/Nitrox.Launcher \
         --replace '@nitroxSrc@' "$out/src" \
         --replace '@dotnetRoot@' "${pkgs.dotnet-sdk_9}/share/dotnet" \
-        --replace '@rsync@' "${pkgs.rsync}/bin/rsync"
+        --replace '@rsync@' "${pkgs.rsync}/bin/rsync" \
+        --replace '@libPath@' "${pkgs.lib.makeLibraryPath [
+          pkgs.stdenv.cc.cc.lib
+          pkgs.fontconfig
+          pkgs.libX11
+          pkgs.libICE
+          pkgs.libSM
+        ]}"
       chmod +x $out/bin/Nitrox.Launcher
 
       makeWrapper $out/src/Nitrox.Server.Subnautica $out/bin/Nitrox.Server.Subnautica \
-        --set DOTNET_ROOT ${pkgs.dotnet-sdk_9}/share/dotnet
+        --set DOTNET_ROOT ${pkgs.dotnet-sdk_9}/share/dotnet \
+        --set LD_LIBRARY_PATH ${pkgs.lib.makeLibraryPath [
+          pkgs.stdenv.cc.cc.lib
+          pkgs.fontconfig
+          pkgs.libX11
+          pkgs.libICE
+          pkgs.libSM
+        ]}
 
       runHook postInstall
     '';
