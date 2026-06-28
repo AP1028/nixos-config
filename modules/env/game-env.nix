@@ -104,6 +104,8 @@
       # ── Misc ──
       dbus
       expat
+      nss
+      nspr
       bzip2
       xz
       libgcrypt
