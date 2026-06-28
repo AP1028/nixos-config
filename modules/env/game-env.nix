@@ -26,6 +26,8 @@
       egl-wayland
 
       # ── X11 ──
+      libICE
+      libSM
       libX11
       libXext
       libXrender
@@ -108,6 +110,9 @@
       webkitgtk_4_1
       libavif
       dav1d
+
+      # ── Runtimes ──
+      dotnet-runtime_9
 
       # ── Misc ──
       dbus
