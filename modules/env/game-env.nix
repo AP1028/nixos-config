@@ -101,6 +101,11 @@
       glib-networking
       gnutls
 
+      # ── Accessibility (CEF/chromium) ──
+      at-spi2-core
+      at-spi2-atk
+      atk
+
       # ── Misc ──
       dbus
       expat
@@ -117,6 +122,31 @@
       lz4
       libunwind
       elfutils
+      xdg-utils
+      xscreensaver
+      appmenu-gtk3-module
+      libkrb5
+      keyutils
+      libbsd
+      libmd
+      libuuid
+      icu
+      openldap
+      avahi
+      libepoxy
+      graphene
+      json-glib
+      libpsl
+      libsoup
+      re2
+      snappy
+      minizip
+      brotli
+      libffi
+      libtasn1
+      p11-kit
+      sqlite
+      libdecor
     ];
 
     multiPkgs = pkgs: with pkgs; [
