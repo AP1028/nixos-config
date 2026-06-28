@@ -20,4 +20,8 @@ in {
     default = localConfig.configDir;
     description = "Path to the nixos flake config directory (set via local.nix)";
   };
+
+  config = {
+    boot.loader.systemd-boot.configurationLimit = 25;
+  };
 }
