@@ -12,7 +12,7 @@
     enable = true;
 
     package = pkgs.steam.override {
-      extraLibraries = pkgs: with pkgs; [
+      extraPkgs = pkgs: with pkgs; [
         attr # fixes libattr.so.1 ATTR_1.3 not found in Steam runtime
       ];
     };
