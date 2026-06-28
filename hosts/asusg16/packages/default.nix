@@ -13,7 +13,6 @@
     ../../../modules/packages/opencode.nix
     ../../../modules/packages/wpsoffice.nix
     ../../../modules/packages/controller-rebind.nix
-    ../../../modules/packages/nitrox.nix
   ];
 
   environment.systemPackages = with pkgs; [
