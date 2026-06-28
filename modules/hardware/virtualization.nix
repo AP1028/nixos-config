@@ -16,7 +16,7 @@
   virtualisation.libvirtd = {
     enable = true;
     qemu = {
-      package = pkgs.qemu_kvm;
+      package = pkgs.qemu_full;
       swtpm.enable = true;
       verbatimConfig = ''
         namespaces = []
