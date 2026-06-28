@@ -242,6 +242,9 @@
     <redirdev bus='usb' type='spicevmc'>
       <address type='usb' bus='0' port='1'/>
     </redirdev>
+    <redirdev bus='usb' type='spicevmc'>
+      <address type='usb' bus='0' port='2'/>
+    </redirdev>
     <watchdog model='itco' action='reset'/>
     <memballoon model='none'/>
   </devices>
