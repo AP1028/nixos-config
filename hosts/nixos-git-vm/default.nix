@@ -31,5 +31,7 @@
 
     ../../modules/desktop/plasma.nix
     ../../modules/env/xilinx-env.nix
+
+    ./packages
   ];
 }
