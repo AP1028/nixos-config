@@ -18,7 +18,7 @@
       sed -i "s|^Exec=.*|Exec=$out/bin/wpp %f|" $out/share/applications/wps-office-wpp.desktop
       sed -i "s|^Exec=.*|Exec=$out/bin/wpspdf %f|" $out/share/applications/wps-office-pdf.desktop
 
-      find $out -name wpscloudsvr \( -type f -o -type l \) -print0 2>/dev/null | while IFS= read -r -d '' svr; do
+      find $out -name wpscloudsvr \( -type f -o -type l \) -print0 2>/dev/null | while IFS= read -r -d "" svr; do
         rm -f "$svr"
         printf '#!/bin/sh\nexit 0\n' > "$svr"
         chmod +x "$svr"
