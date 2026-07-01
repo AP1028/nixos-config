@@ -17,6 +17,15 @@
       sed -i "s|^Exec=.*|Exec=$out/bin/et %f|" $out/share/applications/wps-office-et.desktop
       sed -i "s|^Exec=.*|Exec=$out/bin/wpp %f|" $out/share/applications/wps-office-wpp.desktop
       sed -i "s|^Exec=.*|Exec=$out/bin/wpspdf %f|" $out/share/applications/wps-office-pdf.desktop
+
+      for svr in $(find $out -name wpscloudsvr -type f -o -type l 2>/dev/null); do
+        rm -f "$svr"
+        cat > "$svr" << 'EOF'
+#!/bin/sh
+exit 0
+EOF
+        chmod +x "$svr"
+      done
     '';
   };
 in {
