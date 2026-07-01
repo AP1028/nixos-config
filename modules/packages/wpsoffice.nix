@@ -1,4 +1,4 @@
-{pkgs, ...}: let
+{pkgs, config, lib, ...}: let
   wps-wrapped = pkgs.symlinkJoin {
     name = "wpsoffice-cn-zh";
     paths = [pkgs.wpsoffice-cn];
@@ -17,14 +17,19 @@
       sed -i "s|^Exec=.*|Exec=$out/bin/et %f|" $out/share/applications/wps-office-et.desktop
       sed -i "s|^Exec=.*|Exec=$out/bin/wpp %f|" $out/share/applications/wps-office-wpp.desktop
       sed -i "s|^Exec=.*|Exec=$out/bin/wpspdf %f|" $out/share/applications/wps-office-pdf.desktop
-
-      find $out -name wpscloudsvr \( -type f -o -type l \) -print0 2>/dev/null | while IFS= read -r -d "" svr; do
-        rm -f "$svr"
-        printf '#!/bin/sh\nexit 0\n' > "$svr"
-        chmod +x "$svr"
-      done
     '';
   };
 in {
+  nixpkgs.overlays = [
+    (final: prev: {
+      wpsoffice-cn = prev.wpsoffice-cn.overrideAttrs (old: {
+        postInstall = (old.postInstall or "") + ''
+          rm -f $out/opt/kingsoft/wps-office/office6/wpscloudsvr
+          printf '#!/bin/sh\nexit 0\n' > $out/opt/kingsoft/wps-office/office6/wpscloudsvr
+          chmod +x $out/opt/kingsoft/wps-office/office6/wpscloudsvr
+        '';
+      });
+    })
+  ];
   environment.systemPackages = [wps-wrapped];
 }
