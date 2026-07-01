@@ -37,6 +37,9 @@
         graphviz
 
         gcc
+        glibc
+        glibc.dev
+        glibc.static
         binutils
         gnumake
 
@@ -53,6 +56,7 @@
           ln -sf /lib32/libncurses.so.5 /lib32/libtinfo.so.5
         fi
         export LD_LIBRARY_PATH=/lib:/lib64:/lib32:$LD_LIBRARY_PATH
+        export LIBRARY_PATH=/lib:/lib64:/usr/lib:$LIBRARY_PATH
         if [ -f /opt/2025.2/Vivado/settings64.sh ]; then
           source /opt/2025.2/Vivado/settings64.sh
         elif [ -f /home/${config.local.username}/.vivado/2025.2/Vivado/settings64.sh ]; then

@@ -9,7 +9,7 @@
     ../../../modules/packages/flatpak-baidunetdisk.nix
     ../../../modules/packages/flatpak-flatseal.nix
     ../../../modules/packages/davinci.nix
-    ../../../modules/packages/onlyoffice.nix
+    # ../../../modules/packages/onlyoffice.nix
     ../../../modules/packages/opencode.nix
     ../../../modules/packages/wpsoffice.nix
     ../../../modules/packages/controller-rebind.nix
@@ -76,7 +76,9 @@
 
     pkgsCross.riscv32-embedded.buildPackages.gcc
     spike
+    dtc
     yosys
+    verilator
 
     (python3.withPackages (ps: with ps; [dbus-python pdftotext pygobject3 tkinter]))
 
@@ -113,6 +115,11 @@
     smartmontools
     e2fsprogs
     ntfsprogs
+
+    powertop
+    linuxPackages_latest.turbostat
+
+    libreoffice-qt6-fresh
   ];
 
   programs.java = {
