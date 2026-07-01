@@ -20,10 +20,7 @@
 
       find $out -name wpscloudsvr \( -type f -o -type l \) -print0 2>/dev/null | while IFS= read -r -d '' svr; do
         rm -f "$svr"
-        cat > "$svr" << 'EOF'
-#!/bin/sh
-exit 0
-EOF
+        printf '#!/bin/sh\nexit 0\n' > "$svr"
         chmod +x "$svr"
       done
     '';
