@@ -59,6 +59,7 @@
     alejandra
     clang
     gcc
+    gnumake
     valgrind
     neovim
     nixd
