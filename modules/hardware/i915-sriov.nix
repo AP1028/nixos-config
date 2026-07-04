@@ -62,7 +62,10 @@
     # Reserve firmware memory for up to 4 Virtual Functions
     "i915.max_vfs=4"
 
-    "i915.enable_dpcd_backlight=1"
+    # =3 forces the Intel HDR backlight interface, which this eDP panel needs.
+    # With =1 the DPCD backlight interface leaves intel_backlight powered down
+    # (bl_power=4) and brightness control does nothing. Kernel drm log recommends =3.
+    "i915.enable_dpcd_backlight=3"
 
     # Prevent deep display sleep states (DC6 PHY refclk failures on Arrow Lake)
     "i915.enable_dc=2"
