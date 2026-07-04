@@ -1,6 +1,11 @@
 {
   description = "Unified NixOS configuration for all machines";
 
+  nixConfig = {
+    extra-substituters = ["https://nixos-apple-silicon.cachix.org"];
+    extra-trusted-public-keys = ["nixos-apple-silicon.cachix.org-1:8psDu5SA5dAD7qA0zMy5UT292TxeEPzIz8VVEr2Js20="];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -10,7 +15,7 @@
     };
 
     i915-sriov-dkms = {
-      url = "github:strongtz/i915-sriov-dkms/master";
+      url = "github:strongtz/i915-sriov-dkms/kernel-v7.1";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
