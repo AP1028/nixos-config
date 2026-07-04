@@ -23,7 +23,7 @@ declare -A HOSTNAME_MAP=(
   ["asusg16"]="asusg16"
   ["nixos-service-vm"]="nixos-service-vm"
   ["nixos-git-vm"]="nixos-git-vm"
-  ["nixos"]="macbook"
+  ["macbook"]="macbook"
 )
 
 AVAILABLE_HOSTS=(asusg16 nixos-service-vm nixos-git-vm macbook)
