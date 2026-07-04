@@ -38,6 +38,6 @@
 
     htop
     opencode
-    opencode-desktop
+    killall
   ];
 }

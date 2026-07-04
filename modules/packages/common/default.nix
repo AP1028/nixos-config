@@ -7,5 +7,6 @@
     pciutils
     unzip
     nmap
+    killall
   ];
 }
