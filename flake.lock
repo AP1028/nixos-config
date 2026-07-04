@@ -188,11 +188,11 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1783176432,
-        "narHash": "sha256-tB4PG1i3y46kRdV23OhrPXEGMzFvFfTC2GsnOq0Y3H4=",
+        "lastModified": 1783184210,
+        "narHash": "sha256-oDC5Tp98ukXthD2GwmlguuFm+Gh+KTxj0Ki9Yy2kyMo=",
         "owner": "nix-community",
         "repo": "lanzaboote",
-        "rev": "d8c989486ea69f37d35256a022fa4dd8b4571157",
+        "rev": "efd5dcbe7d38950d2193f40adcb6d51681c91bbe",
         "type": "github"
       },
       "original": {
