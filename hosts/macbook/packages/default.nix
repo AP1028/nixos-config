@@ -1,4 +1,9 @@
 {pkgs, ...}: {
+  imports = [
+    ../../../modules/packages/opencode.nix
+    ../../../modules/packages/wpsoffice.nix
+  ];
+
   environment.systemPackages = with pkgs; [
     wget
     git
@@ -37,7 +42,6 @@
     moonlight-qt
 
     htop
-    opencode
     killall
   ];
 }
