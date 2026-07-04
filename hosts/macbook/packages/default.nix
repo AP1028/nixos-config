@@ -3,6 +3,8 @@
     ../../../modules/packages/opencode.nix
   ];
 
+  programs.nix-ld.enable = true;
+
   environment.systemPackages = with pkgs; [
     wget
     git
@@ -13,16 +15,27 @@
     zenmap
     flclash
 
-    vscode-fhs
+    vscode
     neovim
     nixd
     alejandra
+
+    tmux
+    gcc
+    clang
+    gnumake
+    universal-ctags
+    distrobox
+    libnotify
 
     aircrack-ng
     usbutils
     pciutils
     iw
     wirelesstools
+
+    smartmontools
+    powertop
 
     (python3.withPackages (ps:
       with ps; [

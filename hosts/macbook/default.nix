@@ -23,6 +23,7 @@
     ../../modules/services/clash-verge.nix
     (import ../../modules/services/iptables-clash-openwrt.nix {interface = "wlan0";})
 
+    ../../modules/env/common.nix
     ../../modules/env/sudo-env.nix
   ];
 }
