@@ -1,7 +1,6 @@
 {pkgs, ...}: {
   imports = [
     ../../../modules/packages/opencode.nix
-    ../../../modules/packages/onlyoffice.nix
   ];
 
   environment.systemPackages = with pkgs; [
@@ -34,7 +33,7 @@
 
     wechat-uos
     go-musicfox
-    libreoffice
+    libreoffice-qt6-fresh
     kdePackages.okular
     gimp3-with-plugins
     krita
@@ -43,5 +42,6 @@
 
     htop
     killall
+    mpv
   ];
 }
