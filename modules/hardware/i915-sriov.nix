@@ -4,48 +4,51 @@
   pkgs,
   ...
 }: {
-  # Out-of-tree i915 SR-IOV kernel module for GPU virtualization
+  # Out-of-tree i915 SR-IOV kernel module for GPU virtualization.
+  # Using the upstream kernel-v7.1 branch, which supports kernel 7.1 natively,
+  # so the sketchy sed-based patching below is no longer needed.
   boot.extraModulePackages = [
-    (pkgs.i915-sriov.overrideAttrs (oldAttrs: {
-      postPatch =
-        (oldAttrs.postPatch or "")
-        + ''
-          # Kernel 7.1: pagevec.h removed, header is unused in i915
-          sed -i '/^#include <linux\/pagevec.h>$/d' drivers/gpu/drm/i915/gt/intel_gtt.h
-          sed -i '/^#include <linux\/pagevec.h>$/d' drivers/gpu/drm/i915/gem/i915_gem_shmem.c
-          sed -i '/^#include <linux\/pagevec.h>$/d' drivers/gpu/drm/i915/i915_gpu_error.c
-
-          # Kernel 7.1: drm_buddy -> gpu_buddy (since 6.12)
-          for f in $(grep -rl -e "drm_buddy" -e "DRM_BUDDY" drivers/gpu/drm/i915/ || true); do
-            test -z "$f" && continue
-            sed -i 's|drm_buddy_print|__BUDDY_PRINT__|g' "$f"
-            sed -i 's|drm_buddy_block_print|__BUDDY_BLOCK_PRINT__|g' "$f"
-            sed -i 's|drm_buddy.h|__BUDDY_HEADER__|g' "$f"
-            sed -i 's|drm_buddy|gpu_buddy|g' "$f"
-            sed -i 's|DRM_BUDDY|GPU_BUDDY|g' "$f"
-            sed -i 's|__BUDDY_PRINT__|drm_buddy_print|g' "$f"
-            sed -i 's|__BUDDY_BLOCK_PRINT__|drm_buddy_block_print|g' "$f"
-            sed -i 's|__BUDDY_HEADER__|drm_buddy.h|g' "$f"
-          done
-
-          # Kernel 7.1: dma_buf move_notify -> invalidate_mappings
-          grep -rl "dma_buf_move_notify\|\.move_notify" drivers/gpu/drm/i915/ | xargs -r sed -i 's|dma_buf_move_notify|dma_buf_invalidate_mappings|g; s|\.move_notify|\.invalidate_mappings|g' || true
-
-          # Kernel 7.1: zap_vma_ptes removed and zap_vma_range not exported
-          sed -i 's|zap_vma_ptes(vma, addr, (r\.pfn - pfn) << PAGE_SHIFT);||g' drivers/gpu/drm/i915/i915_mm.c
-          sed -i 's|zap_vma_ptes(vma, addr, r\.pfn << PAGE_SHIFT);||g' drivers/gpu/drm/i915/i915_mm.c
-
-          # Kernel 7.1: dma_fence.lock -> dma_fence_spinlock()
-          sed -i 's|fence->lock|dma_fence_spinlock(fence)|g' drivers/gpu/drm/i915/gt/intel_breadcrumbs.c
-          sed -i 's|fence->lock|dma_fence_spinlock(fence)|g; s|prev->lock|dma_fence_spinlock(prev)|g' drivers/gpu/drm/i915/i915_active.c
-
-          # Kernel 7.1: drm_plane_colorop_*_init gained a funcs parameter
-          sed -i 's|drm_plane_colorop_[a-z0-9_]*_init(dev, &colorop->base, plane,|\0 NULL,|g' drivers/gpu/drm/i915/display/intel_color_pipeline.c
-
-          # Kernel 7.1: INTEL_GMCH_CTRL removed (pre-SNB, never used on modern HW)
-          sed -i 's|INTEL_GMCH_CTRL|SNB_GMCH_CTRL|g' drivers/gpu/drm/i915/display/intel_vga.c
-        '';
-    }))
+    pkgs.i915-sriov
+    # (pkgs.i915-sriov.overrideAttrs (oldAttrs: {
+    #   postPatch =
+    #     (oldAttrs.postPatch or "")
+    #     + ''
+    #       # Kernel 7.1: pagevec.h removed, header is unused in i915
+    #       sed -i '/^#include <linux\/pagevec.h>$/d' drivers/gpu/drm/i915/gt/intel_gtt.h
+    #       sed -i '/^#include <linux\/pagevec.h>$/d' drivers/gpu/drm/i915/gem/i915_gem_shmem.c
+    #       sed -i '/^#include <linux\/pagevec.h>$/d' drivers/gpu/drm/i915/i915_gpu_error.c
+    #
+    #       # Kernel 7.1: drm_buddy -> gpu_buddy (since 6.12)
+    #       for f in $(grep -rl -e "drm_buddy" -e "DRM_BUDDY" drivers/gpu/drm/i915/ || true); do
+    #         test -z "$f" && continue
+    #         sed -i 's|drm_buddy_print|__BUDDY_PRINT__|g' "$f"
+    #         sed -i 's|drm_buddy_block_print|__BUDDY_BLOCK_PRINT__|g' "$f"
+    #         sed -i 's|drm_buddy.h|__BUDDY_HEADER__|g' "$f"
+    #         sed -i 's|drm_buddy|gpu_buddy|g' "$f"
+    #         sed -i 's|DRM_BUDDY|GPU_BUDDY|g' "$f"
+    #         sed -i 's|__BUDDY_PRINT__|drm_buddy_print|g' "$f"
+    #         sed -i 's|__BUDDY_BLOCK_PRINT__|drm_buddy_block_print|g' "$f"
+    #         sed -i 's|__BUDDY_HEADER__|drm_buddy.h|g' "$f"
+    #       done
+    #
+    #       # Kernel 7.1: dma_buf move_notify -> invalidate_mappings
+    #       grep -rl "dma_buf_move_notify\|\.move_notify" drivers/gpu/drm/i915/ | xargs -r sed -i 's|dma_buf_move_notify|dma_buf_invalidate_mappings|g; s|\.move_notify|\.invalidate_mappings|g' || true
+    #
+    #       # Kernel 7.1: zap_vma_ptes removed and zap_vma_range not exported
+    #       sed -i 's|zap_vma_ptes(vma, addr, (r\.pfn - pfn) << PAGE_SHIFT);||g' drivers/gpu/drm/i915/i915_mm.c
+    #       sed -i 's|zap_vma_ptes(vma, addr, r\.pfn << PAGE_SHIFT);||g' drivers/gpu/drm/i915/i915_mm.c
+    #
+    #       # Kernel 7.1: dma_fence.lock -> dma_fence_spinlock()
+    #       sed -i 's|fence->lock|dma_fence_spinlock(fence)|g' drivers/gpu/drm/i915/gt/intel_breadcrumbs.c
+    #       sed -i 's|fence->lock|dma_fence_spinlock(fence)|g; s|prev->lock|dma_fence_spinlock(prev)|g' drivers/gpu/drm/i915/i915_active.c
+    #
+    #       # Kernel 7.1: drm_plane_colorop_*_init gained a funcs parameter
+    #       sed -i 's|drm_plane_colorop_[a-z0-9_]*_init(dev, &colorop->base, plane,|\0 NULL,|g' drivers/gpu/drm/i915/display/intel_color_pipeline.c
+    #
+    #       # Kernel 7.1: INTEL_GMCH_CTRL removed (pre-SNB, never used on modern HW)
+    #       sed -i 's|INTEL_GMCH_CTRL|SNB_GMCH_CTRL|g' drivers/gpu/drm/i915/display/intel_vga.c
+    #     '';
+    # }))
   ];
 
   # Force i915 (not Xe) and enable SR-IOV support
