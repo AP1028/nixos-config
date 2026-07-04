@@ -12,7 +12,7 @@
     ./system
 
     ../../modules/system/local.nix
-    (import ../../modules/system/rebuild-scripts.nix { host = "macbook"; })
+    (import ../../modules/system/rebuild-scripts.nix {host = "macbook";})
 
     ../../modules/users/main-user.nix
 
@@ -20,6 +20,7 @@
     ../../modules/system/i18n.nix
 
     ../../modules/services/audio.nix
-    ../../modules/services/flclash.nix
+    ../../modules/services/clash-verge.nix
+    ../../modules/services/iptables-clash-openwrt.nix
   ];
 }
