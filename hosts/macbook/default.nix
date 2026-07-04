@@ -21,6 +21,8 @@
 
     ../../modules/services/audio.nix
     ../../modules/services/clash-verge.nix
-    ../../modules/services/iptables-clash-openwrt.nix
+    (import ../../modules/services/iptables-clash-openwrt.nix {interface = "wlan0";})
+
+    ../../modules/env/sudo-env.nix
   ];
 }
