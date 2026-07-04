@@ -8,6 +8,7 @@
     ../../../modules/packages/flatpak-bottles.nix
     ../../../modules/packages/flatpak-baidunetdisk.nix
     ../../../modules/packages/flatpak-flatseal.nix
+    ../../../modules/packages/flatpak-netease.nix
     ../../../modules/packages/davinci.nix
     # ../../../modules/packages/onlyoffice.nix
     ../../../modules/packages/opencode.nix
