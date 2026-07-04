@@ -1,7 +1,7 @@
 {pkgs, ...}: {
   imports = [
     ../../../modules/packages/opencode.nix
-    ../../../modules/packages/wpsoffice.nix
+    ../../../modules/packages/onlyoffice.nix
   ];
 
   environment.systemPackages = with pkgs; [
