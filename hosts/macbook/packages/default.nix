@@ -35,5 +35,9 @@
     krita
     zotero
     moonlight-qt
+
+    htop
+    opencode
+    opencode-desktop
   ];
 }
