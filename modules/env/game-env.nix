@@ -172,6 +172,8 @@
       alsa-lib
       libpulseaudio
       pipewire
+      openal
+      SDL2
       cups
       nss
       nspr

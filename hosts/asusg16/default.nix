@@ -40,6 +40,7 @@
     ../../modules/services/vscode-server.nix
     ../../modules/services/strongswan.nix
     ../../modules/services/samba.nix
+    ../../modules/services/uudeck.nix
 
     ./users
 
