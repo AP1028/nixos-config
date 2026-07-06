@@ -6,26 +6,34 @@
     ohMyZsh = {
       enable = true;
       plugins = ["history" "git" "sudo"];
-      theme = "bira";
+      # Prompt is handled by starship; disable oh-my-zsh theming.
+      theme = "";
     };
+  };
 
-    interactiveShellInit = ''
-      if [[ -n "$IN_FHS_ENV" || -d /usr/lib ]]; then
-        function fhs_prompt_info() {
-          if [[ -n "$IN_FHS_ENV" ]]; then
-            echo "%B%F{magenta}(fhs:$IN_FHS_ENV)%f%b "
-          else
-            echo "%B%F{magenta}(fhs:anonymous)%f%b "
-          fi
-        }
-        function patch_bira_prompt() {
-          if [[ "$PROMPT" != *"fhs_prompt_info"* ]]; then
-            PROMPT="''${PROMPT//╭─/╭─\$(fhs_prompt_info)}"
-          fi
-        }
-        setopt prompt_subst
-        precmd_functions+=(patch_bira_prompt)
-      fi
-    '';
+  programs.starship = {
+    enable = true;
+    # Plain-symbol style, no Nerd Fonts required.
+    presets = ["no-nerd-font"];
+    settings = {
+      # FHS badge first, then the default starship prompt.
+      format = "\${custom.fhs}$all";
+
+      # Ported from the old bira prompt trick: show which FHS env we are in.
+      custom.fhs = {
+        command = "printf '(fhs:%s)' \"\${IN_FHS_ENV:-anonymous}\"";
+        when = "[ -n \"$IN_FHS_ENV\" ] || [ -d /usr/lib ]";
+        format = "[$output]($style) ";
+        style = "bold purple";
+        shell = ["/bin/sh"];
+      };
+
+      # no-nerd-font preset doesn't cover git_branch; drop its Nerd glyph.
+      git_branch.symbol = "";
+
+      # Always show user/host, using starship's native styling.
+      username.show_always = true;
+      hostname.ssh_only = false;
+    };
   };
 }

@@ -17,7 +17,7 @@
     "constants": [
       "\u001b[77C",  // $1: Move cursor forward 77 columns (adjust if needed)
       "\u001b[77D",  // $2: Move cursor back 77 columns (not used, defined anyway)
-      "\u001b[88C",  // $3: Move cursor to max width (wide term), or last column (narrow term)
+      "\u001b[90C",  // $3: Forward to the palette start column on the second footer row
       "\u001b[20D",  // $4: Move back 20 columns for the color block (both lines)
       "───────────────────────────────────────────────────────────────────────────────────────"
     ],
@@ -206,20 +206,14 @@
       "keyColor": "38;2;61;174;233"
     },
     {
-      "type": "command",
-      "key": "│   Weather:{$1} │",
-      "keyColor": "38;2;61;174;233",
-      "text": "ip=$(curl -s --max-time 3 https://whatismyip.sjtu.edu.cn); city=$(curl -s --max-time 3 \"http://ip-api.com/line/$ip?fields=city\" | tr ' ' '+'); curl -s --max-time 5 \"https://wttr.in/$city?format=%l:+%c+%t+(%h)\" || echo N/A"
-    },
-    {
       "type": "custom",
-      "format": "╰─{$5}─╯",
+      "format": "╰──{$5}{$4}┬─ {#black}● {#red}● {#green}● {#yellow}● {#blue}● {#magenta}● {#cyan}● {#white}●{#38;2;61;174;233} ─┤",
       "outputColor": "38;2;61;174;233"
     },
     {
-      "type": "colors",
-      "paddingLeft": 2,
-      "symbol": "circle"
+      "type": "custom",
+      "format": "{$3}{$4}╰─ {#bright_black}● {#bright_red}● {#bright_green}● {#bright_yellow}● {#bright_blue}● {#bright_magenta}● {#bright_cyan}● {#bright_white}●{#reset_default}{#38;2;61;174;233} ─╯",
+      "outputColor": "38;2;61;174;233"
     },
     "break",
   ]
