@@ -117,6 +117,7 @@
           ./hosts/macbook/default.nix
 
           apple-silicon.nixosModules.default
+          home-manager.nixosModules.home-manager
         ];
       };
     };
