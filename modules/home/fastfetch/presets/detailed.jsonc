@@ -1,0 +1,226 @@
+{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+  "logo": {
+    "type": "builtin",
+    "source": "NixOS",
+    "padding": {
+      "top": 5,
+      "right": 2,
+      "bottom": 0,
+      "left": 2
+    },
+  },
+  "general": {},
+  "display": {
+    "brightColor": "true",
+    "separator": "",
+    "constants": [
+      "\u001b[77C",  // $1: Move cursor forward 77 columns (adjust if needed)
+      "\u001b[77D",  // $2: Move cursor back 77 columns (not used, defined anyway)
+      "\u001b[88C",  // $3: Move cursor to max width (wide term), or last column (narrow term)
+      "\u001b[20D",  // $4: Move back 20 columns for the color block (both lines)
+      "───────────────────────────────────────────────────────────────────────────────────────"
+    ],
+    "key": {
+      "width": 14
+    },
+  },
+  "modules": [
+    "break",
+    {
+      "type": "custom",
+      "format": "╭─{$5}─╮",
+      "outputColor": "38;2;255;63;0"
+    },
+    {
+      "type": "os",
+      "key": "│        OS:{$1} │",
+      "keyColor": "38;2;255;63;0",
+    },
+    {
+      "type": "host",
+      "key": "│      Host:{$1} │",
+      "keyColor": "38;2;255;63;0"
+    },
+    {
+      "type": "kernel",
+      "key": "│    Kernel:{$1} │",
+      "keyColor": "38;2;255;63;0"
+    },
+    {
+      "type": "uptime",
+      "key": "│    Uptime:{$1} │",
+      "keyColor": "38;2;255;63;0"
+    },
+    {
+      "type": "packages",
+      "key": "│  Packages:{$1} │",
+      "keyColor": "38;2;255;63;0"
+    },
+    {
+      "type": "shell",
+      "key": "│     Shell:{$1} │",
+      "keyColor": "38;2;255;63;0"
+    },
+    {
+      "type": "terminal",
+      "key": "│  Terminal:{$1} │",
+      "keyColor": "38;2;255;63;0"
+    },
+    {
+      "type": "custom",
+      "format": "╰─{$5}─╯",
+      "outputColor": "38;2;255;63;0"
+    },
+    {
+      "type": "custom",
+      "format": "╭─{$5}─╮",
+      "outputColor": "38;2;255;175;0"
+    },
+    {
+      "type": "de",
+      "key": "│        DE:{$1} │",
+      "keyColor": "38;2;255;175;0"
+    },
+    {
+      "type": "wm",
+      "key": "│        WM:{$1} │",
+      "keyColor": "38;2;255;175;0"
+    },
+    {
+      "type": "wmtheme",
+      "key": "│  WM Theme:{$1} │",
+      "keyColor": "38;2;255;175;0"
+    },
+    {
+      "type": "theme",
+      "key": "│     Theme:{$1} │",
+      "keyColor": "38;2;255;175;0"
+    },
+    {
+      "type": "cursor",
+      "key": "│    Cursor:{$1} │",
+      "keyColor": "38;2;255;175;0"
+    },
+    {
+      "type": "icons",
+      "key": "│     Icons:{$1} │",
+      "keyColor": "38;2;255;175;0",
+      //"format": "{2:-47}"
+    },
+    {
+      "type": "font",
+      "key": "│      Font:{$1} │",
+      "keyColor": "38;2;255;175;0",
+      //"format": "{5:-47}"
+    },
+    {
+      "type": "terminalfont",
+      "key": "│ Term Font:{$1} │",
+      "keyColor": "38;2;255;175;0"
+    },
+    {
+      "type": "custom",
+      "format": "╰─{$5}─╯",
+      "outputColor": "38;2;255;175;0"
+    },
+    {
+      "type": "custom",
+      "format": "╭─{$5}─╮",
+      "outputColor": "38;2;61;233;224"
+    },
+    {
+      "type": "cpu",
+      "key": "│       CPU:{$1} │",
+      "keyColor": "38;2;61;233;224"
+    },
+    {
+      "type": "gpu",
+      "key": "│       GPU:{$1} │",
+      "keyColor": "38;2;61;233;224"
+    },
+    {
+      "type": "display",
+      "key": "│     Video:{$1} │",
+      "keyColor": "38;2;61;233;224"
+    },
+    {
+      "type": "sound",
+      //"format": "{platform-api}/{2} ({3})",
+      "key": "│     Sound:{$1} │",
+      "keyColor": "38;2;61;233;224"
+    },
+    {
+      "type": "memory",
+      "key": "│    Memory:{$1} │",
+      "keyColor": "38;2;61;233;224"
+    },
+    {
+      "type": "swap",
+      "key": "│      Swap:{$1} │",
+      "keyColor": "38;2;61;233;224"
+    },
+    {
+      "type": "disk",
+      "key": "│      Disk:{$1} │",
+      "keyColor": "38;2;61;233;224"
+    },
+    {
+      "type": "custom",
+      "format": "╰─{$5}─╯",
+      "outputColor": "38;2;61;233;224"
+    },
+    {
+      "type": "custom",
+      "format": "╭─{$5}─╮",
+      "outputColor": "38;2;61;174;233"
+    },
+    {
+      "type": "title",
+      "fqdn": true,
+      "key": "│      User:{$1} │",
+      "keyColor": "38;2;61;174;233",
+      "color": {
+        "user": "bright_white",
+        "at": "bright_white",
+        "host": "bright_white"
+      }
+    },
+    {
+      "type": "localip",
+      "key": "│  Local IP:{$1} │",
+      "keyColor": "38;2;61;174;233",
+      "defaultRouteOnly": false,
+      "namePrefix": "wlan",
+      "showIpv6": false
+    },
+    {
+      "type": "command",
+      "key": "│ Public IP:{$1} │",
+      "keyColor": "38;2;61;174;233",
+      "text": "curl -s --max-time 3 https://whatismyip.sjtu.edu.cn || echo N/A"
+    },
+    {
+      "type": "locale",
+      "key": "│    Locale:{$1} │",
+      "keyColor": "38;2;61;174;233"
+    },
+    {
+      "type": "command",
+      "key": "│   Weather:{$1} │",
+      "keyColor": "38;2;61;174;233",
+      "text": "ip=$(curl -s --max-time 3 https://whatismyip.sjtu.edu.cn); city=$(curl -s --max-time 3 \"http://ip-api.com/line/$ip?fields=city\" | tr ' ' '+'); curl -s --max-time 5 \"https://wttr.in/$city?format=%l:+%c+%t+(%h)\" || echo N/A"
+    },
+    {
+      "type": "custom",
+      "format": "╰─{$5}─╯",
+      "outputColor": "38;2;61;174;233"
+    },
+    {
+      "type": "colors",
+      "paddingLeft": 2,
+      "symbol": "circle"
+    },
+    "break",
+  ]
+}
