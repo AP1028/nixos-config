@@ -30,6 +30,9 @@ in {
       sarasa-gothic
       harmonyos
       wqy_zenhei
+
+      nerd-fonts.symbols-only
+      nerd-fonts.jetbrains-mono
     ]
     ++ (lib.optional (ms-fonts != null) ms-fonts); # Only include if file exists
 
@@ -38,7 +41,7 @@ in {
     defaultFonts = {
       sansSerif = ["Microsoft YaHei" "HarmonyOS Sans" "HarmonyOS Sans SC"];
       serif = ["SimSun" "Noto Serif" "Noto Serif CJK SC"];
-      monospace = ["Sarasa Gothic"];
+      monospace = ["Sarasa Gothic" "Symbols Nerd Font Mono"];
       emoji = ["Noto Color Emoji"];
     };
     cache32Bit = true;
