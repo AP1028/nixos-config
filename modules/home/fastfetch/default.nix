@@ -1,5 +1,7 @@
 { config, lib, ... }:
 let
+  cfg = config.local.home.fastfetch;
+
   selected = "detailed";
 
   presetDir = ./presets;
@@ -9,12 +11,20 @@ let
     name: ".local/share/fastfetch/presets/${name}.jsonc"
   );
 in {
-  programs.fastfetch.enable = true;
+  options.local.home.fastfetch.enable = lib.mkOption {
+    type = lib.types.bool;
+    default = true;
+    description = "Whether to install the tweaked fastfetch preset config.";
+  };
 
-  home.file = lib.mapAttrs' (name: target: {
-    name = target;
-    value.source = presetDir + "/${name}.jsonc";
-  }) presetFiles;
+  config = lib.mkIf cfg.enable {
+    programs.fastfetch.enable = true;
 
-  xdg.configFile."fastfetch/config.jsonc".source = presetDir + "/${selected}.jsonc";
+    home.file = lib.mapAttrs' (name: target: {
+      name = target;
+      value.source = presetDir + "/${name}.jsonc";
+    }) presetFiles;
+
+    xdg.configFile."fastfetch/config.jsonc".source = presetDir + "/${selected}.jsonc";
+  };
 }
