@@ -41,7 +41,7 @@ in {
     defaultFonts = {
       sansSerif = ["Microsoft YaHei" "HarmonyOS Sans" "HarmonyOS Sans SC"];
       serif = ["SimSun" "Noto Serif" "Noto Serif CJK SC"];
-      monospace = ["Sarasa Gothic" "Symbols Nerd Font Mono"];
+      monospace = ["JetBrainsMono Nerd Font Mono"];
       emoji = ["Noto Color Emoji"];
     };
     cache32Bit = true;

@@ -10,11 +10,9 @@
       theme = "";
     };
     interactiveShellInit = ''
+      export PATH="$HOME/.local/bin:$PATH"
       fastfetch
     '';
-    sessionVariables = {
-      PATH = "$HOME/.local/bin:$PATH";
-    };
   };
 
   programs.starship = {
