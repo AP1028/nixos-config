@@ -8,5 +8,6 @@
     unzip
     nmap
     killall
+    iotop
   ];
 }
