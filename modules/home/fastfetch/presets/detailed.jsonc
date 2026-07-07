@@ -15,11 +15,11 @@
     "brightColor": "true",
     "separator": "",
     "constants": [
-      "\u001b[77C",  // $1: Move cursor forward 77 columns (adjust if needed)
-      "\u001b[77D",  // $2: Move cursor back 77 columns (not used, defined anyway)
-      "\u001b[90C",  // $3: Forward to the palette start column on the second footer row
+      "\u001b[57C",  // $1: Move cursor forward 57 columns (adjust if needed)
+      "\u001b[57D",  // $2: Move cursor back 57 columns (not used, defined anyway)
+      "\u001b[70C",  // $3: Forward to the palette start column on the second footer row
       "\u001b[20D",  // $4: Move back 20 columns for the color block (both lines)
-      "───────────────────────────────────────────────────────────────────────────────────────"
+      "──────────────────────────────────────────────────────────────────"
     ],
     "key": {
       "width": 14
@@ -107,12 +107,6 @@
       "key": "│     Icons:{$1} │",
       "keyColor": "38;2;255;175;0",
       //"format": "{2:-47}"
-    },
-    {
-      "type": "font",
-      "key": "│      Font:{$1} │",
-      "keyColor": "38;2;255;175;0",
-      //"format": "{5:-47}"
     },
     {
       "type": "terminalfont",
