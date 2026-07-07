@@ -3,7 +3,9 @@
   lib,
   pkgs,
   ...
-}: {
+}: let
+  igpuScripts = pkgs.callPackage ../../packages/igpu-sriov-scripts.nix {};
+in {
   # Out-of-tree i915 SR-IOV kernel module for GPU virtualization.
   # Using the upstream kernel-v7.1 branch, which supports kernel 7.1 natively,
   # so the sketchy sed-based patching below is no longer needed.
@@ -93,53 +95,14 @@
     ];
   };
 
-  # Spawn 1 SR-IOV Virtual Function and bind it to vfio-pci for VM passthrough
-  systemd.services.intel-i915-sriov = {
-    description = "Provision Intel i915 SR-IOV VF and Bind to vfio-pci";
-    wantedBy = ["multi-user.target"];
-    after = ["systemd-modules-load.service"];
-    path = [pkgs.kmod]; # Ensures 'modprobe' is available in the script path
-    script = ''
-      # The primary Intel iGPU is located at 0000:00:02.0
-      IGPU_SYSFS="/sys/bus/pci/devices/0000:00:02.0/sriov_numvfs"
-
-      # Ensure vfio-pci module is loaded
-      modprobe vfio-pci
-
-      # Wait up to 10 seconds for the i915 driver to expose the sysfs node
-      for i in {1..10}; do
-        if [ -f "$IGPU_SYSFS" ]; then
-          break
-        fi
-        sleep 1
-      done
-
-      # If the node exists and no VFs are spawned, spawn 1 VF
-      if [ -f "$IGPU_SYSFS" ] && [ "$(cat $IGPU_SYSFS)" -eq "0" ]; then
-        echo 1 > "$IGPU_SYSFS"
-
-        # Wait a moment for the kernel to initialize the new VF (usually 0000:00:02.1)
-        sleep 2
-
-        VF_ADDRESS="0000:00:02.1"
-        VF_SYSFS="/sys/bus/pci/devices/$VF_ADDRESS"
-
-        if [ -d "$VF_SYSFS" ]; then
-          # 1. Unbind from i915
-          if [ -d "$VF_SYSFS/driver" ]; then
-            echo "$VF_ADDRESS" > "$VF_SYSFS/driver/unbind"
-          fi
-
-          # 2. Override the driver to vfio-pci
-          echo "vfio-pci" > "$VF_SYSFS/driver_override"
-
-          # 3. Bind to vfio-pci
-          echo "$VF_ADDRESS" > /sys/bus/pci/drivers/vfio-pci/bind
-
-          # 4. Clear the override
-          echo "" > "$VF_SYSFS/driver_override"
-        fi
-      fi
-    '';
-  };
+  # On-demand VF management scripts (replaces the auto-spawn systemd service).
+  # VFs are not created at boot — spin them up only when needed:
+  #   igpu-vf-up [N]     Create N VFs and bind to vfio-pci
+  #   igpu-vf-down       Destroy all VFs (refuses if VM is using them)
+  #   igpu-vf-status     Show current VF state
+  environment.systemPackages = [
+    igpuScripts.igpu-vf-up
+    igpuScripts.igpu-vf-down
+    igpuScripts.igpu-vf-status
+  ];
 }
