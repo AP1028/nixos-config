@@ -9,6 +9,12 @@
       # Prompt is handled by starship; disable oh-my-zsh theming.
       theme = "";
     };
+    interactiveShellInit = ''
+      fastfetch
+    '';
+    sessionVariables = {
+      PATH = "$HOME/.local/bin:$PATH";
+    };
   };
 
   programs.starship = {
