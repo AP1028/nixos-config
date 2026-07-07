@@ -3,7 +3,7 @@
   pkgs,
   ...
 }: {
-  imports = [ ./fastfetch ];
+  imports = [ ./fastfetch ./zsh ];
 
   home = {
     stateVersion = "25.05";

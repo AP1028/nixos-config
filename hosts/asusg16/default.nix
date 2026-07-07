@@ -52,8 +52,4 @@
     ../../modules/env/no-internet.nix
     ../../modules/env/sudo-env.nix
   ];
-
-  home-manager.users.${config.local.username} = {
-    imports = [ ../../modules/home ];
-  };
 }

@@ -1,17 +1,22 @@
 {...}: {
+  # Full interactive zsh config, managed entirely by home-manager so it lands
+  # in ~/.zshrc (and ~/.zshenv). This makes it inheritable by tools that read
+  # the user's dotfiles directly, e.g. distrobox containers, unlike a
+  # system-wide /etc/zshrc.
   programs.zsh = {
     enable = true;
-    autosuggestions.enable = true;
+    autosuggestion.enable = true;
     syntaxHighlighting.enable = true;
-    ohMyZsh = {
+    oh-my-zsh = {
       enable = true;
       plugins = ["history" "git" "sudo"];
       # Prompt is handled by starship; disable oh-my-zsh theming.
       theme = "";
     };
-    interactiveShellInit = ''
+    initContent = ''
       export PATH="$HOME/.local/bin:$PATH"
-      fastfetch
+      # fastfetch may be absent inside containers; don't error if so.
+      command -v fastfetch >/dev/null 2>&1 && fastfetch
     '';
   };
 

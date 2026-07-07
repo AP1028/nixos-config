@@ -27,6 +27,7 @@
     ../../modules/env/sudo-env.nix
   ];
 
+  home-manager.backupFileExtension = "hm-backup";
   home-manager.users.${config.local.username} = {
     imports = [ ../../modules/home ];
     local.home.fastfetch.enable = false;
