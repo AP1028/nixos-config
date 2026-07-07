@@ -19,7 +19,7 @@
       "\u001b[57D",  // $2: Move cursor back 57 columns (not used, defined anyway)
       "\u001b[70C",  // $3: Forward to the palette start column on the second footer row
       "\u001b[20D",  // $4: Move back 20 columns for the color block (both lines)
-      "──────────────────────────────────────────────────────────────────"
+      "───────────────────────────────────────────────────────────────────"
     ],
     "key": {
       "width": 14
