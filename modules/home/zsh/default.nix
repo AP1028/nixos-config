@@ -12,6 +12,13 @@
       plugins = ["history" "git" "sudo"];
       # Prompt is handled by starship; disable oh-my-zsh theming.
       theme = "";
+      # Inside rootless distrobox containers the read-only nix store maps to
+      # owner "nobody", which oh-my-zsh's compaudit flags as insecure. The
+      # store is immutable so it can't be re-owned; skip the check instead.
+      # (No-op on the host, where the store is owned by root.)
+      extraConfig = ''
+        ZSH_DISABLE_COMPFIX=true
+      '';
     };
     initContent = ''
       export PATH="$HOME/.local/bin:$PATH"
