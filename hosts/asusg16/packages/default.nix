@@ -122,6 +122,12 @@
     linuxPackages_latest.turbostat
 
     libreoffice-qt6-fresh
+
+    wireshark-qt
+    wireshark-cli
+
+    speedtest
+    speedtest-cli
   ];
 
   programs.java = {
