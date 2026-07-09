@@ -5,7 +5,7 @@
 }: {
   systemd.services = {
     hello-neo-journautics = {
-      description = "NeoForge Minecraft Server (GraalVM 21) in Tmux";
+      description = "NeoForge Minecraft Server (Temurin 21) in Tmux";
       after = ["network.target"];
       wantedBy = ["multi-user.target"];
       serviceConfig = {
@@ -15,7 +15,7 @@
         WorkingDirectory = "/home/service/HelloNeoJournautics";
         path = [
           pkgs.tmux
-          inputs.nixos-23-11.legacyPackages.${pkgs.stdenv.hostPlatform.system}.graalvm-ce
+          pkgs.temurin-bin-21
           pkgs.bash
           pkgs.coreutils
         ];
