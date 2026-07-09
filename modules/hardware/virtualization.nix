@@ -68,7 +68,7 @@
           active = false;
         }
         {
-          definition = ../../vms/win11-virtio-nvme.xml;
+          definition = ../../vms/win11-virtio-dgpu-nvme.xml;
           active = false;
         }
       ];
