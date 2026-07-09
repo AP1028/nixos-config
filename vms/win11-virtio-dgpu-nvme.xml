@@ -1,5 +1,5 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
-  <name>win11-virtio-nvme</name>
+  <name>win11-virtio-dgpu-nvme</name>
   <uuid>3e50111a-143d-4ad4-b2cf-5e8bf0eb243d</uuid>
   <metadata>
     <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
