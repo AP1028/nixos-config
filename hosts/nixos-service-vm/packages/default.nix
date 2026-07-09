@@ -1,6 +1,11 @@
 {pkgs, ...}: {
   environment.systemPackages = with pkgs; [
-    jdk21
+    temurin-bin-21
     nodejs_22
   ];
+
+  programs.java = {
+    enable = true;
+    package = pkgs.temurin-bin-21;
+  };
 }
