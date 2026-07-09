@@ -19,6 +19,7 @@
     };
     script = ''
       ${pkgs.iproute2}/bin/ip route replace default via 192.168.3.1 table 100
+      ${pkgs.iproute2}/bin/ip route replace 192.168.122.0/24 dev virbr0 table 100
       if ! ${pkgs.iproute2}/bin/ip rule show | grep -q "fwmark 0x1 lookup 100"; then
         ${pkgs.iproute2}/bin/ip rule add fwmark 0x1 table 100
       fi
