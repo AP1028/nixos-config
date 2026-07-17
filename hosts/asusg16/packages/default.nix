@@ -10,6 +10,7 @@
     ../../../modules/packages/flatpak-flatseal.nix
     ../../../modules/packages/flatpak-netease.nix
     ../../../modules/packages/davinci.nix
+    ../../../modules/packages/bilibili.nix
     # ../../../modules/packages/onlyoffice.nix
     ../../../modules/packages/opencode.nix
     ../../../modules/packages/wpsoffice.nix
@@ -89,7 +90,6 @@
     krita
     obs-studio
     obs-studio-plugins.obs-vkcapture
-    bilibili
     bili-live-tool
     bilibili-tui
     biliup-rs

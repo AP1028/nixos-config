@@ -97,6 +97,7 @@
       export SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt
       export _JAVA_AWT_WM_NONREPARENTING=1
       export MATLAB_WEBSERVER_USE_SYSTEM_NSS=1
+      export PATH="/home/${config.local.username}/.matlab/2025b/bin:''${PATH}"
     '';
     runScript = "zsh";
   };
@@ -108,11 +109,11 @@
 
   # Convenience commands that launch matlab/mex inside the FHS sandbox
   matlab-wrapper = pkgs.writeShellScriptBin "matlab" ''
-    exec ${matlab-env}/bin/matlab-env -c 'matlab "$@"' -- "$@"
+    exec ${matlab-env}/bin/matlab-env -c '/home/${config.local.username}/.matlab/2025b/bin/matlab "$@"' -- "$@"
   '';
 
   mex-wrapper = pkgs.writeShellScriptBin "mex" ''
-    exec ${matlab-env}/bin/matlab-env -c 'mex "$@"' -- "$@"
+    exec ${matlab-env}/bin/matlab-env -c '/home/${config.local.username}/.matlab/2025b/bin/mex "$@"' -- "$@"
   '';
 in {
   environment.systemPackages = [
