@@ -14,27 +14,15 @@
     package = pkgs.steam.override {
       extraPkgs = pkgs: with pkgs; [
         attr # fixes libattr.so.1 ATTR_1.3 not found in Steam runtime
-        bubblewrap # for steamwebhelper nvidia wrapper
       ];
       extraProfile = ''
-        # Wrap steamwebhelper with bwrap to hide nvidia devices (iGPU-only)
-        WEBHELPER="$HOME/.local/share/Steam/ubuntu12_64/steamwebhelper"
-        if [ -f "$WEBHELPER" ] && [ -x "$WEBHELPER" ] && ! grep -qF 'steamwebhelper.real' "$WEBHELPER" 2>/dev/null; then
-          mv "$WEBHELPER" "$WEBHELPER.real"
-          cat > "$WEBHELPER" << 'CEFWRAP'
-#!/bin/sh
-set -e
-DIR="$(dirname "$0")"
-exec bwrap \
-  --dev-bind / / \
-  --dev-bind /dev/null /dev/nvidia0 \
-  --dev-bind /dev/null /dev/nvidiactl \
-  --dev-bind /dev/null /dev/nvidia-modeset \
-  --dev-bind /dev/null /dev/nvidia-uvm \
-  --dev-bind /dev/null /dev/nvidia-uvm-tools \
-  "$DIR/steamwebhelper.real" "$@"
-CEFWRAP
-          chmod +x "$WEBHELPER"
+        # Remove GPU hints so steamwebhelper uses iGPU (games unaffected)
+        DESKTOP_SRC="/run/current-system/sw/share/applications/steam.desktop"
+        DESKTOP_DST="$HOME/.local/share/applications/steam.desktop"
+        if [ -f "$DESKTOP_SRC" ] && [ ! -f "$DESKTOP_DST" ]; then
+          mkdir -p "$(dirname "$DESKTOP_DST")"
+          sed 's/^PrefersNonDefaultGPU=.*/PrefersNonDefaultGPU=false/;s/^X-KDE-RunOnDiscreteGpu=.*/X-KDE-RunOnDiscreteGpu=false/' \
+            "$DESKTOP_SRC" > "$DESKTOP_DST"
         fi
       '';
     };
