@@ -51,6 +51,9 @@
       url = "github:powerofthe69/nix-gaming-edge";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # Pinned to a commit before ceph/qemu build breakage on unstable
+    qemu-nixpkgs.url = "github:NixOS/nixpkgs/65179426c83bb3f6bc14898b42ea1c6f01d374b0";
   };
 
   outputs = inputs @ {
@@ -83,6 +86,15 @@
 
           home-manager.nixosModules.home-manager
           nixvirt.nixosModules.default
+
+          # Pin qemu from stable nixpkgs (broken on current unstable)
+          ({ inputs, ... }: {
+            nixpkgs.overlays = [
+              (final: prev: {
+                qemu = inputs.qemu-nixpkgs.legacyPackages.${final.system}.qemu;
+              })
+            ];
+          })
         ];
       };
 
