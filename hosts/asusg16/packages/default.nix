@@ -55,7 +55,7 @@
       ];
     })
 
-    freecad-wayland
+    # freecad-wayland  # broken: pdal fails with new GDAL API on 26.11
     blender
 
     alejandra
