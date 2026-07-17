@@ -32,4 +32,15 @@ in {
       FLATPAK_GL_DRIVERS = "host";
     };
   };
+
+  services.flatpak.overrides.settings."com.baidu.NetDisk" = {
+    Context = {
+      filesystems = ["home"];
+    };
+    Environment = {
+      __GLX_VENDOR_LIBRARY_NAME = "mesa";
+      __EGL_VENDOR_LIBRARY_FILENAMES = "/usr/share/glvnd/egl_vendor.d/50_mesa.json";
+      FLATPAK_GL_DRIVERS = "host";
+    };
+  };
 }
