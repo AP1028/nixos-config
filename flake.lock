@@ -349,6 +349,22 @@
         "type": "github"
       }
     },
+    "qemu-nixpkgs": {
+      "locked": {
+        "lastModified": 1782959384,
+        "narHash": "sha256-xnJJk+ct+D2+wdRxj1wk36w5zV9RVESwRqcklPdt3fM=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "65179426c83bb3f6bc14898b42ea1c6f01d374b0",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "65179426c83bb3f6bc14898b42ea1c6f01d374b0",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "apple-silicon": "apple-silicon",
@@ -361,6 +377,7 @@
         "nixpkgs": "nixpkgs_2",
         "nixvirt": "nixvirt",
         "old-nixpkgs": "old-nixpkgs",
+        "qemu-nixpkgs": "qemu-nixpkgs",
         "vscode-server": "vscode-server",
         "winapps": "winapps"
       }
