@@ -106,7 +106,7 @@
     moonlight-qt
 
     distrobox
-    input-remapper
+    # input-remapper  # broken: missing 'packaging' python module on 26.11
     nvitop
     # crystal-dock
 
