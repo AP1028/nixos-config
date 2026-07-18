@@ -4,7 +4,11 @@
 #   input-remapper — pinned via flake input qemu-nixpkgs (missing 'packaging' python module)
 #   clash-verge — pinned to 2.4.7 via flake input old-nixpkgs (2.5.1 blank proxy regression)
 
-{pkgs, ...}: {
+{
+  pkgs,
+  lib,
+  ...
+}: {
   imports = [
     ../../../modules/packages/common
 
@@ -81,7 +85,7 @@
     graalvm-ce_21
     temurin-bin-8
     temurin-bin-17
-    temurin-bin-21
+    (lib.hiPrio temurin-bin-21)
     temurin-bin-25
 
     pkgsCross.riscv32-embedded.buildPackages.gcc
@@ -124,6 +128,7 @@
     e2fsprogs
     ntfsprogs
 
+    acpica-tools
     powertop
     linuxPackages_latest.turbostat
 
@@ -138,6 +143,6 @@
 
   programs.java = {
     enable = true;
-    package = pkgs.graalvmPackages.graalvm-oracle_25;
+    package = pkgs.temurin-bin-21;
   };
 }
