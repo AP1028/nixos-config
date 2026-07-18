@@ -1,3 +1,9 @@
+# Pins (all due to dependency breakage on nixos-unstable):
+#   qemu        — pinned via flake input qemu-nixpkgs (ceph build breakage)
+#   freecad     — pinned via flake input qemu-nixpkgs (pdal fails with new GDAL API)
+#   input-remapper — pinned via flake input qemu-nixpkgs (missing 'packaging' python module)
+#   clash-verge — pinned to 2.4.7 via flake input old-nixpkgs (2.5.1 blank proxy regression)
+
 {pkgs, ...}: {
   imports = [
     ../../../modules/packages/common
@@ -56,7 +62,7 @@
       ];
     })
 
-    # freecad-wayland  # broken: pdal fails with new GDAL API on 26.11
+    freecad  # pinned via overlay (see top of file)
     blender
 
     alejandra
@@ -107,9 +113,8 @@
     moonlight-qt
 
     distrobox
-    # input-remapper  # broken: missing 'packaging' python module on 26.11
+    input-remapper  # pinned via overlay (see top of file)
     nvitop
-    # crystal-dock
 
     texlive.combined.scheme-full
     dotnet-sdk_9
