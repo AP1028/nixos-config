@@ -4,7 +4,7 @@
   pciutils,
 }: {
   # List processes using NVIDIA GPU (excludes nvidia-powerd/persistenced)
-  "nvidia-process-check" = writeScriptBin "nvidia-process-check" ''
+  "gpu-process-check" = writeScriptBin "gpu-process-check" ''
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -102,7 +102,7 @@
   '';
 
   # List NVIDIA processes, then prompt to kill them
-  "nvidia-process-kill" = writeScriptBin "nvidia-process-kill" ''
+  "gpu-process-kill" = writeScriptBin "gpu-process-kill" ''
     #!/usr/bin/env bash
     set -euo pipefail
 
