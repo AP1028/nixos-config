@@ -205,7 +205,6 @@
     <qemu:arg value="-acpitable"/>
     <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
     <qemu:arg value="-global"/>
-    <qemu:arg value="virtio-blk-pci.rotation-rate=1"/>
   </qemu:commandline>
 </domain>
 
