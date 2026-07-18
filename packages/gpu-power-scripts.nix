@@ -203,7 +203,6 @@
 
     # ── Stop NVIDIA services ─────────────────────────────────────
     info "Stopping NVIDIA services..."
-    systemctl stop nvidia-persistenced.service 2>/dev/null && ok "nvidia-persistenced stopped" || true
     systemctl stop nvidia-powerd.service 2>/dev/null && ok "nvidia-powerd stopped" || true
 
     # ── Unload NVIDIA kernel modules (retry like supergfxctl) ────
@@ -411,7 +410,6 @@
 
     # ── Start NVIDIA services ────────────────────────────────────
     info "Starting NVIDIA services..."
-    systemctl start nvidia-persistenced.service 2>/dev/null && ok "nvidia-persistenced started" || true
     systemctl start nvidia-powerd.service 2>/dev/null && ok "nvidia-powerd started" || true
 
     mkdir -p "$STATE_DIR"
