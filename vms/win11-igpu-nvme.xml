@@ -192,12 +192,6 @@
       </source>
       <address type='pci' domain='0x0000' bus='0x06' slot='0x00' function='0x0'/>
     </hostdev>
-    <redirdev bus='usb' type='spicevmc'>
-      <address type='usb' bus='0' port='1'/>
-    </redirdev>
-    <redirdev bus='usb' type='spicevmc'>
-      <address type='usb' bus='0' port='2'/>
-    </redirdev>
     <watchdog model='itco' action='reset'/>
     <memballoon model='none'/>
   </devices>
