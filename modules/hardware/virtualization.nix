@@ -14,6 +14,11 @@
   ];
   # ── libvirt + QEMU ─────────────────────────────────────────────
 
+  system.activationScripts.ssdt-battery.text = ''
+    cp ${../../vms/ssdt-battery.aml} /var/lib/libvirt/vbios/ssdt-battery.aml
+    chmod 644 /var/lib/libvirt/vbios/ssdt-battery.aml
+  '';
+
   virtualisation.libvirtd = {
     enable = true;
     qemu = {
@@ -57,7 +62,35 @@
           active = false;
         }
         {
-          definition = ../../vms/win11-stealthy-dgpu-2.xml;
+          definition = ../../vms/win11-stealthy-dgpu-v2.xml;
+          active = false;
+        }
+        {
+          definition = ../../vms/win11-igpu-v2.xml;
+          active = false;
+        }
+        {
+          definition = ../../vms/win11-igpu-nvme-v2.xml;
+          active = false;
+        }
+        {
+          definition = ../../vms/win11-stealthy-v2.xml;
+          active = false;
+        }
+        {
+          definition = ../../vms/win11-stealthy-dgpu-nvme-v2.xml;
+          active = false;
+        }
+        {
+          definition = ../../vms/win11-virtio-v2.xml;
+          active = false;
+        }
+        {
+          definition = ../../vms/win11-virtio-dgpu-v2.xml;
+          active = false;
+        }
+        {
+          definition = ../../vms/win11-virtio-dgpu-nvme-v2.xml;
           active = false;
         }
         {
