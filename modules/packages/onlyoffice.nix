@@ -1,3 +1,8 @@
+# NOTE: This module is not currently used — import commented out in
+# hosts/asusg16/packages/default.nix.  OnlyOffice has issues reading
+# fonts from the Nix store and the activation script below was a
+# workaround that proved unreliable.
+
 {pkgs, ...}: {
   environment.systemPackages = with pkgs; [onlyoffice-desktopeditors];
 

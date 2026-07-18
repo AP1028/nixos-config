@@ -87,11 +87,14 @@
           home-manager.nixosModules.home-manager
           nixvirt.nixosModules.default
 
-          # Pin qemu from stable nixpkgs (broken on current unstable)
+          # Pin qemu, freecad, input-remapper from stable nixpkgs
+          # (built against older deps, broken on current unstable)
           ({ inputs, ... }: {
             nixpkgs.overlays = [
               (final: prev: {
                 qemu = inputs.qemu-nixpkgs.legacyPackages.${final.system}.qemu;
+                freecad = inputs.qemu-nixpkgs.legacyPackages.${final.system}.freecad;
+                input-remapper = inputs.qemu-nixpkgs.legacyPackages.${final.system}.input-remapper;
               })
             ];
           })
