@@ -21,13 +21,56 @@
     SILENT=false
     case "''${1:-}" in -s) SILENT=true; shift;; esac
 
-    # ── Discover NVIDIA dGPU functions ───────────────────────────
-    info "Discovering NVIDIA dGPU PCI functions..."
+    # ── Discover / wake NVIDIA dGPU ──────────────────────────────
+    ASUS_DGPU_DISABLE=/sys/devices/platform/asus-nb-wmi/dgpu_disable
+    info "Discovering NVIDIA dGPU..."
 
     GPU_BDF=$(${pciutils}/bin/lspci -D -d 10DE::0300 2>/dev/null | awk 'NR==1{print $1}')
+    WAS_OFF=false
     if [ -z "$GPU_BDF" ]; then
-        red "ERROR: No NVIDIA GPU (class 03xx) found on PCI bus."
-        exit 1
+        info "dGPU is off — powering on for VFIO passthrough..."
+
+        # Clear ASUS dgpu_disable if set
+        if [ -f "$ASUS_DGPU_DISABLE" ] && grep -q 1 "$ASUS_DGPU_DISABLE" 2>/dev/null; then
+            info "Clearing dgpu_disable..."
+            tries=0
+            while :; do
+                if echo 0 > "$ASUS_DGPU_DISABLE" 2>/dev/null; then
+                    sleep 0.1
+                    if grep -q 0 "$ASUS_DGPU_DISABLE" 2>/dev/null; then
+                        ok "dgpu_disable = 0"
+                        break
+                    fi
+                fi
+                tries=$((tries + 1))
+                [ "$tries" -ge 4 ] && { fail "Could not clear dgpu_disable"; exit 1; }
+                sleep 0.5
+            done
+        fi
+
+        # Power on any slot that was off
+        for slot in /sys/bus/pci/slots/*/; do
+            [ -e "$slot/power" ] || continue
+            power=$(tr -dc '01' < "$slot/power" 2>/dev/null || true)
+            if [ "$power" = "0" ]; then
+                echo 1 > "$slot/power" 2>/dev/null || true
+            fi
+        done
+
+        # Rescan PCI bus until GPU appears
+        info "Rescanning PCI bus..."
+        for _ in $(seq 1 16); do
+            echo 1 > /sys/bus/pci/rescan 2>/dev/null || true
+            sleep 0.5
+            GPU_BDF=$(${pciutils}/bin/lspci -D -d 10DE::0300 2>/dev/null | awk 'NR==1{print $1}')
+            [ -n "$GPU_BDF" ] && break
+        done
+        if [ -z "$GPU_BDF" ]; then
+            red "ERROR: dGPU did not appear after power-on."
+            exit 1
+        fi
+        ok "dGPU powered on at $GPU_BDF"
+        WAS_OFF=true
     fi
     GPU_BUSDEV="''${GPU_BDF%.*}"
 
@@ -69,6 +112,9 @@
         green "All NVIDIA functions are already bound to vfio-pci. Nothing to do."
         exit 0
     fi
+
+    # ── GPU was off: skip all checks, go straight to binding ────
+    if ! $WAS_OFF; then
 
     # ── Check: GPU function on something unexpected? ─────────────
     mixed=false
@@ -229,6 +275,8 @@
     done
     sleep 0.5
 
+    fi   # end of $WAS_OFF guard
+
     # ── Bind to vfio-pci ─────────────────────────────────────────
     info "Binding NVIDIA functions to vfio-pci..."
 
@@ -305,13 +353,13 @@
     SILENT=false
     case "''${1:-}" in -s) SILENT=true; shift;; esac
 
-    # ── Discover NVIDIA dGPU functions ───────────────────────────
-    info "Discovering NVIDIA dGPU PCI functions..."
+    # ── Discover / wake NVIDIA dGPU ──────────────────────────────
+    info "Discovering NVIDIA dGPU..."
 
     GPU_BDF=$(${pciutils}/bin/lspci -D -d 10DE::0300 2>/dev/null | awk 'NR==1{print $1}')
     if [ -z "$GPU_BDF" ]; then
-        red "ERROR: No NVIDIA GPU (class 03xx) found on PCI bus."
-        exit 1
+        info "dGPU is off — running gpu-on to power it on..."
+        exec gpu-on
     fi
     GPU_BUSDEV="''${GPU_BDF%.*}"
 
