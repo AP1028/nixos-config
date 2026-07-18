@@ -1,6 +1,6 @@
-<domain type='kvm'>
+<domain type='kvm' xmlns:qemu="http://libvirt.org/schemas/domain/qemu/1.0">
   <name>win11-virtio</name>
-  <uuid>3e50111a-143d-4ad4-b2cf-5e8bf0eb243a</uuid>
+  <uuid>c10196c1-3870-4174-9938-19c9d0d0debc</uuid>
   <metadata>
     <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
       <libosinfo:os id="http://microsoft.com/win/11"/>
@@ -35,7 +35,8 @@
       <ipi state='on'/>
       <evmcs state='on'/>
       <avic state='on'/>
-    </hyperv>
+          <vendor_id state="on" value="GenuineIntel"/>
+</hyperv>
     <vmport state='off'/>
     <smm state='on'/>
   </features>
@@ -187,8 +188,8 @@
     </sound>
     <audio id='1' type='spice'/>
     <video>
-      <model type='qxl' ram='65536' vram='65536' vgamem='16384' heads='1' primary='yes'/>
-      <address type='pci' domain='0x0000' bus='0x00' slot='0x01' function='0x0'/>
+      <model type="vga" vram="16384" heads="1" primary="yes"/>
+      <address type="pci" domain="0x0000" bus="0x10" slot="0x02" function="0x0"/>
     </video>
     <redirdev bus='usb' type='spicevmc'>
       <address type='usb' bus='0' port='2'/>
@@ -201,5 +202,9 @@
       <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
     </memballoon>
   </devices>
+  <qemu:commandline>
+    <qemu:arg value="-acpitable"/>
+    <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
+  </qemu:commandline>
 </domain>
 

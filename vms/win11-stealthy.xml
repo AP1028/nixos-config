@@ -1,6 +1,6 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>win11-stealthy</name>
-  <uuid>5a4b9d12-4381-45f5-97b0-c59c154d3c5b</uuid>
+  <uuid>15ba36a2-0b7e-41d0-8ffc-d9b64c7805a8</uuid>
   <metadata>
     <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
       <libosinfo:os id="http://microsoft.com/win/11"/>
@@ -35,7 +35,8 @@
       <ipi state='on'/>
       <evmcs state='on'/>
       <avic state='on'/>
-    </hyperv>
+          <vendor_id state="on" value="GenuineIntel"/>
+</hyperv>
     <vmport state='off'/>
     <smm state='on'/>
   </features>
@@ -176,8 +177,8 @@
     </sound>
     <audio id='1' type='spice'/>
     <video>
-      <model type='qxl' ram='65536' vram='65536' vgamem='16384' heads='1' primary='yes'/>
-      <address type='pci' domain='0x0000' bus='0x00' slot='0x01' function='0x0'/>
+      <model type="vga" vram="16384" heads="1" primary="yes"/>
+      <address type="pci" domain="0x0000" bus="0x10" slot="0x02" function="0x0"/>
     </video>
     <redirdev bus='usb' type='spicevmc'>
       <address type='usb' bus='0' port='2'/>
@@ -191,6 +192,8 @@
     </memballoon>
   </devices>
   <qemu:commandline>
+    <qemu:arg value="-acpitable"/>
+    <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
     <qemu:arg value='-device'/>
     <qemu:arg value='{&apos;driver&apos;:&apos;ivshmem-plain&apos;,&apos;id&apos;:&apos;shmem0&apos;,&apos;memdev&apos;:&apos;looking-glass&apos;}'/>
     <qemu:arg value='-object'/>
