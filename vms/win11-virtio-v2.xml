@@ -204,7 +204,6 @@
   <qemu:commandline>
     <qemu:arg value="-acpitable"/>
     <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
-    <qemu:arg value="-global"/>
   </qemu:commandline>
 </domain>
 
