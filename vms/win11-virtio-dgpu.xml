@@ -1,6 +1,6 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>win11-virtio-dgpu</name>
-  <uuid>3e50111a-143d-4ad4-b2cf-5e8bf0eb243c</uuid>
+  <uuid>543965ee-219b-407f-96a5-c66a82525ccf</uuid>
   <metadata>
     <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
       <libosinfo:os id="http://microsoft.com/win/11"/>
@@ -18,7 +18,7 @@
       <entry name='product'>ROG STRIX Z790-E GAMING WIFI</entry>
       <entry name='version'>1.0</entry>
       <entry name='serial'>M12345678901234</entry>
-      <entry name='uuid'>3e50111a-143d-4ad4-b2cf-5e8bf0eb243c</entry>
+      <entry name='uuid'>543965ee-219b-407f-96a5-c66a82525ccf</entry>
       <entry name='sku'>SKU</entry>
       <entry name='family'>ROG Strix</entry>
     </system>
@@ -52,6 +52,7 @@
       <synic state='on'/>
       <stimer state='on'/>
       <reset state='on'/>
+      <vendor_id state="on" value="GenuineIntel"/>
       <frequencies state='on'/>
     </hyperv>
     <kvm>
@@ -217,7 +218,7 @@
     </sound>
     <audio id='1' type='spice'/>
     <video>
-      <model type='none'/>
+      <model type="none"/>
     </video>
     <hostdev mode='subsystem' type='pci' managed='no'>
       <driver name='vfio'/>
@@ -239,6 +240,8 @@
     <memballoon model='none'/>
   </devices>
   <qemu:commandline>
+    <qemu:arg value="-acpitable"/>
+    <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
     <qemu:arg value='-device'/>
     <qemu:arg value='{&apos;driver&apos;:&apos;ivshmem-plain&apos;,&apos;id&apos;:&apos;shmem0&apos;,&apos;memdev&apos;:&apos;looking-glass&apos;}'/>
     <qemu:arg value='-object'/>

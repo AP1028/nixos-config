@@ -62,38 +62,6 @@
           active = false;
         }
         {
-          definition = ../../vms/win11-stealthy-dgpu-v2.xml;
-          active = false;
-        }
-        {
-          definition = ../../vms/win11-igpu-v2.xml;
-          active = false;
-        }
-        {
-          definition = ../../vms/win11-igpu-nvme-v2.xml;
-          active = false;
-        }
-        {
-          definition = ../../vms/win11-stealthy-v2.xml;
-          active = false;
-        }
-        {
-          definition = ../../vms/win11-stealthy-dgpu-nvme-v2.xml;
-          active = false;
-        }
-        {
-          definition = ../../vms/win11-virtio-v2.xml;
-          active = false;
-        }
-        {
-          definition = ../../vms/win11-virtio-dgpu-v2.xml;
-          active = false;
-        }
-        {
-          definition = ../../vms/win11-virtio-dgpu-nvme-v2.xml;
-          active = false;
-        }
-        {
           definition = ../../vms/win11-virtio.xml;
           active = false;
         }

@@ -1,6 +1,6 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>win11-stealthy-dgpu-nvme</name>
-  <uuid>2344a844-1063-450f-9138-0bca318b4442</uuid>
+  <uuid>e4c806ca-c801-435f-891a-a363acf73500</uuid>
   <metadata>
     <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
       <libosinfo:os id="http://microsoft.com/win/11"/>
@@ -18,7 +18,7 @@
       <entry name='product'>ROG Zephyrus G16 GU605MY</entry>
       <entry name='version'>1.0</entry>
       <entry name='serial'>M12345678901234</entry>
-      <entry name='uuid'>2344a844-1063-450f-9138-0bca318b4442</entry>
+      <entry name='uuid'>e4c806ca-c801-435f-891a-a363acf73500</entry>
       <entry name='sku'>GU605MY</entry>
       <entry name='family'>ROG Zephyrus</entry>
     </system>
@@ -53,6 +53,7 @@
       <synic state='on'/>
       <stimer state='on'/>
       <reset state='on'/>
+      <vendor_id state="on" value="GenuineIntel"/>
       <frequencies state='on'/>
     </hyperv>
     <kvm>
@@ -215,7 +216,7 @@
     </sound>
     <audio id='1' type='spice'/>
     <video>
-      <model type='none'/>
+      <model type="none"/>
     </video>
     <hostdev mode='subsystem' type='pci' managed='no'>
       <driver name='vfio'/>
@@ -243,6 +244,8 @@
     <memballoon model='none'/>
   </devices>
   <qemu:commandline>
+    <qemu:arg value="-acpitable"/>
+    <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
     <qemu:arg value='-device'/>
     <qemu:arg value='{&apos;driver&apos;:&apos;ivshmem-plain&apos;,&apos;id&apos;:&apos;shmem0&apos;,&apos;memdev&apos;:&apos;looking-glass&apos;}'/>
     <qemu:arg value='-object'/>
