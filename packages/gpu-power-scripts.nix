@@ -7,7 +7,7 @@
   # Mirrors supergfxctl's Integrated-mode sequence:
   #   stop services -> kill users -> unload modules -> unbind+remove from
   #   PCI tree -> firmware/slot power-off.
-  "dgpu-off" = writeScriptBin "dgpu-off" ''
+  "gpu-off" = writeScriptBin "gpu-off" ''
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -20,7 +20,7 @@
     warn()   { echo -e "\e[33m[WARN]\e[0m  $*" >&2; }
 
     usage() {
-        echo "Usage: dgpu-off [-s] [-f] [-m asus|slot|remove]"
+        echo "Usage: gpu-off [-s] [-f] [-m asus|slot|remove]"
         echo ""
         echo "  Turn the NVIDIA dGPU completely off / invisible."
         echo ""
@@ -51,7 +51,7 @@
 
     ASUS_DGPU_DISABLE=/sys/devices/platform/asus-nb-wmi/dgpu_disable
     ASUS_GPU_MUX=/sys/devices/platform/asus-nb-wmi/gpu_mux_mode
-    STATE_DIR=/var/lib/dgpu-power
+    STATE_DIR=/var/lib/gpu-power
     STATE_FILE=$STATE_DIR/state
 
     asus_dgpu_write() {
@@ -276,9 +276,9 @@
         echo "" >&2
         green "dGPU is now OFF and invisible to the system."
         case "$METHOD" in
-            asus)   yellow "Firmware-level: persists across reboots (and rescan). Run dgpu-on to restore." ;;
-            slot)   yellow "Slot-level: comes back on reboot. Run dgpu-on to restore." ;;
-            remove) yellow "Tree-level only: comes back on pci rescan or reboot. Run dgpu-on to restore." ;;
+            asus)   yellow "Firmware-level: persists across reboots (and rescan). Run gpu-on to restore." ;;
+            slot)   yellow "Slot-level: comes back on reboot. Run gpu-on to restore." ;;
+            remove) yellow "Tree-level only: comes back on pci rescan or reboot. Run gpu-on to restore." ;;
         esac
     else
         fail "NVIDIA devices still visible on the PCI bus. Check dmesg."
@@ -287,7 +287,7 @@
   '';
 
   # Power the NVIDIA dGPU back on and return it to the host nvidia driver.
-  "dgpu-on" = writeScriptBin "dgpu-on" ''
+  "gpu-on" = writeScriptBin "gpu-on" ''
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -305,7 +305,7 @@
     case "''${1:-}" in -s) SILENT=true; shift;; esac
 
     ASUS_DGPU_DISABLE=/sys/devices/platform/asus-nb-wmi/dgpu_disable
-    STATE_DIR=/var/lib/dgpu-power
+    STATE_DIR=/var/lib/gpu-power
     STATE_FILE=$STATE_DIR/state
 
     asus_dgpu_write() {
@@ -450,7 +450,7 @@
   '';
 
   # Quick overview of the dGPU power state
-  "dgpu-power-status" = writeScriptBin "dgpu-power-status" ''
+  "gpu-power-status" = writeScriptBin "gpu-power-status" ''
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -458,7 +458,7 @@
 
     ASUS_DGPU_DISABLE=/sys/devices/platform/asus-nb-wmi/dgpu_disable
     ASUS_GPU_MUX=/sys/devices/platform/asus-nb-wmi/gpu_mux_mode
-    STATE_FILE=/var/lib/dgpu-power/state
+    STATE_FILE=/var/lib/gpu-power/state
 
     echo ""
     cyan "═══ dGPU Power Status ═══"
@@ -475,7 +475,7 @@
     if [ -f "$ASUS_GPU_MUX" ]; then
         v=$(tr -dc '01' < "$ASUS_GPU_MUX" 2>/dev/null || echo "?")
         [ "$v" = "1" ] && echo "  asus gpu_mux_mode:  1  (Optimus/Hybrid)" \
-                       || echo "  asus gpu_mux_mode:  $v  (Discrete — do NOT use dgpu-off!)"
+                       || echo "  asus gpu_mux_mode:  $v  (Discrete — do NOT use gpu-off!)"
     fi
 
     for slot in /sys/bus/pci/slots/*/; do
@@ -501,10 +501,10 @@
     if ! $FOUND; then
         echo "  No NVIDIA devices on the PCI bus — dGPU is OFF / invisible."
         echo ""
-        echo "  To bring it back:  sudo dgpu-on"
+        echo "  To bring it back:  sudo gpu-on"
     else
         echo ""
-        echo "  To turn it off:    sudo dgpu-off"
+        echo "  To turn it off:    sudo gpu-off"
     fi
     echo ""
   '';
