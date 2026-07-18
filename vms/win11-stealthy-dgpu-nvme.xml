@@ -252,8 +252,6 @@
 
     <qemu:arg value="-acpitable"/>
     <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
-    <qemu:arg value="-acpitable"/>
-    <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-npcf.aml"/>
 <qemu:arg value='-device'/>
     <qemu:arg value='{&apos;driver&apos;:&apos;ivshmem-plain&apos;,&apos;id&apos;:&apos;shmem0&apos;,&apos;memdev&apos;:&apos;looking-glass&apos;}'/>
     <qemu:arg value='-object'/>
