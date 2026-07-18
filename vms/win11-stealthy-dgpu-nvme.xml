@@ -22,6 +22,11 @@
       <entry name='sku'>GU605MY</entry>
       <entry name='family'>ROG Zephyrus</entry>
     </system>
+    <bios>
+      <entry name="vendor">ASUSTeK COMPUTER INC.</entry>
+      <entry name="version">GU605MY.310</entry>
+      <entry name="date">04/01/2025</entry>
+    </bios>
 <baseBoard>
       <entry name='manufacturer'>ASUSTeK COMPUTER INC.</entry>
       <entry name='product'>GU605MY</entry>
@@ -244,8 +249,6 @@
     <memballoon model='none'/>
   </devices>
   <qemu:commandline>
-    <qemu:arg value="-smbios"/>
-    <qemu:arg value="type=0,vendor=ASUSTeK COMPUTER INC.,version=GU605MY.310,date=04/01/2025"/>
     <qemu:arg value="-acpitable"/>
     <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
     <qemu:arg value='-device'/>
