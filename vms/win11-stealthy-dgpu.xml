@@ -22,7 +22,12 @@
       <entry name="sku">GU605MY</entry>
       <entry name="family">ROG Zephyrus</entry>
     </system>
-    <baseBoard>
+    <bios>
+      <entry name="vendor">ASUSTeK COMPUTER INC.</entry>
+      <entry name="version">GU605MY.310</entry>
+      <entry name="date">04/01/2025</entry>
+    </bios>
+<baseBoard>
       <entry name="manufacturer">ASUSTeK COMPUTER INC.</entry>
       <entry name="product">GU605MY</entry>
       <entry name="version">1.0</entry>
