@@ -1,6 +1,6 @@
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>win11-igpu</name>
-  <uuid>9524faaf-f2e8-4eee-95a5-72afc2d4d362</uuid>
+  <uuid>5a4b9d12-4381-45f5-97b0-c59c154d3c5f</uuid>
   <metadata>
     <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
       <libosinfo:os id="http://microsoft.com/win/11"/>
@@ -26,28 +26,13 @@
   <features>
     <acpi/>
     <apic/>
-    <hyperv mode="custom">
-      <relaxed state="on"/>
-      <vapic state="on"/>
-      <spinlocks state="on" retries="8191"/>
-      <vpindex state="on"/>
-      <runtime state="on"/>
-      <synic state="on"/>
-      <stimer state="on"/>
-      <reset state="on"/>
-      <vendor_id state="on" value="GenuineIntel"/>
-      <frequencies state="on"/>
-    </hyperv>
-    <kvm>
-      <hidden state="on"/>
-    </kvm>
+    <hyperv mode='passthrough'/>
     <vmport state='off'/>
     <smm state='on'/>
   </features>
   <cpu mode='host-passthrough' check='none' migratable='on'>
     <topology sockets='1' dies='1' clusters='1' cores='8' threads='1'/>
     <maxphysaddr mode='passthrough' limit='40'/>
-    <feature policy="disable" name="hypervisor"/>
   </cpu>
   <clock offset='localtime'>
     <timer name='rtc' tickpolicy='catchup'/>
@@ -193,7 +178,7 @@
     </sound>
     <audio id='1' type='spice'/>
     <video>
-      <model type="none"/>
+      <model type='none'/>
     </video>
     <hostdev mode='subsystem' type='pci' managed='yes'>
       <source>
@@ -201,12 +186,16 @@
       </source>
       <address type='pci' domain='0x0000' bus='0x05' slot='0x00' function='0x0'/>
     </hostdev>
+    <redirdev bus='usb' type='spicevmc'>
+      <address type='usb' bus='0' port='1'/>
+    </redirdev>
+    <redirdev bus='usb' type='spicevmc'>
+      <address type='usb' bus='0' port='2'/>
+    </redirdev>
     <watchdog model='itco' action='reset'/>
     <memballoon model='none'/>
   </devices>
   <qemu:commandline>
-    <qemu:arg value="-acpitable"/>
-    <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
     <qemu:arg value='-device'/>
     <qemu:arg value='{&apos;driver&apos;:&apos;ivshmem-plain&apos;,&apos;id&apos;:&apos;shmem0&apos;,&apos;memdev&apos;:&apos;looking-glass&apos;}'/>
     <qemu:arg value='-object'/>
