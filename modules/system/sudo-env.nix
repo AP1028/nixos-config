@@ -41,10 +41,10 @@ in
 
       if [ -f "$LOCKFILE" ]; then
         LOCKPID=$(cat "$LOCKFILE" 2>/dev/null)
-        if [ -n "$LOCKPID" ] && kill -0 "$LOCKPID" 2>/dev/null; then
+        if [ -n "$LOCKPID" ] && [ -d "/proc/$LOCKPID" ]; then
           if grep -q "^sudo-lock$" "/proc/$LOCKPID/comm" 2>/dev/null; then
             if [ -p "$CMDFIFO" ] && [ -p "$OUTFIFO" ]; then
-              echo "[sudo-env] lock active (PID $LOCKPID), delegating..." >&2
+              >&2 printf '[sudo-env] daemon PID %s | %s\n' "$LOCKPID" "$TRUNCATED"
               printf '%s\n' "$(printf '%s' "$COMMAND" | base64 -w0)" > "$CMDFIFO"
               cat "$OUTFIFO"
               exit 0
@@ -55,7 +55,8 @@ in
 
       export SUDO_ASKPASS="${askpassScript}"
 
-      exec sudo --preserve-env -A -p "[sudo-env] Password to run: $TRUNCATED" sh -c "$COMMAND"
+      >&2 printf '[sudo-env] kdialog | %s\n' "$TRUNCATED"
+      exec sudo --preserve-env -A -p "[sudo-env] password:" sh -c "$COMMAND"
     '')
 
     (pkgs.writeShellScriptBin "sudo-lock" ''
@@ -91,7 +92,7 @@ in
           exit 0
         fi
         LOCKPID=$(cat "$LOCKFILE" 2>/dev/null)
-        if [ -n "$LOCKPID" ] && kill -0 "$LOCKPID" 2>/dev/null; then
+        if [ -n "$LOCKPID" ] && [ -d "/proc/$LOCKPID" ]; then
           if grep -q "^sudo-lock$" "/proc/$LOCKPID/comm" 2>/dev/null; then
             echo "sudo-lock: lock is active (PID $LOCKPID). Kill it first or press Ctrl+C in its terminal." >&2
             exit 1
@@ -106,7 +107,7 @@ in
 
       if [ -f "$LOCKFILE" ]; then
         LOCKPID=$(cat "$LOCKFILE" 2>/dev/null)
-        if [ -n "$LOCKPID" ] && kill -0 "$LOCKPID" 2>/dev/null; then
+        if [ -n "$LOCKPID" ] && [ -d "/proc/$LOCKPID" ]; then
           if grep -q "^sudo-lock$" "/proc/$LOCKPID/comm" 2>/dev/null; then
             echo "sudo-lock: already active (PID $LOCKPID)." >&2
             exit 1
