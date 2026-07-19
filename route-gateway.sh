@@ -2,8 +2,7 @@
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "Must be run as root. Usage: sudo $0" >&2
-  exit 1
+  exec sudo "$0" "$@"
 fi
 
 GW="${1:-192.168.3.2}"

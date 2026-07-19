@@ -6,6 +6,9 @@ HOST="${1:-}"
 
 cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
 
+echo "Pulling latest changes..."
+git pull --ff-only || echo "Warning: git pull failed, continuing with local changes..."
+
 echo "Updating flake inputs..."
 nix flake update
 
