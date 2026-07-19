@@ -50,7 +50,9 @@
     feishu
     zoom-us
 
-    hmcl
+    (hmcl.overrideAttrs (old: {
+      runtimeDeps = old.runtimeDeps ++ [ pkgs.stdenv.cc.cc.lib ];
+    }))
     owmods-cli
     owmods-gui
     steam-run
@@ -143,6 +145,9 @@
 
   programs.java = {
     enable = true;
-    package = pkgs.temurin-bin-21;
+    package = pkgs.zulu21;
   };
+
+  programs.nix-ld.enable = true;
+  programs.nix-ld.libraries = with pkgs; [ stdenv.cc.cc.lib ];
 }
