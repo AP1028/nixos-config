@@ -50,6 +50,6 @@
     ../../modules/env/game-env.nix
     ../../modules/env/common.nix
     ../../modules/env/no-internet.nix
-    ../../modules/env/sudo-env.nix
+    ../../modules/system/sudo-env.nix
   ];
 }
