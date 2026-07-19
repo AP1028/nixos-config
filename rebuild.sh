@@ -68,6 +68,9 @@ cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
 # Tell git to ignore local changes to local.nix (keeps template tracked but personal values local)
 git update-index --skip-worktree local.nix 2>/dev/null || true
 
+echo "Pulling latest changes..."
+git pull --ff-only || echo "Warning: git pull failed, continuing with local changes..."
+
 echo "Staging files..."
 git add --all
 

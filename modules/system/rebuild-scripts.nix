@@ -13,6 +13,8 @@ in {
       CONFIG_DIR="${configDir}"
       git config --global --add safe.directory "$CONFIG_DIR" 2>/dev/null || true
       cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
+      echo "Pulling latest changes..."
+      git pull --ff-only || echo "Warning: git pull failed, continuing with local changes..."
       echo "Staging files..."
       git add --all
       if git diff --cached --quiet; then
@@ -40,6 +42,8 @@ in {
       fi
       CONFIG_DIR="${configDir}"
       cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
+      echo "Pulling latest changes..."
+      git pull --ff-only || echo "Warning: git pull failed, continuing with local changes..."
       echo "Updating flake inputs..."
       nix flake update
       echo "Rebuilding..."
