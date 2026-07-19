@@ -63,11 +63,8 @@ in
       set -e
 
       if [ "$(id -u)" -ne 0 ]; then
-        echo "sudo-lock must be run as root." >&2
-        echo "Usage: sudo-env -c 'sudo-lock'" >&2
-        echo "       sudo-env -c 'sudo-lock --clean'" >&2
-        echo "Start in tmux/screen to keep it alive across sessions." >&2
-        exit 1
+        echo "[sudo-lock] not root, re-invoking via sudo..." >&2
+        exec sudo "$0" "$@"
       fi
 
       if [ -z "$SUDO_USER" ]; then
