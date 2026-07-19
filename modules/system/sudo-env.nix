@@ -31,7 +31,8 @@ in
         exit 1
       fi
 
-      COMMAND="$2"
+      shift
+      COMMAND="$*"
       TRUNCATED=$(echo "$COMMAND" | head -c 80)
       [ "$TRUNCATED" != "$COMMAND" ] && TRUNCATED="$TRUNCATED..."
 
@@ -56,11 +57,12 @@ in
       export SUDO_ASKPASS="${askpassScript}"
 
       >&2 printf '[sudo-env] kdialog | %s\n' "$TRUNCATED"
-      exec sudo --preserve-env -A -p "[sudo-env] password:" sh -c "$COMMAND"
+      exec sudo --preserve-env -A -p "[sudo-env] $TRUNCATED" sh -c "$COMMAND"
     '')
 
     (pkgs.writeShellScriptBin "sudo-lock" ''
-      set -e
+      # set -e disabled: daemon must survive any command failure
+      # Only exit on explicit cleanup signal
 
       if [ "$(id -u)" -ne 0 ]; then
         echo "[sudo-lock] not root, re-invoking via sudo..." >&2
@@ -113,8 +115,8 @@ in
       fi
 
       rm -f "$CMDFIFO" "$OUTFIFO"
-      mkfifo "$CMDFIFO" 2>/dev/null
-      mkfifo "$OUTFIFO" 2>/dev/null
+      mkfifo "$CMDFIFO" 2>/dev/null || { echo "sudo-lock: failed to create FIFO" >&2; exit 1; }
+      mkfifo "$OUTFIFO" 2>/dev/null || { echo "sudo-lock: failed to create FIFO" >&2; exit 1; }
       chmod 622 "$CMDFIFO"
       chmod 644 "$OUTFIFO"
 
@@ -132,18 +134,22 @@ in
       }
       trap cleanup INT TERM HUP
 
-      # Open FIFO read-write so we can poll with timeout (no separate executor needed)
+      # Open FIFO read-write so we can poll with timeout
       exec 3<> "$CMDFIFO"
 
       echo "sudo-lock active for $SUDO_USER (PID $$). Press Ctrl+C to release."
 
       while true; do
-        if read -t 5 -u 3 encoded; then
+        if read -t 5 -u 3 encoded 2>/dev/null; then
           [ -z "$encoded" ] && continue
-          CMD_TAIL=$(printf '%s' "$encoded" | base64 -d | head -c 80)
+          CMD_TAIL=$(printf '%s' "$encoded" | base64 -d 2>/dev/null | head -c 80)
           echo "[sudo-lock] exec: $CMD_TAIL"
-          printf '%s' "$encoded" | base64 -d | sh > "$OUTFIFO" 2>&1
+          printf '%s' "$encoded" | base64 -d 2>/dev/null | sh > "$OUTFIFO" 2>&1 || true
           echo "[sudo-lock] done"
+        fi
+        if [ ! -e /proc/$$/fd/3 ]; then
+          echo "[sudo-lock] fd 3 lost, reopening..." >&2
+          exec 3<> "$CMDFIFO"
         fi
         sudo -u "$SUDO_USER" -v 2>/dev/null || true
       done
