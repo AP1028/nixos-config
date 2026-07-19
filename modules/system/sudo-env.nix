@@ -57,6 +57,7 @@ in
       if [ "$(id -u)" -ne 0 ]; then
         echo "sudo-lock must be run as root." >&2
         echo "Usage: sudo-env -c 'sudo-lock'" >&2
+        echo "       sudo-env -c 'sudo-lock --clean'" >&2
         exit 1
       fi
 
@@ -66,11 +67,42 @@ in
       fi
 
       LOCKFILE="${lockdir}/$SUDO_UID"
+
+      if [ "$1" = "--clean" ]; then
+        if [ ! -f "$LOCKFILE" ]; then
+          echo "sudo-lock: no lock found for $SUDO_USER."
+          exit 0
+        fi
+        LOCKPID=$(cat "$LOCKFILE" 2>/dev/null)
+        if [ -n "$LOCKPID" ] && kill -0 "$LOCKPID" 2>/dev/null; then
+          if grep -q "^sudo-lock$" "/proc/$LOCKPID/comm" 2>/dev/null; then
+            echo "sudo-lock: lock is active (PID $LOCKPID). Kill it first or press Ctrl+C in its terminal." >&2
+            exit 1
+          fi
+        fi
+        rm -f "$LOCKFILE"
+        echo "sudo-lock: cleaned stale lock for $SUDO_USER."
+        exit 0
+      fi
+
       mkdir -p "$(dirname "$LOCKFILE")"
+
+      if [ -f "$LOCKFILE" ]; then
+        LOCKPID=$(cat "$LOCKFILE" 2>/dev/null)
+        if [ -n "$LOCKPID" ] && kill -0 "$LOCKPID" 2>/dev/null; then
+          if grep -q "^sudo-lock$" "/proc/$LOCKPID/comm" 2>/dev/null; then
+            echo "sudo-lock: already active (PID $LOCKPID)." >&2
+            exit 1
+          fi
+        fi
+      fi
+
       echo "$$" > "$LOCKFILE"
 
       cleanup() {
-        rm -f "$LOCKFILE"
+        if [ -f "$LOCKFILE" ] && [ "$(cat "$LOCKFILE" 2>/dev/null)" = "$$" ]; then
+          rm -f "$LOCKFILE"
+        fi
         echo ""
         echo "sudo-lock released."
         exit 0
