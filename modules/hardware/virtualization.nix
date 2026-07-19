@@ -17,6 +17,8 @@
   system.activationScripts.ssdt-battery.text = ''
     cp ${../../vms/ssdt-battery.aml} /var/lib/libvirt/vbios/ssdt-battery.aml
     chmod 644 /var/lib/libvirt/vbios/ssdt-battery.aml
+    cp ${../../vms/ssdt-npcf.aml} /var/lib/libvirt/vbios/ssdt-npcf.aml
+    chmod 644 /var/lib/libvirt/vbios/ssdt-npcf.aml
   '';
 
   virtualisation.libvirtd = {
