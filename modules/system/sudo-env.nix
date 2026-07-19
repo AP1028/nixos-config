@@ -44,7 +44,6 @@ in
             sudo -n --preserve-env sh -c "$COMMAND" 2>/dev/null && exit 0
           fi
         fi
-        rm -f "$LOCKFILE"
       fi
 
       export SUDO_ASKPASS="${askpassScript}"
