@@ -62,6 +62,10 @@
           active = false;
         }
         {
+          definition = ../../vms/win11-stealthy-dgpu-nvme-v2.xml;
+          active = false;
+        }
+        {
           definition = ../../vms/win11-virtio.xml;
           active = false;
         }
