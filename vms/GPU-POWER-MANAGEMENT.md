@@ -535,14 +535,76 @@ echo "$profile" | sudo tee /sys/firmware/acpi/platform_profile
 | **Charge limit save/restore** | Saves base limit for one-shot full charge then restores |
 | **External power event commands** | Runs user-defined `ac_command` / `bat_command` scripts |
 
-## Limitation for GPU passthrough
+## NPFC SSDT fix (unlocks 120W in VM)
 
-Writing `nv_tgp` configures the **EC** to allow higher power delivery at the
-hardware level. However, the NVIDIA driver inside the Windows VM reads its
-power limit from the **GPU's vBIOS registers**, not from the EC. Since the EC
-negotiation channel is severed in passthrough, the vBIOS base TGP (80W) is
-what the driver sees. The EC-level limits set via these sysfs files do **not**
-affect the GPU's internal power limit registers.
+The 80W cap in the VM was solved by injecting a custom SSDT that provides the
+`\_SB_.NPCF` device (HW ID `NVDA0820`) — the NVIDIA Power Control Framework
+that the Windows **NVIDIA Platform Controllers and Framework** driver talks to
+for power budget authorization.
 
-This is why `nvidia-smi -pl` on older drivers works — it writes directly to
-the GPU's power management registers, bypassing the EC entirely.
+### Source
+
+The SSDT is defined in `~/nixos-config/vms/ssdt-npcf.asl` and compiled to
+`ssdt-npcf.aml`. Key values from the host's real SSDT18/`OptRf2`:
+
+| Field | Value | Meaning |
+|---|---|---|
+| ACBT | 0xA0 (160) | AC GPU power budget |
+| ATPP | 0x0118 (280) | AC total platform power |
+| AMAT | 0xA0 (160) | Max GPU allocation |
+| TPPL | 0x0001C138 | Total platform power limit |
+| AMIT | 0xFFB0 | Min GPU allocation |
+
+### What the SSDT does
+
+The Windows NVIDIA driver queries `\_SB_.NPCF` via `_DSM` with UUID
+`36b49710-2483-11e7-9598-0800200c9a66`. The critical sub-functions:
+
+- **Func #0**: Returns capabilities bitmap (0x06BF)
+- **Func #1**: Returns static config data
+- **Func #2**: Returns power budget (TGPA=ACBT=160W → driver sets ~120W)
+- **Func #3**: Returns temperature/fan curve info
+- **Func #5**: Must return valid temperature data (or driver fails with code 31)
+
+A simplified SSDT with only funcs #0-#3 caused code 31 because the driver
+also needs func #5. A complete SSDT with all functions (including EC-dependent
+#5, #7-#10) caused the VM to hang. The working version includes funcs #0-#3,
+and a safe static version of #5 that doesn't reference the non-existent EC.
+
+### Injection
+
+Add both the battery SSDT and the NPFC SSDT to the VM's QEMU commandline:
+
+```xml
+<qemu:commandline>
+    <qemu:arg value="-acpitable"/>
+    <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-battery.aml"/>
+    <qemu:arg value="-acpitable"/>
+    <qemu:arg value="file=/var/lib/libvirt/vbios/ssdt-npcf.aml"/>
+    ...
+</qemu:commandline>
+```
+
+### Result
+
+| Metric | Before | After |
+|---|---|---|
+| Current Power Limit | 80.00 W | 120.00 W |
+| Platform Controller status | Unknown | OK |
+| RQST Power Limit | 80.00 W | N/A |
+
+`Requested Power Limit: N/A` is expected — that field is only populated by
+`nvidia-powerd` which runs on the host and can't reach the GPU in a VM. The
+GPU firmware applies the 120W cap directly from the NVML call.
+
+### Remaining limitation
+
+The NPFC ACPI injection raises the power limit from 80W to 120W, but the
+`Requested Power Limit` stays `N/A` because `nvidia-powerd` (which runs on
+the host) cannot reach the GPU when it's bound to `vfio-pci`. The GPU's
+vBIOS base TGP (80W) and max TGP (130W) remain unchanged — the driver
+applies the 120W limit as an override from the ACPI budget.
+
+For the full 130W cap (matching the host's `Max Power Limit`), the ACBT
+value in the SSDT could be tuned. Currently set to 0xA0 (160) which results
+in 120W.
