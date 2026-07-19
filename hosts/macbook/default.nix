@@ -24,7 +24,7 @@
     (import ../../modules/services/iptables-clash-openwrt.nix {interface = "wlan0";})
 
     ../../modules/env/common.nix
-    ../../modules/env/sudo-env.nix
+    ../../modules/system/sudo-env.nix
   ];
 
   home-manager.backupFileExtension = "hm-backup";
