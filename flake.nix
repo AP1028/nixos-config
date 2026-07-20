@@ -88,10 +88,12 @@
           nixvirt.nixosModules.default
 
           # Pin freecad from stable nixpkgs (pdal/GDAL API breakage on unstable)
+          # Disable ceph in qemu_full (fails to build on unstable, not needed)
           ({ inputs, ... }: {
             nixpkgs.overlays = [
               (final: prev: {
                 freecad = inputs.qemu-nixpkgs.legacyPackages.${final.system}.freecad;
+                qemu_full = prev.qemu_full.override { cephSupport = false; };
               })
             ];
           })
