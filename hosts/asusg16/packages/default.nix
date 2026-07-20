@@ -29,6 +29,7 @@
   ];
 
   environment.systemPackages = with pkgs; [
+    (pkgs.callPackage ../../../packages/ysm-java { })
     brightnessctl
     dialog
     iproute2
