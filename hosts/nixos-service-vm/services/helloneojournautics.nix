@@ -2,10 +2,12 @@
   pkgs,
   inputs,
   ...
-}: {
+}: let
+  ysmJava = pkgs.callPackage ../../../packages/ysm-java { };
+in {
   systemd.services = {
     hello-neo-journautics = {
-      description = "NeoForge Minecraft Server (Temurin 21) in Tmux";
+      description = "NeoForge Minecraft Server (ysm-java) in Tmux";
       after = ["network.target"];
       wantedBy = ["multi-user.target"];
       serviceConfig = {
@@ -15,7 +17,7 @@
         WorkingDirectory = "/home/service/HelloNeoJournautics";
         path = [
           pkgs.tmux
-          pkgs.temurin-bin-21
+          ysmJava
           pkgs.bash
           pkgs.coreutils
         ];
