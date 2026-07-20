@@ -52,7 +52,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    # Pinned to a commit before ceph/qemu build breakage on unstable
+    # Pinned to a commit before freecad build breakage on unstable (pdal/GDAL API)
     qemu-nixpkgs.url = "github:NixOS/nixpkgs/65179426c83bb3f6bc14898b42ea1c6f01d374b0";
   };
 
@@ -87,14 +87,11 @@
           home-manager.nixosModules.home-manager
           nixvirt.nixosModules.default
 
-          # Pin qemu, freecad, input-remapper from stable nixpkgs
-          # (built against older deps, broken on current unstable)
+          # Pin freecad from stable nixpkgs (pdal/GDAL API breakage on unstable)
           ({ inputs, ... }: {
             nixpkgs.overlays = [
               (final: prev: {
-                qemu = inputs.qemu-nixpkgs.legacyPackages.${final.system}.qemu;
                 freecad = inputs.qemu-nixpkgs.legacyPackages.${final.system}.freecad;
-                input-remapper = inputs.qemu-nixpkgs.legacyPackages.${final.system}.input-remapper;
               })
             ];
           })
