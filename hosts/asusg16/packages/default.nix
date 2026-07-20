@@ -23,7 +23,6 @@
     ../../../modules/packages/davinci.nix
     ../../../modules/packages/bilibili.nix
     # ../../../modules/packages/onlyoffice.nix
-    ../../../modules/packages/opencode.nix
     ../../../modules/packages/wpsoffice.nix
     ../../../modules/packages/controller-rebind.nix
   ];
