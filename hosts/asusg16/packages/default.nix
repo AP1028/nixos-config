@@ -121,7 +121,7 @@
     input-remapper
     nvitop
 
-    texlive.combined.scheme-full
+    texliveFull
     dotnet-sdk_9
 
     quota
@@ -135,7 +135,7 @@
 
     libreoffice-qt6-fresh
 
-    wireshark-qt
+    wireshark
     wireshark-cli
 
     speedtest
