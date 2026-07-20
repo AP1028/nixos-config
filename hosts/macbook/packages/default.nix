@@ -1,6 +1,6 @@
 {pkgs, ...}: {
   imports = [
-    ../../../modules/packages/opencode.nix
+    ../../../modules/packages/common
   ];
 
   programs.nix-ld.enable = true;
