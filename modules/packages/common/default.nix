@@ -4,7 +4,6 @@
   # makes modules/home (zsh, starship, fastfetch, ...) apply everywhere.
   imports = [
     inputs.home-manager.nixosModules.home-manager
-    ../opencode.nix
   ];
 
   home-manager.backupFileExtension = "hm-backup";
