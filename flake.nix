@@ -93,7 +93,7 @@
             nixpkgs.overlays = [
               (final: prev: {
                 freecad = inputs.qemu-nixpkgs.legacyPackages.${final.stdenv.hostPlatform.system}.freecad;
-                qemu_full = inputs.qemu-nixpkgs.legacyPackages.${final.stdenv.hostPlatform.system}.qemu_full;
+                qemu_full = prev.qemu_full.override { cephSupport = false; };
               })
             ];
           })
