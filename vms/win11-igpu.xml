@@ -162,8 +162,7 @@
     <input type='keyboard' bus='virtio'>
       <address type='pci' domain='0x0000' bus='0x04' slot='0x00' function='0x0'/>
     </input>
-    <input type='mouse' bus='ps2'/>
-    <input type='keyboard' bus='ps2'/>
+    <input type='mouse' bus='virtio'/>
     <tpm model='tpm-crb'>
       <backend type='emulator' version='2.0'>
         <profile name='default-v1'/>
