@@ -118,7 +118,6 @@
     moonlight-qt
 
     distrobox
-    input-remapper
     nvitop
 
     texliveFull
