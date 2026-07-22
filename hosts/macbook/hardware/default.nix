@@ -14,6 +14,7 @@
   boot.kernelModules = ["88x2bu"];
   boot.extraModulePackages = [config.boot.kernelPackages.rtl88x2bu];
 
+  hardware.asahi.enable = true;
   hardware.asahi.peripheralFirmwareDirectory = /. + "${config.local.configDir}/hosts/macbook/firmware";
 
   hardware.bluetooth.enable = true;
