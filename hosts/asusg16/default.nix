@@ -29,6 +29,7 @@
 
     ../../modules/desktop
     ../../modules/system/i18n.nix
+    ../../modules/system/substituters.nix
 
     ../../modules/services/audio.nix
     ../../modules/services/clash-verge.nix

@@ -11,6 +11,7 @@
 
     ../../modules/system/vm-base.nix
     ../../modules/system/i18n.nix
+    ../../modules/system/substituters.nix
 
     ../../modules/system/local.nix
     (import ../../modules/system/rebuild-scripts.nix { host = "nixos-git-vm"; })
