@@ -30,6 +30,7 @@
     (import ../../modules/services/iptables-clash-openwrt.nix { interface = "ens18"; })
 
     ./services/helloneojournautics.nix
+    ./services/jzmf-vanilla.nix
     ./services/sillytavern.nix
   ];
 }
