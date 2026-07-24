@@ -31,6 +31,7 @@
 
     ./services/helloneojournautics.nix
     ./services/jzmf-vanilla.nix
+    ./services/jzmf-construction.nix
     ./services/sillytavern.nix
   ];
 }
