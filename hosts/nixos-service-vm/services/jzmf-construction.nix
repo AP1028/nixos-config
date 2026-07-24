@@ -15,15 +15,15 @@
         pkgs.coreutils
       ];
       serviceConfig = {
-        Type = "forking";
+        Type = "oneshot";
+        RemainAfterExit = true;
         User = "service";
         Group = "users";
         WorkingDirectory = "/home/service/jzmf-construction";
         ExecStartPre = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux kill-session -t jzmf-construction 2>/dev/null || true'";
-        ExecStart = "${pkgs.tmux}/bin/tmux new-session -d -s jzmf-construction ./run.sh";
+        ExecStart = "${pkgs.tmux}/bin/tmux new-session -d -s jzmf-construction '${pkgs.bash}/bin/bash -c \"while true; do ./run.sh; sleep 5; done\"'";
         ExecStop = "${pkgs.tmux}/bin/tmux send-keys -t jzmf-construction 'stop' C-m";
         TimeoutStopSec = 120;
-        Restart = "always";
       };
     };
   };
