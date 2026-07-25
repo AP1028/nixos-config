@@ -6,6 +6,7 @@
   environment.systemPackages = with pkgs; [
     (pkgs.callPackage ../../../packages/ysm-java { })
     nodejs_22
+    screen
   ];
 
   programs.java = {
