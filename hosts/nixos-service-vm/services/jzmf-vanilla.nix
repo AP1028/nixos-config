@@ -21,8 +21,8 @@
         Group = "users";
         WorkingDirectory = "/home/service/jzmf-vanilla";
         ExecStartPre = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux kill-session -t jzmf-vanilla 2>/dev/null || true'";
-        ExecStart = "${pkgs.tmux}/bin/tmux new-session -d -s jzmf-vanilla '${pkgs.bash}/bin/bash -c \"while true; do ./run.sh; sleep 5; done\"'";
-        ExecStop = "${pkgs.tmux}/bin/tmux send-keys -t jzmf-vanilla 'stop' C-m";
+        ExecStart = "${pkgs.tmux}/bin/tmux new-session -d -s jzmf-vanilla '${pkgs.bash}/bin/bash -c \"trap \\\"\\\" INT; while true; do ./run.sh; sleep 5; done\"'";
+        ExecStop = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux send-keys -t jzmf-vanilla stop C-m && sleep 10 && ${pkgs.tmux}/bin/tmux kill-session -t jzmf-vanilla 2>/dev/null || true'";
         TimeoutStopSec = 120;
       };
     };

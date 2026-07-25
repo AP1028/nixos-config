@@ -23,8 +23,8 @@ in {
         Group = "users";
         WorkingDirectory = "/home/service/HelloNeoJournautics";
         ExecStartPre = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux kill-session -t mc-server 2>/dev/null || true'";
-        ExecStart = "${pkgs.tmux}/bin/tmux new-session -d -s mc-server '${pkgs.bash}/bin/bash -c \"while true; do ./run.sh; sleep 5; done\"'";
-        ExecStop = "${pkgs.tmux}/bin/tmux send-keys -t mc-server 'stop' C-m";
+        ExecStart = "${pkgs.tmux}/bin/tmux new-session -d -s mc-server '${pkgs.bash}/bin/bash -c \"trap \\\"\\\" INT; while true; do ./run.sh; sleep 5; done\"'";
+        ExecStop = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux send-keys -t mc-server stop C-m && sleep 10 && ${pkgs.tmux}/bin/tmux kill-session -t mc-server 2>/dev/null || true'";
         TimeoutStopSec = 120;
       };
     };
