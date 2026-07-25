@@ -1,32 +1,25 @@
-{
-  pkgs,
-  inputs,
-  ...
-}: let
+{ pkgs, inputs, ... }:
+let
   ysmJava = pkgs.callPackage ../../../packages/ysm-java { };
 in {
-  systemd.services = {
-    hello-neo-journautics = {
-      description = "NeoForge Minecraft Server (ysm-java) in Tmux";
-      after = ["network.target"];
-      wantedBy = ["multi-user.target"];
-      path = [
-        pkgs.tmux
-        ysmJava
-        pkgs.bash
-        pkgs.coreutils
-      ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        User = "service";
-        Group = "users";
-        WorkingDirectory = "/home/service/HelloNeoJournautics";
-        ExecStartPre = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux kill-session -t mc-server 2>/dev/null || true'";
-        ExecStart = "${pkgs.tmux}/bin/tmux new-session -d -s mc-server '${pkgs.bash}/bin/bash -c \"trap \\\"\\\" INT; while true; do ./run.sh; sleep 5; done\"'";
-        ExecStop = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux send-keys -t mc-server stop C-m && sleep 10 && ${pkgs.tmux}/bin/tmux kill-session -t mc-server 2>/dev/null || true'";
-        TimeoutStopSec = 120;
-      };
+  systemd.services.helloneojournautics = {
+    description = "NeoForge Minecraft Server (ysm-java) in Screen";
+    after = ["network.target"];
+    wantedBy = ["multi-user.target"];
+    path = [
+      pkgs.screen
+      ysmJava
+    ];
+    serviceConfig = {
+      Type = "simple";
+      User = "service";
+      Group = "users";
+      WorkingDirectory = "/home/service/HelloNeoJournautics";
+      ExecStart = "${pkgs.screen}/bin/screen -DmS mc-server ./run.sh";
+      ExecStop = "${pkgs.screen}/bin/screen -p 0 -S mc-server -X eval 'stuff \"stop\"\\015'";
+      Restart = "always";
+      RestartSec = 15;
+      TimeoutStopSec = 120;
     };
   };
 }

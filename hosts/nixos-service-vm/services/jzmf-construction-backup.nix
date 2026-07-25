@@ -6,7 +6,7 @@
     description = "Daily world backup for jzmf-construction";
     after = ["jzmf-construction.service"];
     path = [
-      pkgs.tmux
+      pkgs.screen
       pkgs.zip
       pkgs.bash
       pkgs.coreutils
@@ -18,12 +18,12 @@
       WorkingDirectory = "/home/service/jzmf-construction";
     };
     script = ''
-      tmux send-keys -t jzmf-construction 'tellraw @a {"text":"[Backup] Starting world backup...","color":"gold"}' C-m
-      tmux send-keys -t jzmf-construction 'save-all' C-m
+      ${pkgs.screen}/bin/screen -p 0 -S jzmf-construction -X eval 'stuff "tellraw @a {"text":"[Backup] Starting world backup...","color":"gold"}\015'
+      ${pkgs.screen}/bin/screen -p 0 -S jzmf-construction -X eval 'stuff "save-all"\015'
       sleep 10
       ts=$(date +%Y-%m-%d_%H-%M-%S)
       zip -r "/home/service/jzmf-construction/world-backup-''${ts}.zip" world
-      tmux send-keys -t jzmf-construction 'tellraw @a {"text":"[Backup] World backup complete.","color":"green"}' C-m
+      ${pkgs.screen}/bin/screen -p 0 -S jzmf-construction -X eval 'stuff "tellraw @a {"text":"[Backup] World backup complete.","color":"green"}\015'
       ls -1 world-backup-*.zip | sort | head -n -15 | xargs -r rm --
     '';
   };

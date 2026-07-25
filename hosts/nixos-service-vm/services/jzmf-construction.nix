@@ -1,30 +1,23 @@
-{
-  pkgs,
-  inputs,
-  ...
-}: {
-  systemd.services = {
-    jzmf-construction = {
-      description = "jzmf-construction Minecraft Server (Temurin 21) in Tmux";
-      after = ["network.target"];
-      wantedBy = ["multi-user.target"];
-      path = [
-        pkgs.tmux
-        pkgs.temurin-bin-21
-        pkgs.bash
-        pkgs.coreutils
-      ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        User = "service";
-        Group = "users";
-        WorkingDirectory = "/home/service/jzmf-construction";
-        ExecStartPre = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux kill-session -t jzmf-construction 2>/dev/null || true'";
-        ExecStart = "${pkgs.tmux}/bin/tmux new-session -d -s jzmf-construction '${pkgs.bash}/bin/bash -c \"trap \\\"\\\" INT; while true; do ./run.sh; sleep 5; done\"'";
-        ExecStop = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux send-keys -t jzmf-construction stop C-m && sleep 10 && ${pkgs.tmux}/bin/tmux kill-session -t jzmf-construction 2>/dev/null || true'";
-        TimeoutStopSec = 120;
-      };
+{ pkgs, inputs, ... }:
+in {
+  systemd.services.jzmf-construction = {
+    description = "jzmf-construction Minecraft Server (Temurin 21) in Screen";
+    after = ["network.target"];
+    wantedBy = ["multi-user.target"];
+    path = [
+      pkgs.screen
+      pkgs.temurin-bin-21
+    ];
+    serviceConfig = {
+      Type = "simple";
+      User = "service";
+      Group = "users";
+      WorkingDirectory = "/home/service/jzmf-construction";
+      ExecStart = "${pkgs.screen}/bin/screen -DmS jzmf-construction ./run.sh";
+      ExecStop = "${pkgs.screen}/bin/screen -p 0 -S jzmf-construction -X eval 'stuff \"stop\"\\015'";
+      Restart = "always";
+      RestartSec = 15;
+      TimeoutStopSec = 120;
     };
   };
 }
