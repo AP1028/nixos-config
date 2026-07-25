@@ -5,6 +5,8 @@
   inputs,
   ...
 }: {
+  programs.screen.enable = true;
+
   imports = [
     ./hardware-configuration.nix
     ./networking
