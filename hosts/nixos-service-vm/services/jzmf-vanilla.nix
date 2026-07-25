@@ -6,13 +6,14 @@
     path = [
       pkgs.screen
       pkgs.temurin-bin-25
+      pkgs.bash
     ];
     serviceConfig = {
-      Type = "simple";
+      Type = "forking";
       User = "service";
       Group = "users";
       WorkingDirectory = "/home/service/jzmf-vanilla";
-      ExecStart = "${pkgs.bash}/bin/bash -c 'echo START > /tmp/vanilla-debug.log; env >> /tmp/vanilla-debug.log; pwd >> /tmp/vanilla-debug.log; ls -la ./run.sh >> /tmp/vanilla-debug.log 2>&1; echo \"--- running run.sh ---\" >> /tmp/vanilla-debug.log; ./run.sh >> /tmp/vanilla-debug.log 2>&1; echo \"exit: $?\" >> /tmp/vanilla-debug.log'";
+      ExecStart = "${pkgs.screen}/bin/screen -dmS jzmf-vanilla ./run.sh";
       ExecStop = "${pkgs.screen}/bin/screen -p 0 -S jzmf-vanilla -X eval 'stuff \"stop\"\\015'";
       Environment = "TERM=xterm-256color";
       Restart = "always";
