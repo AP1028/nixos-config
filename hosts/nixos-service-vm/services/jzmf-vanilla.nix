@@ -1,30 +1,23 @@
-{
-  pkgs,
-  inputs,
-  ...
-}: {
-  systemd.services = {
-    jzmf-vanilla = {
-      description = "jzmf-vanilla Minecraft Server (Temurin 25) in Tmux";
-      after = ["network.target"];
-      wantedBy = ["multi-user.target"];
-      path = [
-        pkgs.tmux
-        pkgs.temurin-bin-25
-        pkgs.bash
-        pkgs.coreutils
-      ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        User = "service";
-        Group = "users";
-        WorkingDirectory = "/home/service/jzmf-vanilla";
-        ExecStartPre = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux kill-session -t jzmf-vanilla 2>/dev/null || true'";
-        ExecStart = "${pkgs.tmux}/bin/tmux new-session -d -s jzmf-vanilla '${pkgs.bash}/bin/bash -c \"trap \\\"\\\" INT; while true; do ./run.sh; sleep 5; done\"'";
-        ExecStop = "${pkgs.bash}/bin/bash -c '${pkgs.tmux}/bin/tmux send-keys -t jzmf-vanilla stop C-m && sleep 10 && ${pkgs.tmux}/bin/tmux kill-session -t jzmf-vanilla 2>/dev/null || true'";
-        TimeoutStopSec = 120;
-      };
+{ pkgs, inputs, ... }:
+in {
+  systemd.services.jzmf-vanilla = {
+    description = "jzmf-vanilla Minecraft Server (Temurin 25) in Screen";
+    after = ["network.target"];
+    wantedBy = ["multi-user.target"];
+    path = [
+      pkgs.screen
+      pkgs.temurin-bin-25
+    ];
+    serviceConfig = {
+      Type = "simple";
+      User = "service";
+      Group = "users";
+      WorkingDirectory = "/home/service/jzmf-vanilla";
+      ExecStart = "${pkgs.screen}/bin/screen -DmS jzmf-vanilla ./run.sh";
+      ExecStop = "${pkgs.screen}/bin/screen -p 0 -S jzmf-vanilla -X eval 'stuff \"stop\"\\015'";
+      Restart = "always";
+      RestartSec = 15;
+      TimeoutStopSec = 120;
     };
   };
 }
