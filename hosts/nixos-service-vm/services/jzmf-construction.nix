@@ -14,6 +14,7 @@
       WorkingDirectory = "/home/service/jzmf-construction";
       ExecStart = "${pkgs.screen}/bin/screen -DmS jzmf-construction ./run.sh";
       ExecStop = "${pkgs.screen}/bin/screen -p 0 -S jzmf-construction -X eval 'stuff \"stop\"\\015'";
+      Environment = "TERM=xterm-256color";
       Restart = "always";
       RestartSec = 15;
       TimeoutStopSec = 120;
