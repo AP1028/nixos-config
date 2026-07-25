@@ -1,5 +1,4 @@
-{ pkgs, inputs, ... }:
-in {
+{ pkgs, inputs, ... }: {
   systemd.services.jzmf-vanilla = {
     description = "jzmf-vanilla Minecraft Server (Temurin 25) in Screen";
     after = ["network.target"];

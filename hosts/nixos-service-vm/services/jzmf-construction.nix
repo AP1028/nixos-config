@@ -1,5 +1,4 @@
-{ pkgs, inputs, ... }:
-in {
+{ pkgs, inputs, ... }: {
   systemd.services.jzmf-construction = {
     description = "jzmf-construction Minecraft Server (Temurin 21) in Screen";
     after = ["network.target"];
