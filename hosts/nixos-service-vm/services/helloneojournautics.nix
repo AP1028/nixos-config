@@ -11,11 +11,11 @@ in {
       ysmJava
     ];
     serviceConfig = {
-      Type = "simple";
+      Type = "forking";
       User = "service";
       Group = "users";
       WorkingDirectory = "/home/service/HelloNeoJournautics";
-      ExecStart = "${pkgs.screen}/bin/screen -DmS helloneojournautics ./run.sh";
+      ExecStart = "${pkgs.screen}/bin/screen -dmS helloneojournautics ./run.sh";
       ExecStop = "${pkgs.screen}/bin/screen -p 0 -S helloneojournautics -X eval 'stuff \"stop\"\\015'";
       Environment = "TERM=xterm-256color";
       Restart = "always";
