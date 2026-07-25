@@ -36,11 +36,6 @@
   services.tuned.enable = true;
   services.tlp.enable = lib.mkOverride 500 false;
 
-  environment.systemPackages = with pkgs; [
-    cudaPackages.cudatoolkit
-    nvtopPackages.nvidia
-  ];
-
   # Blacklist nvidia_wmi_ec_backlight — it breaks backlight control on ASUS
   boot.blacklistedKernelModules = ["nvidia_wmi_ec_backlight"];
   boot.extraModprobeConfig = ''
@@ -58,4 +53,9 @@
     __GLX_VENDOR_LIBRARY_NAME = "mesa";
     __EGL_VENDOR_LIBRARY_FILENAMES = "/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json";
   };
+
+  environment.systemPackages = with pkgs; [
+    cudaPackages.cudatoolkit
+    nvtopPackages.nvidia
+  ];
 }
