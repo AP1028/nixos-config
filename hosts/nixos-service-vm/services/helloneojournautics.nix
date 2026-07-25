@@ -2,7 +2,7 @@
 let
   ysmJava = pkgs.callPackage ../../../packages/ysm-java { };
 in {
-  systemd.services.helloneojournautics = {
+  systemd.services.hello-neo-journautics = {
     description = "NeoForge Minecraft Server (ysm-java) in Screen";
     after = ["network.target"];
     wantedBy = ["multi-user.target"];
@@ -15,8 +15,8 @@ in {
       User = "service";
       Group = "users";
       WorkingDirectory = "/home/service/HelloNeoJournautics";
-      ExecStart = "${pkgs.screen}/bin/screen -DmS mc-server ./run.sh";
-      ExecStop = "${pkgs.screen}/bin/screen -p 0 -S mc-server -X eval 'stuff \"stop\"\\015'";
+      ExecStart = "${pkgs.screen}/bin/screen -DmS helloneojournautics ./run.sh";
+      ExecStop = "${pkgs.screen}/bin/screen -p 0 -S helloneojournautics -X eval 'stuff \"stop\"\\015'";
       Restart = "always";
       RestartSec = 15;
       TimeoutStopSec = 120;
