@@ -6,6 +6,7 @@
     path = [
       pkgs.screen
       pkgs.temurin-bin-21
+      pkgs.bash
     ];
     serviceConfig = {
       Type = "forking";
