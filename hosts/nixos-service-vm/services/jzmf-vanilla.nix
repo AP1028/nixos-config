@@ -8,11 +8,11 @@
       pkgs.temurin-bin-25
     ];
     serviceConfig = {
-      Type = "simple";
+      Type = "forking";
       User = "service";
       Group = "users";
       WorkingDirectory = "/home/service/jzmf-vanilla";
-      ExecStart = "${pkgs.screen}/bin/screen -DmS jzmf-vanilla ./run.sh";
+      ExecStart = "${pkgs.screen}/bin/screen -dmS jzmf-vanilla ./run.sh";
       ExecStop = "${pkgs.screen}/bin/screen -p 0 -S jzmf-vanilla -X eval 'stuff \"stop\"\\015'";
       Environment = "TERM=xterm-256color";
       Restart = "always";

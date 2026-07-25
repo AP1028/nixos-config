@@ -8,11 +8,11 @@
       pkgs.temurin-bin-21
     ];
     serviceConfig = {
-      Type = "simple";
+      Type = "forking";
       User = "service";
       Group = "users";
       WorkingDirectory = "/home/service/jzmf-construction";
-      ExecStart = "${pkgs.screen}/bin/screen -DmS jzmf-construction ./run.sh";
+      ExecStart = "${pkgs.screen}/bin/screen -dmS jzmf-construction ./run.sh";
       ExecStop = "${pkgs.screen}/bin/screen -p 0 -S jzmf-construction -X eval 'stuff \"stop\"\\015'";
       Environment = "TERM=xterm-256color";
       Restart = "always";
