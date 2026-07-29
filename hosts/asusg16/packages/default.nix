@@ -28,6 +28,7 @@
 
   environment.systemPackages = with pkgs; [
     (pkgs.callPackage ../../../packages/ysm-java { })
+    (pkgs.callPackage ../../../packages/amulet-map-editor { })
     brightnessctl
     dialog
     iproute2
