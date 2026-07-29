@@ -1,4 +1,4 @@
-{ lib, stdenv, fetchurl, fetchFromGitHub, wrapGAppsHook3, libGLU, zlib, cmake, ninja, python312, rocksdb }:
+{ lib, stdenv, fetchurl, fetchFromGitHub, wrapGAppsHook3, libGLU, zlib, cmake, ninja, python312, rocksdb, makeWrapper }:
 
 let
   py = python312.pkgs;
@@ -221,6 +221,12 @@ let
     };
   };
 
+  allDeps = with py; [
+    pillow wxpython pyopengl pymctranslate minecraft-resource-pack
+    amulet-core amulet-nbt amulet-faulthandler platformdirs packaging
+  ];
+  pythonSite = lib.makeSearchPathOutput "lib" "lib/python3.12/site-packages";
+
 in py.buildPythonApplication rec {
   pname = "amulet-map-editor";
   version = "0.10.60";
@@ -236,6 +242,10 @@ in py.buildPythonApplication rec {
   postPatch = ''
     substituteInPlace setup.cfg \
       --replace-fail "wayland-lock-pointer;platform_system=='Linux'" ""
+    # Remove the 30-day nag licence dialog
+    substituteInPlace amulet_map_editor/api/framework/app.py \
+      --replace-fail "if licence_dialog_show_time < time.time() - 3600 * 24 * 30:" \
+      "if False and licence_dialog_show_time < time.time() - 3600 * 24 * 30:"
   '';
 
   build-system = with py; [
@@ -263,10 +273,20 @@ in py.buildPythonApplication rec {
 
   pythonRelaxDeps = [ "platformdirs" ];
 
-  nativeBuildInputs = [
-    wrapGAppsHook3
+  nativeBuildInputs = with py; [
     libGLU
+    makeWrapper
   ];
+
+  postFixup = ''
+    rm -f "$out/bin/".*
+    makeWrapper "${py.python.interpreter}" "$out/bin/amulet_map_editor" \
+      --add-flags "-m amulet_map_editor" \
+      --prefix PYTHONPATH ":" "${pythonSite allDeps}:$out/lib/python3.12/site-packages" \
+      --set PYTHONNOUSERSITE "true" \
+      --prefix PATH ":" "${py.python}/bin"
+    ln -sf "$out/bin/amulet_map_editor" "$out/bin/amulet_map_editor_no_console"
+  '';
 
   pythonImportsCheck = [ "amulet_map_editor" ];
 
