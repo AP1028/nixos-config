@@ -26,23 +26,6 @@ let
     };
   };
 
-  amulet-mutf8 = py.buildPythonPackage rec {
-    pname = "amulet-mutf8";
-    version = "1.0.7";
-    format = "setuptools";
-    src = fetchurl {
-      url = "https://files.pythonhosted.org/packages/30/0c/b49bed3ea8ccfc9956d76c422d31ba1bfaf4a0320e6ea9e02dac91f64869/amulet_mutf8-1.0.7.tar.gz";
-      hash = "sha256-fkWxvf3DPjvNjphpVt56WkBKYxk3/7Rbh8aGthYUv38=";
-    };
-    nativeBuildInputs = with py; [ setuptools ];
-    meta = {
-      description = "Mojang's MUTF-8 encoding/decoding library";
-      homepage = "https://github.com/Amulet-Team/mutf8";
-      license = lib.licenses.unfree;
-      platforms = lib.platforms.linux;
-    };
-  };
-
   amulet-nbt = py.buildPythonPackage rec {
     pname = "amulet-nbt";
     version = "2.1.8";
@@ -54,7 +37,8 @@ let
       hash = "sha256-wTfheiGD/TkzQTug1SQNu5dJNm++odmi9pz3B8kIHBA=";
     };
     build-system = with py; [ setuptools wheel cython versioneer np ];
-    dependencies = with py; [ amulet-mutf8 ];
+    dependencies = with py; [ mutf8 ];
+    dontCheckRuntimeDeps = true;
     pythonImportsCheck = [ "amulet_nbt" ];
     meta = {
       description = "Python library for reading and writing binary NBT and stringified NBT";
@@ -221,12 +205,6 @@ let
     };
   };
 
-  allDeps = with py; [
-    pillow wxpython pyopengl pymctranslate minecraft-resource-pack
-    amulet-core amulet-nbt amulet-faulthandler platformdirs packaging
-  ];
-  pythonSite = lib.makeSearchPathOutput "lib" "lib/python3.12/site-packages";
-
 in py.buildPythonApplication rec {
   pname = "amulet-map-editor";
   version = "0.10.60";
@@ -280,9 +258,10 @@ in py.buildPythonApplication rec {
 
   postFixup = ''
     rm -f "$out/bin/".*
+    buildPythonPath "$out $propagatedBuildInputs"
     makeWrapper "${py.python.interpreter}" "$out/bin/amulet_map_editor" \
       --add-flags "-m amulet_map_editor" \
-      --prefix PYTHONPATH ":" "${pythonSite allDeps}:$out/lib/python3.12/site-packages" \
+      --prefix PYTHONPATH ":" "$program_PYTHONPATH" \
       --set PYTHONNOUSERSITE "true" \
       --prefix PATH ":" "${py.python}/bin"
     ln -sf "$out/bin/amulet_map_editor" "$out/bin/amulet_map_editor_no_console"
