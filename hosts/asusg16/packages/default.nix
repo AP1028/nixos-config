@@ -1,5 +1,4 @@
 # Pins (due to dependency breakage on nixos-unstable):
-#   freecad     — pinned via flake input qemu-nixpkgs (pdal fails with new GDAL API)
 #   clash-verge — pinned to 2.4.7 via flake input old-nixpkgs (2.5.1 blank proxy regression)
 
 {
@@ -19,8 +18,6 @@
     ../../../modules/packages/flatpak-netease.nix
     ../../../modules/packages/electron-hide-nvidia.nix
     ../../../modules/packages/davinci.nix
-    ../../../modules/packages/bilibili.nix
-    # ../../../modules/packages/onlyoffice.nix
     ../../../modules/packages/opencode.nix
     ../../../modules/packages/wpsoffice.nix
     ../../../modules/packages/controller-rebind.nix
@@ -68,7 +65,7 @@
       ];
     })
 
-    freecad  # pinned via overlay (see top of file)
+    freecad
     blender
 
     alejandra
@@ -104,6 +101,7 @@
     obs-studio
     obs-studio-plugins.obs-vkcapture
     bili-live-tool
+    bilibili
     bilibili-tui
     biliup-rs
 
