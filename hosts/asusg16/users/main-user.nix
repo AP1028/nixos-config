@@ -12,7 +12,6 @@
     "libvirtd"
     "kvm"
     "asusd"
-    "supergfxd"
     "uinput"
     "video"
     "input"

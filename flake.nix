@@ -51,9 +51,6 @@
       url = "github:powerofthe69/nix-gaming-edge";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-
-    # Pinned to a commit before freecad build breakage on unstable (pdal/GDAL API)
-    qemu-nixpkgs.url = "github:NixOS/nixpkgs/65179426c83bb3f6bc14898b42ea1c6f01d374b0";
   };
 
   outputs = inputs @ {
@@ -81,18 +78,15 @@
           i915-sriov-dkms.nixosModules.default
           nix-flatpak.nixosModules.nix-flatpak
 
-          ./modules/hardware/supergfxctl-overlay.nix
           ./modules/packages/winapps.nix
 
           home-manager.nixosModules.home-manager
           nixvirt.nixosModules.default
 
-          # Pin freecad from stable nixpkgs (pdal/GDAL API breakage on unstable)
           # Disable ceph in qemu_full (fails to build on unstable, not needed)
-          ({ inputs, ... }: {
+          ({ ... }: {
             nixpkgs.overlays = [
               (final: prev: {
-                freecad = inputs.qemu-nixpkgs.legacyPackages.${final.stdenv.hostPlatform.system}.freecad;
                 qemu_full = prev.qemu_full.override { cephSupport = false; };
               })
             ];
