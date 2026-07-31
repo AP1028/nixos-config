@@ -252,19 +252,35 @@ in py.buildPythonApplication rec {
   pythonRelaxDeps = [ "platformdirs" ];
 
   nativeBuildInputs = with py; [
+    wrapGAppsHook3
     libGLU
-    makeWrapper
   ];
+  dontWrapGApps = true;
 
   postFixup = ''
-    rm -f "$out/bin/".*
     buildPythonPath "$out $propagatedBuildInputs"
-    makeWrapper "${py.python.interpreter}" "$out/bin/amulet_map_editor" \
-      --add-flags "-m amulet_map_editor" \
-      --prefix PYTHONPATH ":" "$program_PYTHONPATH" \
-      --set PYTHONNOUSERSITE "true" \
-      --prefix PATH ":" "${py.python}/bin"
-    ln -sf "$out/bin/amulet_map_editor" "$out/bin/amulet_map_editor_no_console"
+    rm -f "$out/bin/".* "$out/bin/"*
+    cat > "$out/bin/amulet_map_editor" << WRAPPER
+#!${stdenv.shell}
+export PYTHONPATH="$program_PYTHONPATH"
+export PYTHONNOUSERSITE="true"
+exec "${py.python.interpreter}" -m amulet_map_editor "\$@"
+WRAPPER
+    chmod +x "$out/bin/amulet_map_editor"
+    ln -sf amulet_map_editor "$out/bin/amulet_map_editor_no_console"
+    mkdir -p "$out/share/applications" "$out/share/icons/hicolor/scalable/apps"
+    cp "${src}/resource/img/cover.jpg" "$out/share/icons/hicolor/scalable/apps/amulet_map_editor.jpg"
+    cat > "$out/share/applications/amulet_map_editor.desktop" << DESKTOP
+[Desktop Entry]
+Type=Application
+Name=Amulet Map Editor
+Comment=Minecraft world editor and converter
+Exec=$out/bin/amulet_map_editor
+Icon=amulet_map_editor
+Categories=Game;Utility;
+Terminal=false
+StartupNotify=true
+DESKTOP
   '';
 
   pythonImportsCheck = [ "amulet_map_editor" ];
