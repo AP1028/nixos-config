@@ -1,5 +1,6 @@
 # Pins (due to dependency breakage on nixos-unstable):
-#   clash-verge — pinned to 2.4.7 via flake input old-nixpkgs (2.5.1 blank proxy regression)
+#   clash-verge — unpinned as of 2.5.2 (2.5.1 blank proxy regression); flake
+#   input old-nixpkgs kept as fallback pin if a future version breaks again
 
 {
   pkgs,
