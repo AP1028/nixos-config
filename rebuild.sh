@@ -23,10 +23,11 @@ declare -A HOSTNAME_MAP=(
   ["asusg16"]="asusg16"
   ["nixos-service-vm"]="nixos-service-vm"
   ["nixos-git-vm"]="nixos-git-vm"
+  ["nixos-intel-7700k"]="nixos-intel-7700k"
   ["macbook"]="macbook"
 )
 
-AVAILABLE_HOSTS=(asusg16 nixos-service-vm nixos-git-vm macbook)
+AVAILABLE_HOSTS=(asusg16 nixos-service-vm nixos-git-vm nixos-intel-7700k macbook)
 
 if [ -z "$HOST" ]; then
   CURRENT_HOSTNAME="$(hostname)"
@@ -41,7 +42,7 @@ if [ -z "$HOST" ]; then
       echo "  $((i+1))) ${AVAILABLE_HOSTS[$i]}"
     done
     read -rp "Enter number (1-${#AVAILABLE_HOSTS[@]}): " choice
-    if [[ "$choice" =~ ^[1-4]$ ]]; then
+    if [[ "$choice" =~ ^[1-${#AVAILABLE_HOSTS[@]}]$ ]]; then
       HOST="${AVAILABLE_HOSTS[$((choice-1))]}"
     else
       echo "Invalid selection."

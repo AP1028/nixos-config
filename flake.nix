@@ -116,6 +116,18 @@
         ];
       };
 
+      nixos-intel-7700k = nixpkgs.lib.nixosSystem {
+        specialArgs = {inherit inputs;};
+        modules = [
+          { nixpkgs.hostPlatform = "x86_64-linux"; }
+          ./hosts/nixos-intel-7700k/hardware-configuration.nix
+          ./hosts/nixos-intel-7700k/default.nix
+
+          vscode-server.nixosModules.default
+          home-manager.nixosModules.home-manager
+        ];
+      };
+
       macbook = nixpkgs.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
