@@ -17,6 +17,7 @@
     eza
     fd
     jq
+    kdePackages.kdialog
     ripgrep
     rsync
     tree

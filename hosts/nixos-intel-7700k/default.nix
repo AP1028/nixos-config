@@ -20,6 +20,7 @@
 
     ../../modules/system/i18n.nix
     ../../modules/system/substituters.nix
+    ../../modules/system/sudo-env.nix
 
     ../../modules/hardware/common.nix
 
