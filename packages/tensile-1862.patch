@@ -1,0 +1,24 @@
+--- a/Tensile/TensileCreateLibrary.py
++++ b/Tensile/TensileCreateLibrary.py
+@@ -1075,11 +1075,21 @@
+     # logicData[problemType].append((scheduleName, deviceNames, \
+     #     solutionsForSchedule, indexOrder, exactLogic, rangeLogic ))
+ 
++  (archs, _) = splitArchs()
+   if globalParameters["SeparateArchitectures"] or globalParameters["LazyLibraryLoading"]:
+     if "fallback" in masterLibraries.keys():
+       for key, value in masterLibraries.items():
+         if key != "fallback":
+           value.merge(deepcopy(masterLibraries["fallback"]))
++      for archName in archs:
++        archName = archName.split('-', 1)[0]
++        # gfx803: Tensile 5.7 asm kernels are numerically broken (known since
++        # ROCm 3.7); gfx1010: no asm kernels in 5.7. Use the reference
++        # (fallback) kernels for both so hipBLAS results are correct.
++        if archName not in masterLibraries or archName in ("gfx803", "gfx1010"):
++          print1("Using fallback for arch: " + archName)
++          masterLibraries[archName] = deepcopy(masterLibraries["fallback"])
++          masterLibraries[archName].version = args.version
+ 
+       masterLibraries.pop("fallback")
+ 

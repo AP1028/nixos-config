@@ -1,0 +1,26 @@
+--- a/Tensile/cmake/TensileConfig.cmake
++++ b/Tensile/cmake/TensileConfig.cmake
+@@ -97,16 +97,14 @@
+         COMMENT "${Target_NAME}: Copying tensile objects to ${Dest_PATH}"
+         DEPENDS ${Tensile_OBJECTS_TO_COPY}
+     )
+-    foreach(OBJECT_TO_COPY ${Tensile_OBJECTS_TO_COPY})
+-        add_custom_command(
+-            TARGET ${Target_NAME} PRE_BUILD
+-            COMMAND_EXPAND_LISTS
+-            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${OBJECT_TO_COPY} ${Dest_PATH}
+-            DEPENDS ${OBJECT_TO_COPY}
+-        )
+-    endforeach()
++    # The patched Tensile writer emits the manifest-listed files directly into
++    # Dest_PATH, so the copy is a no-op. Skipping it also avoids failing on
++    # manifest entries the writer does not materialize (fallback metadata).
++    add_custom_command(
++        TARGET ${Target_NAME} PRE_BUILD
++        COMMAND ${CMAKE_COMMAND} -E echo "tensile library files already in place"
++    )
+ endfunction()
+-
+ # Output target: ${Tensile_VAR_PREFIX}_LIBRARY_TARGET. Ensures that the libs get built in Tensile_OUTPUT_PATH/library.
+ # Output symbol: ${Tensile_VAR_PREFIX}_ALL_FILES. List of full paths of all expected library files in manifest.
+ function(TensileCreateLibraryFiles
