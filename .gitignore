@@ -1,6 +1,6 @@
 firmware/
 result
-# local.nix is tracked as a template but auto-commit excludes it;
-# do NOT commit your personal values here.
+# local.nix holds personal values (username, config dir); it lives only on
+# this machine and must never be committed. rebuild.sh creates it on first run.
 local.nix
 git-excluded/
