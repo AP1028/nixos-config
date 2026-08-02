@@ -123,10 +123,17 @@
     distrobox
     nvitop
 
-    (llama-cpp.override {
+    # nixpkgs postInstall copies bin/rpc-server, but llama.cpp b10000+ installs
+    # it as ggml-rpc-server; point the rename at the installed path instead.
+    ((llama-cpp.override {
       cudaSupport = true;
       rpcSupport = true;
-    })
+    }).overrideAttrs (old: {
+      postInstall = builtins.replaceStrings
+        ["cp bin/rpc-server $out/bin/llama-rpc-server"]
+        ["cp $out/bin/ggml-rpc-server $out/bin/llama-rpc-server"]
+        old.postInstall;
+    }))
 
     texliveFull
     dotnet-sdk_9
