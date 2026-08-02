@@ -20,12 +20,14 @@
     ../../../modules/packages/electron-hide-nvidia.nix
     ../../../modules/packages/davinci.nix
     ../../../modules/packages/opencode.nix
+    ../../../modules/packages/codex.nix
     ../../../modules/packages/wpsoffice.nix
     ../../../modules/packages/controller-rebind.nix
   ];
 
   environment.systemPackages = with pkgs; [
     (pkgs.callPackage ../../../packages/ysm-java { })
+    (pkgs.callPackage ../../../packages/claw-code { })
     (pkgs.callPackage ../../../packages/amulet-map-editor { })
     brightnessctl
     dialog
@@ -43,6 +45,7 @@
     qalculate-qt
     pinta
     audacity
+    poppler-utils
 
     discord
     feishu
@@ -119,6 +122,11 @@
 
     distrobox
     nvitop
+
+    (llama-cpp.override {
+      cudaSupport = true;
+      rpcSupport = true;
+    })
 
     texliveFull
     dotnet-sdk_9
