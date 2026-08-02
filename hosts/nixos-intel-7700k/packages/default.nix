@@ -28,6 +28,8 @@
       fd
       jq
       kdePackages.kdialog
+      amdgpu_top
+      nvtopPackages.amd
       ripgrep
       rsync
       tree
