@@ -27,5 +27,7 @@
     ../../modules/services/audio.nix
     ../../modules/services/openssh.nix
     ../../modules/services/vscode-server.nix
+    # RPC server services for the AMD GPUs; opt-in via services.llamaRpc.enable
+    ../../modules/services/llama-rpc.nix
   ];
 }
