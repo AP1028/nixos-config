@@ -23,11 +23,12 @@ declare -A HOSTNAME_MAP=(
   ["asusg16"]="asusg16"
   ["nixos-service-vm"]="nixos-service-vm"
   ["nixos-git-vm"]="nixos-git-vm"
+  ["nixos-gpu-vm"]="nixos-gpu-vm"
   ["nixos-intel-7700k"]="nixos-intel-7700k"
   ["macbook"]="macbook"
 )
 
-AVAILABLE_HOSTS=(asusg16 nixos-service-vm nixos-git-vm nixos-intel-7700k macbook)
+AVAILABLE_HOSTS=(asusg16 nixos-service-vm nixos-git-vm nixos-gpu-vm nixos-intel-7700k macbook)
 
 if [ -z "$HOST" ]; then
   CURRENT_HOSTNAME="$(hostname)"

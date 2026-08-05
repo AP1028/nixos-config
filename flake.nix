@@ -116,6 +116,17 @@
         ];
       };
 
+      nixos-gpu-vm = nixpkgs.lib.nixosSystem {
+        specialArgs = {inherit inputs;};
+        modules = [
+          { nixpkgs.hostPlatform = "x86_64-linux"; }
+          ./hosts/nixos-gpu-vm/hardware-configuration.nix
+          ./hosts/nixos-gpu-vm/default.nix
+
+          vscode-server.nixosModules.default
+        ];
+      };
+
       nixos-intel-7700k = nixpkgs.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
