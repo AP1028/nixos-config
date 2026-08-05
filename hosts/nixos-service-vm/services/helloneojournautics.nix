@@ -5,7 +5,6 @@ in {
   systemd.services.hello-neo-journautics = {
     description = "NeoForge Minecraft Server (ysm-java) in Screen";
     after = ["network.target"];
-    wantedBy = ["multi-user.target"];
     path = [
       pkgs.screen
       ysmJava
