@@ -48,8 +48,12 @@ llama-cli --model /home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gg
   --device RPC3,RPC0,RPC1,RPC2,RPC4,RPC7 \
   --tensor-split 4,6,1,15,12,6 \
   --n-gpu-layers 99 -t 8 --no-kv-offload --fit off \
-  -i -cnv
+  -cnv
 ```
+
+(`-cnv` is the interactive conversation REPL for llama-cli; `-i` is
+completion-only in b10133 and will be rejected. Add `-mli` for multiline
+paste. Each client process re-streams its own copy of the model (~20 min).)
 
 ## Workers
 
