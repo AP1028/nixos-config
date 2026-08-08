@@ -52,30 +52,28 @@ if [ -z "$HOST" ]; then
   fi
 fi
 
-# First run: create local.nix with the main username
+# First run: create local.nix from the tracked template
 if [ ! -f "$CONFIG_DIR/local.nix" ]; then
   DEFAULT_USER="$(whoami)"
   echo ""
   echo "First time setup: configure the main user for this machine."
   read -rp "Username [${DEFAULT_USER}]: " MAIN_USER
   MAIN_USER="${MAIN_USER:-$DEFAULT_USER}"
-  cat > "$CONFIG_DIR/local.nix" <<EOF
-{ username = "$MAIN_USER"; configDir = "$CONFIG_DIR"; }
-EOF
+  sed -e "s|main-user|$MAIN_USER|g" \
+      -e "s|Main User|$MAIN_USER|g" \
+      -e "s|/home/main-user/nixos-config|$CONFIG_DIR|" \
+      "$CONFIG_DIR/local.nix.template" > "$CONFIG_DIR/local.nix"
   echo "Created local.nix with username: $MAIN_USER, configDir: $CONFIG_DIR"
 fi
 
 cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
 
-# Tell git to ignore local changes to local.nix (keeps template tracked but personal values local)
-git update-index --skip-worktree local.nix 2>/dev/null || true
-
 echo "Pulling latest changes..."
 git pull --ff-only || echo "Warning: git pull failed, continuing with local changes..."
 
 echo "Staging files..."
+# local.nix is untracked + gitignored, so it is never staged, committed or pushed.
 git add --all
-
 if git diff --cached --quiet; then
   echo "No changes to commit."
 else

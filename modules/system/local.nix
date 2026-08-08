@@ -1,6 +1,10 @@
 { config, lib, ... }:
 let
-  localFile = ../../local.nix;
+  # local.nix is untracked and gitignored, so it is not part of the flake
+  # source. Read it from disk via the /etc/nixos symlink (requires --impure
+  # evaluation, which rebuild.sh always uses); pure evaluation falls back to
+  # the tracked local.nix.template values.
+  localFile = if builtins.pathExists ../../local.nix then ../../local.nix else /etc/nixos/local.nix;
   localConfig = import localFile;
 in {
   options.local.username = lib.mkOption {
