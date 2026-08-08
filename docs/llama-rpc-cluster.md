@@ -93,16 +93,25 @@ paste. Each client process re-streams its own copy of the model (~20 min).)
 ## Measured latency (2026-08-09, ctx 8192, batch 1)
 
 - Generation: **~940-980 ms/token** (~1.05 tok/s); prompt processing: ~320-380 ms/token.
-- Per token the 43 layers run strictly sequentially through the device groups:
-  GPU layers (5080 4 + P40 6 + 1060 1) finish in **~10-20 ms** (GPUs show 0%
-  util during generation - they idle waiting for the CPU layers).
-- The **32 CPU layers are the bottleneck**: gpu-vm CPU (15 layers) ~40-50% of
-  token time, asusg16 CPU (12) ~35%, 7700k CPU (6 incl. output) ~15%. The
-  mxfp4 CPU decode is memory-bandwidth-bound and uses few cores (loadavg
-  during generation: gpu-vm ~5/40, asusg16 ~1/16, 7700k ~0.6/8).
-- Network: 5 device hops per token x ~2.5 ms LAN RTT ~= 12 ms (~1%).
-- To make it faster: reduce CPU-resident layers (more VRAM), or accept lower
-  quality on the AMD GPUs (they currently produce garbage with mxfp4).
+- Per-token budget (measured via socket counters + server CPU traces):
+  - **CPU layer compute ~450-500 ms** (32 layers): mxfp4 MoE GEMV decode at
+    ~6-7 GB/s effective. Bandwidth-bound; the 4-bit dequant + 1-token batch
+    limit efficiency (RAM peaks are 85-112 GB/s but GEMV never gets near that).
+    Servers burn only ~0.5-1.0 core-second/token each (few threads, sequential).
+  - **Network ~250 ms (27%)**: RPC protocol tax - the full compute graph
+    (~256 KB of serialized tensor structs per server-graph) is re-sent every
+    token, AND with `--no-kv-offload` the client ships each layer's KV window
+    (1024-dim MLA x 128-token SWA window ~= 262 KB) to its server every token.
+  - **Client ~150-200 ms**: graph build + serialization (1.4 cores busy),
+    token_embd, sampling.
+- GPU layers (5080 4 + P40 6 + 1060 1) finish in ~10-20 ms/token; GPUs idle
+  the rest (0% util during generation is normal - they wait for CPU layers).
+- **KV-offload is BROKEN over RPC in b10133**: enabling it (default!) crashes
+  ANY rpc-server with `[create_node] invalid data ptr` on the first decode
+  (tested on asusg16 and gpu-vm; not Blackwell-specific). `--no-kv-offload`
+  is mandatory, which forces the per-token KV shipping above.
+- To make it faster: fewer RAM-resident layers (more VRAM), or faster CPU
+  mxfp4 kernels (llama.cpp's are new; 2-4x headroom vs theoretical).
 
 ## Config changes in this repo- `packages/llama-cpp-rpc.nix` — llama.cpp b10133 built with Vulkan + RPC
   (was ROCm 5.7.1/b4140). ROCm 5.7 packages stay in the 23-11 input.
