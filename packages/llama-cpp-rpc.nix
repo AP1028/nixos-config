@@ -52,7 +52,9 @@ stdenv.mkDerivation (finalAttrs: {
     prependToVar cmakeFlags "-DLLAMA_BUILD_COMMIT:STRING=$(cat COMMIT)"
   '';
 
-  cmakeFlags = [
+  cmakeFlags = let
+    inherit (lib) cmakeBool cmakeFeature;
+  in [
     (cmakeBool "GGML_NATIVE" false) # -march=native would make builds non-deterministic
     (cmakeBool "LLAMA_BUILD_EXAMPLES" false)
     (cmakeBool "LLAMA_BUILD_SERVER" true)
