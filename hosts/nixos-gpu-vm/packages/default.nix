@@ -30,5 +30,8 @@ in {
         ["cp $out/bin/ggml-rpc-server $out/bin/llama-rpc-server"]
         old.postInstall;
     }))
+
+    # gguf model tooling (metadata scans, split computation, ...)
+    (python3.withPackages (ps: [ps.numpy]))
   ];
 }

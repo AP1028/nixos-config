@@ -1,59 +1,48 @@
-# llama.cpp RPC setup for the two AMD GPUs using ROCm 5.7.1 (from the pinned
-# nixos-23-11 input, since ROCm >= 6 dropped gfx803 / the RX 560).
+# llama.cpp RPC setup for the two AMD GPUs using the Vulkan (RADV) backend.
 #
-# This machine acts as a GPU worker: each GPU gets its own rpc-server (a
-# "cluster") that remote llama-server clients connect to via --rpc. The
-# local llama-server option is only for testing the combined setup.
-# Everything is opt-in via services.llamaRpc.enable.
+# This machine acts as a GPU worker: a single rpc-server exposes both GPUs
+# (plus the host CPU as a last-resort memory device) that remote llama-server
+# clients connect to via --rpc. The local llama-server option is only for
+# testing the combined setup. Everything is opt-in via services.llamaRpc.enable.
 {
   config,
   lib,
   pkgs,
-  inputs,
   ...
 }:
 
 let
   cfg = config.services.llamaRpc;
 
-  oldPkgs = import inputs.nixos-23-11 {
-    localSystem = pkgs.stdenv.hostPlatform.system;
-    config.allowUnfree = true;
-  };
-
-  rocm = import ../../packages/rocm-570.nix { inherit oldPkgs; };
-
-  llama = oldPkgs.callPackage ../../packages/llama-cpp-rpc.nix {
-    rocmPackages = rocm;
-  };
+  llama = pkgs.callPackage ../../packages/llama-cpp-rpc.nix { };
 in
 {
   options.services.llamaRpc = {
-    enable = lib.mkEnableOption "llama.cpp RPC servers (ROCm 5.7) for the AMD GPUs";
+    enable = lib.mkEnableOption "llama.cpp RPC server (Vulkan) for the AMD GPUs";
 
-    rx560Device = lib.mkOption {
-      type = lib.types.int;
-      default = 0;
-      description = "HIP device index of the Radeon RX 560 (Baffin, gfx803).";
+    host = lib.mkOption {
+      type = lib.types.str;
+      default = "0.0.0.0";
+      description = "Address to bind the RPC server to.";
     };
-    rx5700Device = lib.mkOption {
-      type = lib.types.int;
-      default = 1;
-      description = "HIP device index of the Radeon RX 5700 (Navi 10, gfx1010).";
-    };
-    rx560Port = lib.mkOption {
+    port = lib.mkOption {
       type = lib.types.port;
       default = 50052;
-      description = "Port of the RX 560 RPC server.";
+      description = "Port of the RPC server.";
     };
-    rx5700Port = lib.mkOption {
-      type = lib.types.port;
-      default = 50053;
-      description = "Port of the RX 5700 RPC server.";
+    devices = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Devices to expose, in order (e.g. Vulkan1,Vulkan0,CPU). Empty = all non-CPU devices.";
+    };
+    threads = lib.mkOption {
+      type = lib.types.int;
+      default = 8;
+      description = "Number of threads for the CPU device.";
     };
 
     llamaServer = {
-      enable = lib.mkEnableOption "llama-server (loads the model, talks to both RPC servers)";
+      enable = lib.mkEnableOption "llama-server (loads the model, talks to the RPC server)";
 
       host = lib.mkOption {
         type = lib.types.str;
@@ -82,30 +71,21 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    systemd.services.llama-rpc-rx560 = {
-      description = "llama.cpp RPC server - AMD RX 560 (gfx803, ROCm 5.7)";
-      wantedBy = [ "multi-user.target" ];
-      serviceConfig = {
-        Type = "simple";
-        ExecStart = "${llama}/bin/rpc-server --host 127.0.0.1 --port ${toString cfg.rx560Port}";
-        Environment = [
-          "HIP_VISIBLE_DEVICES=${toString cfg.rx560Device}"
-          "ROCR_VISIBLE_DEVICES=${toString cfg.rx560Device}"
-        ];
-        Restart = "on-failure";
-        RestartSec = 5;
-      };
-    };
+    hardware.graphics.enable = true; # RADV ICDs for the Vulkan backend
 
-    systemd.services.llama-rpc-rx5700 = {
-      description = "llama.cpp RPC server - AMD RX 5700 (gfx1010, ROCm 5.7)";
+    systemd.services.llama-rpc = {
+      description = "llama.cpp RPC server - AMD RX 560 / RX 5600XT (Vulkan)";
       wantedBy = [ "multi-user.target" ];
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${llama}/bin/rpc-server --host 127.0.0.1 --port ${toString cfg.rx5700Port}";
+        ExecStart = ''
+          ${llama}/bin/llama-rpc-server \
+            -H ${cfg.host} -p ${toString cfg.port} \
+            -t ${toString cfg.threads} \
+            ${lib.optionalString (cfg.devices != [ ]) "-d ${lib.concatStringsSep "," cfg.devices}"}
+        '';
         Environment = [
-          "HIP_VISIBLE_DEVICES=${toString cfg.rx5700Device}"
-          "ROCR_VISIBLE_DEVICES=${toString cfg.rx5700Device}"
+          "VK_ICD_DIRS=/run/opengl-driver/share/vulkan/icd.d"
         ];
         Restart = "on-failure";
         RestartSec = 5;
@@ -113,16 +93,16 @@ in
     };
 
     systemd.services.llama-server = lib.mkIf cfg.llamaServer.enable {
-      description = "llama.cpp server (RPC to both AMD GPUs)";
+      description = "llama.cpp server (RPC to the AMD GPUs)";
       wantedBy = [ "multi-user.target" ];
-      after = [ "llama-rpc-rx560.service" "llama-rpc-rx5700.service" ];
-      requires = [ "llama-rpc-rx560.service" "llama-rpc-rx5700.service" ];
+      after = [ "llama-rpc.service" ];
+      requires = [ "llama-rpc.service" ];
       serviceConfig = {
         Type = "simple";
         ExecStart = ''
           ${llama}/bin/llama-server \
             --host ${cfg.llamaServer.host} --port ${toString cfg.llamaServer.port} \
-            --rpc 127.0.0.1:${toString cfg.rx560Port},127.0.0.1:${toString cfg.rx5700Port} \
+            --rpc 127.0.0.1:${toString cfg.port} \
             --model ${cfg.llamaServer.modelPath} \
             --n-gpu-layers ${toString cfg.llamaServer.gpuLayers} \
             ${lib.escapeShellArgs cfg.llamaServer.extraArgs}

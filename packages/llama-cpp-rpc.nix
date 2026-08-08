@@ -1,106 +1,81 @@
-# llama.cpp built with HIP (ROCm 5.7.1) and RPC support.
+# llama.cpp with Vulkan (RADV) and RPC support.
 #
-# ROCm >= 6 dropped gfx803 (Polaris / RX 560), so this uses the ROCm 5.7.1
-# packages from the pinned nixos-23-11 input. The llama.cpp revision is
-# pinned to 2024-10-09 (b4140-era): it supports both the RPC backend
-# (merged May 2024) and ROCm 5.7. Both GPUs are compiled for natively:
-#   - AMD RX 560 (Baffin, gfx803)
-#   - AMD RX 5700 (Navi 10, gfx1010)
+# Both AMD GPUs (RX 560 / gfx803, RX 5600XT / gfx1010) are driven through the
+# Vulkan backend provided by mesa RADV. Modern llama.cpp requires ROCm >= 6.1,
+# which dropped gfx803, so the pinned ROCm 5.7.1 toolchain can no longer build
+# a current llama.cpp (b4140 predates MXFP4); Vulkan covers both cards using
+# the plain amdgpu kernel driver.
 {
   lib,
   stdenv,
   cmake,
   fetchFromGitHub,
-  makeWrapper,
-  patchelf,
-  rocmPackages,
-  gpuTargets ? [
-    "gfx803"
-    "gfx1010"
-  ],
+  shaderc,
+  vulkan-headers,
+  vulkan-loader,
+  ninja,
+  pkg-config,
+  git,
+  ...
 }:
 
-let
-  rocmLibPath = lib.makeLibraryPath (with rocmPackages; [
-    clr
-    hipblas
-    rocblas
-    rocm-runtime
-  ]);
-in
 stdenv.mkDerivation (finalAttrs: {
   pname = "llama-cpp-rpc";
-  version = "b4140";
+  version = "10133";
 
   src = fetchFromGitHub {
-    owner = "ggml-org";
+    owner = "ggerganov";
     repo = "llama.cpp";
-    rev = "c81f3bbb051f8b736e117dfc78c99d7c4e0450f6";
-    hash = "sha256-26WgGpdGelzMIAULi/1S0ugNCSSB+HcyVW13dc1ZrJI=";
+    rev = "refs/tags/b${finalAttrs.version}";
+    hash = "sha256-gA48mGXrjZUfxesTivDPU7enQFKHzpRC/bmodtWHI0s=";
+    leaveDotGit = true;
+    postFetch = ''
+      git -C "$out" rev-parse --short HEAD > $out/COMMIT
+      find "$out" -name .git -print0 | xargs -0 rm -rf
+    '';
   };
 
   nativeBuildInputs = [
     cmake
-    makeWrapper
-    patchelf
+    ninja
+    pkg-config
+    git
   ];
 
-  buildInputs = with rocmPackages; [
-    clr
-    hipblas
-    rocblas
+  buildInputs = [
+    shaderc
+    vulkan-headers
+    vulkan-loader
   ];
 
-  patches = [
-    # hipBLAS 5.7 (Tensile) can't run strided-batched GEMMs with batch > 16;
-    # chunk them so prompt processing works on ROCm 5.7.
-    ./llama-cpp-rpc-chunk-batched-gemm.patch
-  ];
+  preConfigure = ''
+    prependToVar cmakeFlags "-DLLAMA_BUILD_COMMIT:STRING=$(cat COMMIT)"
+  '';
 
   cmakeFlags = [
-    "-DGGML_HIPBLAS=ON"
-    "-DGGML_RPC=ON"
-    "-DLLAMA_RPC=ON"
-    "-DLLAMA_BUILD_SERVER=ON"
-    "-DLLAMA_BUILD_TESTS=OFF"
-    "-DAMDGPU_TARGETS=${lib.concatStringsSep ";" gpuTargets}"
-    "-DCMAKE_C_COMPILER=hipcc"
-    "-DCMAKE_CXX_COMPILER=hipcc"
-    "-DCMAKE_POSITION_INDEPENDENT_CODE=ON"
+    (cmakeBool "GGML_NATIVE" false) # -march=native would make builds non-deterministic
+    (cmakeBool "LLAMA_BUILD_EXAMPLES" false)
+    (cmakeBool "LLAMA_BUILD_SERVER" true)
+    (cmakeBool "LLAMA_BUILD_TESTS" false)
+    (cmakeBool "BUILD_SHARED_LIBS" true)
+    (cmakeBool "GGML_CPU_ALL_VARIANTS" true) # AVX2 etc. for the Kaby Lake CPU backend
+    (cmakeBool "GGML_BACKEND_DL" true)
+    (cmakeBool "GGML_VULKAN" true)
+    (cmakeBool "GGML_RPC" true)
+    (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
+    (cmakeFeature "LLAMA_BUILD_NUMBER" finalAttrs.version)
   ];
 
-  # With hipcc as the compiler (legacy path) the arch list is read from the
-  # environment, not from the cmake cache.
-  env.AMDGPU_TARGETS = lib.concatStringsSep ";" gpuTargets;
-
-  installPhase = ''
-    runHook preInstall
-
-    mkdir -p $out/bin $out/lib
-    for f in bin/*; do
-      test -x "$f" || continue
-      cp "$f" $out/bin/
-    done
-    for f in $(find . -name 'lib*.so' -type f); do
-      cp "$f" $out/lib/
-    done
-
-    # hipcc adds its own RUNPATH (clr/glibc/clang) but cmake also appends the
-    # build-tree dirs for the shared libs. Drop those and point at $out/lib.
-    for f in $out/bin/* $out/lib/*.so; do
-      rpath=$(patchelf --print-rpath "$f" || true)
-      filtered=$(echo "$rpath" | tr ':' '\n' | grep -v '^/build' | paste -sd: -)
-      patchelf --set-rpath "$filtered:$out/lib" "$f"
-      case "$f" in
-        $out/bin/*) wrapProgram "$f" --prefix LD_LIBRARY_PATH : "${rocmLibPath}" ;;
-      esac
-    done
-
-    runHook postInstall
+  # nixpkgs postInstall copies bin/rpc-server, but llama.cpp b10000+ installs
+  # it as ggml-rpc-server; point the rename at the installed path instead.
+  postInstall = ''
+    mkdir -p $out/include
+    cp $src/include/llama.h $out/include/
+    cp $out/bin/ggml-rpc-server $out/bin/llama-rpc-server
   '';
 
   meta = with lib; {
-    description = "llama.cpp with HIP (ROCm 5.7) and RPC support (gfx803/gfx1010)";
+    description = "llama.cpp with Vulkan (RADV) and RPC support (RX 560 / RX 5600XT)";
     homepage = "https://github.com/ggml-org/llama.cpp";
     license = licenses.mit;
     mainProgram = "llama-cli";

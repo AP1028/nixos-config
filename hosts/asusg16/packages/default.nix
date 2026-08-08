@@ -40,6 +40,7 @@
     mpv
     kdePackages.okular
     marktext
+    motrix-next
     qbittorrent
     zotero
     qalculate-qt
