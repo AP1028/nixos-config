@@ -73,6 +73,8 @@ in
   config = lib.mkIf cfg.enable {
     hardware.graphics.enable = true; # RADV ICDs for the Vulkan backend
 
+    networking.firewall.allowedTCPPorts = [ cfg.port ];
+
     systemd.services.llama-rpc = {
       description = "llama.cpp RPC server - AMD RX 560 / RX 5600XT (Vulkan)";
       wantedBy = [ "multi-user.target" ];
