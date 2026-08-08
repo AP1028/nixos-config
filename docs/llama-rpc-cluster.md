@@ -86,9 +86,21 @@ llama-cli --model /home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gg
    layer index (tensors are grouped by type across layer ranges), so "RAM
    stress" appears in a scrambled order during load — normal.
 
-## Config changes in this repo
+## Measured latency (2026-08-09, ctx 8192, batch 1)
 
-- `packages/llama-cpp-rpc.nix` — llama.cpp b10133 built with Vulkan + RPC
+- Generation: **~940-980 ms/token** (~1.05 tok/s); prompt processing: ~320-380 ms/token.
+- Per token the 43 layers run strictly sequentially through the device groups:
+  GPU layers (5080 4 + P40 6 + 1060 1) finish in **~10-20 ms** (GPUs show 0%
+  util during generation - they idle waiting for the CPU layers).
+- The **32 CPU layers are the bottleneck**: gpu-vm CPU (15 layers) ~40-50% of
+  token time, asusg16 CPU (12) ~35%, 7700k CPU (6 incl. output) ~15%. The
+  mxfp4 CPU decode is memory-bandwidth-bound and uses few cores (loadavg
+  during generation: gpu-vm ~5/40, asusg16 ~1/16, 7700k ~0.6/8).
+- Network: 5 device hops per token x ~2.5 ms LAN RTT ~= 12 ms (~1%).
+- To make it faster: reduce CPU-resident layers (more VRAM), or accept lower
+  quality on the AMD GPUs (they currently produce garbage with mxfp4).
+
+## Config changes in this repo- `packages/llama-cpp-rpc.nix` — llama.cpp b10133 built with Vulkan + RPC
   (was ROCm 5.7.1/b4140). ROCm 5.7 packages stay in the 23-11 input.
 - `modules/services/llama-rpc.nix` — systemd service for the 7700k RPC server
   (Vulkan device list, CPU threads, opens firewall port).
