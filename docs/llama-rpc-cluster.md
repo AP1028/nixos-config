@@ -21,7 +21,8 @@ gpu-vm -> asusg16 -> 7700k order). RPC indices with
 
 - RPC0 = P40 (22.9 GB), RPC1 = GTX 1060 (6 GB), RPC2 = gpu-vm RAM (62 GB)
 - RPC3 = RTX 5080 (15.8 GB), RPC4 = asusg16 RAM (62 GB)
-- RPC5 = RX 5600XT, RPC6 = RX 560, RPC7 = 7700k RAM (62 GB) (RPC5/6 unused, see below)
+- RPC5 = 7700k RAM (62 GB) (the AMD GPUs were removed; the 7700k server
+  exposes only its CPU device via `-d CPU`)
 
 **The tensor-split values must sum to n_layers + 1** (44 here, the extra slot is
 the output layer). Summing to 43 shifts every device boundary by one layer and
@@ -34,7 +35,7 @@ llama-server --host 0.0.0.0 --port 8080 \
   --model /home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf \
   --ctx-size 8192 \
   --rpc 192.168.3.103:50052,192.168.3.250:50052,192.168.3.200:50052 \
-  --device RPC3,RPC0,RPC1,RPC2,RPC4,RPC7 \
+  --device RPC3,RPC0,RPC1,RPC2,RPC4,RPC5 \
   --tensor-split 4,6,1,15,12,6 \
   --n-gpu-layers 99 -t 8 \
   --no-kv-offload --fit off --no-ui
@@ -45,7 +46,7 @@ Interactive shell:
 ```bash
 llama-cli --model /home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf \
   --rpc 192.168.3.103:50052,192.168.3.250:50052,192.168.3.200:50052 \
-  --device RPC3,RPC0,RPC1,RPC2,RPC4,RPC7 \
+  --device RPC3,RPC0,RPC1,RPC2,RPC4,RPC5 \
   --tensor-split 4,6,1,15,12,6 \
   --n-gpu-layers 99 -t 8 --no-kv-offload --fit off \
   -cnv
@@ -61,8 +62,8 @@ paste. Each client process re-streams its own copy of the model (~20 min).)
   (CUDA0 = P40, CUDA1 = 1060 — checked via `--list-devices`)
 - asusg16: `llama-rpc-server -H 0.0.0.0 -p 50052 -d CUDA0,CPU -t 12`
 - 7700k: systemd service `llama-rpc` (`services.llamaRpc.enable`, see
-  `modules/services/llama-rpc.nix`): `llama-rpc-server -H 0.0.0.0 -p 50052 -d Vulkan2,Vulkan1,CPU -t 8`
-  (Vulkan0 = Intel iGPU, Vulkan1 = RX 560, Vulkan2 = RX 5600XT)
+  `modules/services/llama-rpc.nix`): `llama-rpc-server -H 0.0.0.0 -p 50052 -d CPU -t 8`
+  (CPU only; the AMD GPUs were physically removed)
 
 ## Critical gotchas (2026-08-09)
 
@@ -75,10 +76,10 @@ paste. Each client process re-streams its own copy of the model (~20 min).)
    ggml-org/llama.cpp#21006 / #21030). With default KV offload the asusg16
    server dies with `[create_node] invalid data ptr` -> client aborts.
 3. **AMD GPUs (RX 5600XT / RX 560) via Vulkan produce garbage tokens** with
-   MXFP4 in b10133 (repeated "<" / word salad). They are excluded from the
-   device list; the 7700k still contributes its CPU/RAM. This is why the
-   package was switched from ROCm 5.7 (b4140) to Vulkan: modern llama.cpp
-   requires ROCm >= 6.1 which dropped gfx803, and b4140 predates MXFP4.
+   MXFP4 in b10133 (repeated "<" / word salad) and were physically removed.
+   The 7700k contributes only its CPU/RAM. This is why the package was
+   switched from ROCm 5.7 (b4140) to Vulkan: modern llama.cpp requires
+   ROCm >= 6.1 which dropped gfx803, and b4140 predates MXFP4.
 4. **Tesla P40 needs active cooling.** Passive 250 W card; without airflow it
    thermal-drops off the PCIe bus (Xid 79, config space 0xFFFF) under load.
    Fixed by power cycling the host and adding airflow.
