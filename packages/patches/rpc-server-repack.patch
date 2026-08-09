@@ -14,7 +14,8 @@
 +    if (traits == nullptr) {
 +        return -1;
 +    }
-+    if (traits->repack(t, data, data_size) != 0) {
++    auto * traits_base = static_cast<const ggml::cpu::repack::tensor_traits_base *>(traits);
++    if (traits_base->repack(t, data, data_size) != 0) {
 +        return -1;
 +    }
 +    t->extra = (void *) traits;
