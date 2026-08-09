@@ -21,13 +21,13 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "llama-cpp-rpc";
-  version = "10133";
+  version = "10331";
 
   src = fetchFromGitHub {
-    owner = "ggerganov";
+    owner = "ggml-org";
     repo = "llama.cpp";
     rev = "refs/tags/b${finalAttrs.version}";
-    hash = "sha256-gA48mGXrjZUfxesTivDPU7enQFKHzpRC/bmodtWHI0s=";
+    hash = "sha256-0uquzGXrLbuFFUauNl0R9tjfxLt5UBEC4cqNHnmdux4=";
     leaveDotGit = true;
     postFetch = ''
       git -C "$out" rev-parse --short HEAD > $out/COMMIT
@@ -74,6 +74,7 @@ stdenv.mkDerivation (finalAttrs: {
     (cmakeBool "GGML_VULKAN" true)
     (cmakeBool "GGML_RPC" true)
     (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
+    (cmakeBool "LLAMA_TOOLS_INSTALL" true) # b10331 installs ggml-rpc-server only with this
     (cmakeFeature "LLAMA_BUILD_NUMBER" finalAttrs.version)
   ];
 

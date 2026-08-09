@@ -130,8 +130,38 @@
       cudaSupport = true;
       rpcSupport = true;
     }).overrideAttrs (old: {
+      # b10331: adds DeepSeek V4 DSpark speculative decoding (PR #25784),
+      # which the MXFP4 cluster uses to batch-verify 5 tokens per pass.
+      version = "10331";
+      src = fetchFromGitHub {
+        owner = "ggml-org";
+        repo = "llama.cpp";
+        tag = "b10331";
+        hash = "sha256-0uquzGXrLbuFFUauNl0R9tjfxLt5UBEC4cqNHnmdux4=";
+        leaveDotGit = true;
+        postFetch = old.src.postFetch;
+      };
       # stable split-graph uids so the RPC graph cache (GRAPH_RECOMPUTE) engages
       patches = (old.patches or [ ]) ++ [ ../../../packages/patches/rpc-graph-cache.patch ];
+      # b10331 moved the rpc-server to tools/rpc (target ggml-rpc-server) and
+      # only installs it with LLAMA_TOOLS_INSTALL=ON
+      cmakeFlags = old.cmakeFlags ++ [ "-DLLAMA_TOOLS_INSTALL=ON" ];
+      npmDeps = fetchNpmDeps {
+        name = "llama-cpp-10331-npm-deps";
+        src = fetchFromGitHub {
+          owner = "ggml-org";
+          repo = "llama.cpp";
+          tag = "b10331";
+          hash = "sha256-0uquzGXrLbuFFUauNl0R9tjfxLt5UBEC4cqNHnmdux4=";
+          leaveDotGit = true;
+          postFetch = old.src.postFetch;
+        };
+        patches = [ ../../../packages/patches/rpc-graph-cache.patch ];
+        preBuild = ''
+          pushd tools/ui
+        '';
+        hash = "sha256-FHvd2bMvBc9EXrJEzu8EN78oUVSLcOKYCc0232V+L4A=";
+      };
       postInstall = builtins.replaceStrings
         ["cp bin/rpc-server $out/bin/llama-rpc-server"]
         ["cp $out/bin/ggml-rpc-server $out/bin/llama-rpc-server"]
