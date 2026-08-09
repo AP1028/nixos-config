@@ -35,11 +35,13 @@ stdenv.mkDerivation (finalAttrs: {
     '';
   };
 
-  # RPC servers must repack quantized weights (mxfp4, ...) into the
-  # interleaved layouts used by the fast CPU GEMV kernels, otherwise
-  # RPC-served layers run the slow plain vec_dot path (~2-4x slower).
+  # The RPC backend's graph caching (GRAPH_RECOMPUTE) never engages because the
+  # scheduler assigns a fresh uid to every split graph on every compute, forcing
+  # the client to re-serialize and re-send the full graph topology per token
+  # (the "metadata explosion"). Derive the split uid from the graph structure
+  # instead, so identical per-token graphs hit the cache.
   patches = [
-    ./patches/rpc-repack.patch
+    ./patches/rpc-graph-cache.patch
   ];
 
   nativeBuildInputs = [

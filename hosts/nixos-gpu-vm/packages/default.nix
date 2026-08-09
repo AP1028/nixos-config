@@ -25,8 +25,8 @@ in {
       rpcSupport = true;
       inherit cudaPackages;
     }).overrideAttrs (old: {
-      # RPC servers must repack quantized weights for the fast CPU GEMV kernels
-      patches = (old.patches or [ ]) ++ [ ../../../packages/patches/rpc-repack.patch ];
+      # stable split-graph uids so the RPC graph cache (GRAPH_RECOMPUTE) engages
+      patches = (old.patches or [ ]) ++ [ ../../../packages/patches/rpc-graph-cache.patch ];
       postInstall = builtins.replaceStrings
         ["cp bin/rpc-server $out/bin/llama-rpc-server"]
         ["cp $out/bin/ggml-rpc-server $out/bin/llama-rpc-server"]

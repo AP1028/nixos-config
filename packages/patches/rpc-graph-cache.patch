@@ -1,0 +1,46 @@
+--- a/ggml/src/ggml-backend.cpp
++++ b/ggml/src/ggml-backend.cpp
+@@ -1011,6 +1011,27 @@
+ }
+ 
+ // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
++// FNV-1a hash of the graph structure (node/leaf pointers + counts). Stable
++// across computes when the same tensor objects form the same topology, so
++// backends that cache graphs by uid (CUDA, RPC) can reuse them instead of
++// re-validating or re-serializing the full graph on every token.
++static uint64_t ggml_graph_structure_hash(const struct ggml_cgraph * graph) {
++    uint64_t h = 14695981039346656037ULL;
++    auto mix = [&h](uint64_t v) {
++        h ^= v;
++        h *= 1099511628211ULL;
++    };
++    mix((uint64_t) graph->n_nodes);
++    mix((uint64_t) graph->n_leafs);
++    for (int i = 0; i < graph->n_nodes; i++) {
++        mix((uint64_t) (uintptr_t) graph->nodes[i]);
++    }
++    for (int i = 0; i < graph->n_leafs; i++) {
++        mix((uint64_t) (uintptr_t) graph->leafs[i]);
++    }
++    return h;
++}
++
+ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
+     // reset splits
+     sched->n_splits = 0;
+@@ -1480,9 +1501,13 @@
+         graph_copy->leafs[graph_copy->n_leafs++] = leaf;
+     }
+ 
+-    // set ids for all splits
++    // set ids for all splits: derive the uid from the graph structure so that
++    // backends (RPC, CUDA) can cache the split graph across identical computes
++    // (e.g. the per-token decode loop) instead of re-serializing or
++    // re-validating the full graph every time. A changed structure yields a
++    // different uid, so stale caches can never be reused.
+     for (int i = 0; i < sched->n_splits; ++i) {
+-        sched->splits[i].graph.uid = ggml_graph_next_uid();
++        sched->splits[i].graph.uid = ggml_graph_structure_hash(&sched->splits[i].graph);
+     }
+ }
+ 
