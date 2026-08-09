@@ -190,3 +190,21 @@ Measured per-token CPU busy phases (10ms /proc sampling):
 - Practical state: ~1 tok/s is the expected result for this topology;
   levers are fewer CPU-resident layers, and the 40GbE upgrade (helps once
   the CPU is no longer the wall).
+
+### FINAL root cause (2026-08-09, direct kernel microbenchmark)
+dlopen'd the real `ggml_vec_dot_mxfp4_q8_0` from each machine's
+libggml-cpu-haswell.so and measured it in isolation (50000 x 4096 rows):
+- asusg16: 7.0 -> 20.3 GB/s (1 -> 16 threads)
+- gpu-vm : 4.7 -> 12.4 GB/s (1 -> 32 threads)
+- 7700k  : 6.3 -> 12.8 GB/s (1 -> 16 threads)
+
+So the mxfp4 GEMV kernel itself saturates at 12-20 GB/s everywhere - that is
+the hard ceiling (dequant instruction mix + memory-latency contention; the
+per-thread rate collapses from ~7 GB/s to ~2 GB/s as threads are added).
+The RAM can stream 71-105 GB/s but the kernel never gets close; the repack
+that would fix it is unsupported on RPC servers upstream.
+The layers run at 4-7 GB/s (2-3x below even the kernel ceiling) due to op
+dispatch/barrier overheads, small attention GEMMs and the sequential DSV4
+compressor. The ~10-20% CPU duty cycle is consistent with this.
+=> ~1 tok/s is the kernel-limited result for this topology; nothing is
+   misbehaving at the CPU/RAM/hypervisor level.
