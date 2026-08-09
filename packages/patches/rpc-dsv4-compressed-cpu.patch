@@ -1,0 +1,38 @@
+--- a/src/llama-kv-cache-dsv4.cpp	2026-08-09 06:42:50.000000000 +0800
++++ b/src/llama-kv-cache-dsv4.cpp	2026-08-10 04:23:39.759149752 +0800
+@@ -1237,9 +1237,16 @@
+     LLAMA_LOG_INFO("%s: creating DSV4 CSA compressed KV cache, size = %u cells\n",
+             __func__, dsv4_comp_size(kv_size, DSV4_CSA_RATIO));
+ 
++    // The CSA/HCA/LID states are sequential across layers (each layer's
++    // compressed state feeds the layers after it), so with KV offload over RPC
++    // their single-device buffers get referenced from other servers' graphs,
++    // crashing rpc-server with "[create_node] invalid data ptr". Keep them in
++    // client RAM: their per-token data is small and ships with the graph.
++    const bool offload_compressed = false;
++
+     kv_csa = std::make_unique<llama_kv_cache>(
+             model, hparams_csa, type_k, type_v,
+-            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_CSA_RATIO), 256u), n_seq_max, n_pad,
++            v_trans, offload_compressed, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_CSA_RATIO), 256u), n_seq_max, n_pad,
+             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr);
+ 
+     LLAMA_LOG_INFO("%s: creating DSV4 HCA compressed KV cache, size = %u cells\n",
+@@ -1247,7 +1254,7 @@
+ 
+     kv_hca = std::make_unique<llama_kv_cache>(
+             model, hparams_hca, type_k, type_v,
+-            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_HCA_RATIO), 256u), n_seq_max, n_pad,
++            v_trans, offload_compressed, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_HCA_RATIO), 256u), n_seq_max, n_pad,
+             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_hca, nullptr, nullptr);
+ 
+     LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer KV cache, size = %u cells\n",
+@@ -1255,7 +1262,7 @@
+ 
+     kv_lid = std::make_unique<llama_kv_cache>(
+             model, hparams_lid, type_k, type_v,
+-            v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_CSA_RATIO), 256u), n_seq_max, n_pad,
++            v_trans, offload_compressed, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_CSA_RATIO), 256u), n_seq_max, n_pad,
+             0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr);
+ 
+     LLAMA_LOG_INFO("%s: creating DSV4 CSA compressor state\n", __func__);
