@@ -1,6 +1,6 @@
 diff -ruN A/ggml/src/ggml-cpu/repack.cpp B/ggml/src/ggml-cpu/repack.cpp
---- A/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:51:47.538180206 +0800
-+++ B/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:51:47.540122691 +0800
+--- A/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:54:41.430070831 +0800
++++ B/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:54:41.431630924 +0800
 @@ -4723,6 +4723,24 @@
      return nullptr;
  }
@@ -15,7 +15,7 @@ diff -ruN A/ggml/src/ggml-cpu/repack.cpp B/ggml/src/ggml-cpu/repack.cpp
 +    if (traits == nullptr) {
 +        return -1;
 +    }
-+    auto * traits_base = static_cast<const ggml::cpu::repack::tensor_traits_base *>(traits);
++    auto * traits_base = (ggml::cpu::repack::tensor_traits_base *) traits;
 +    if (traits_base->repack(t, data, data_size) != 0) {
 +        return -1;
 +    }
@@ -39,8 +39,8 @@ diff -ruN A/ggml/src/ggml-cpu/repack.cpp B/ggml/src/ggml-cpu/repack.cpp
          return nullptr;
      }
 diff -ruN A/ggml/src/ggml-rpc/ggml-rpc.cpp B/ggml/src/ggml-rpc/ggml-rpc.cpp
---- A/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:51:47.538249578 +0800
-+++ B/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:51:47.540174743 +0800
+--- A/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:54:41.430127934 +0800
++++ B/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:54:41.431674834 +0800
 @@ -412,6 +412,8 @@
      return buffer->iface.free_buffer == ggml_backend_rpc_buffer_free_buffer;
  }
