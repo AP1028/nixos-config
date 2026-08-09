@@ -173,3 +173,20 @@ Measured per-token CPU busy phases (10ms /proc sampling):
   writer conventions (dims reversed, byte vs element shapes, tokenizer KV
   drift); not yet completed. Alternative: force CPU variants via a copied
   bin dir (the /tmp/llama-haswell trick) - no rebuild needed.
+
+### CPU investigation conclusion (2026-08-09 late)
+- The token time is the SUM of the CPU-layer compute across the machines
+  (layers are strictly sequential, so the servers do NOT overlap).
+- asusg16's CPU layers run at ~1.5-2.6 cores regardless of the backend
+  variant (alderlake vs forced haswell: identical behavior) - the kernel
+  does not parallelize there. gpu-vm's use ~27 cores but at ~0.27 GB/s/core
+  (mostly threadpool spin). Effective bandwidth everywhere: 4-7 GB/s of the
+  71-105 GB/s available (~5-10%).
+- The per-core mxfp4 vec_dot rate is the fundamental limit (~0.3-2.5 GB/s),
+  and the repack that would raise it is unsupported on RPC servers upstream.
+- Remaining suspects for the asusg16 single-thread behavior (unresolved):
+  per-op profiling needed (server-side instrumentation) or a 1-layer model
+  for isolated benchmarks (gguf extraction fights the writer conventions).
+- Practical state: ~1 tok/s is the expected result for this topology;
+  levers are fewer CPU-resident layers, and the 40GbE upgrade (helps once
+  the CPU is no longer the wall).
