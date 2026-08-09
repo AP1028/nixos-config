@@ -41,55 +41,20 @@
  
 --- a/ggml/src/ggml-rpc/ggml-rpc.cpp
 +++ b/ggml/src/ggml-rpc/ggml-rpc.cpp
-@@ -899,7 +899,7 @@
-     LOG_DBG("[%s] device: %d, buffer: %p, data: %p\n", __func__, dev_id, (void*)tensor->buffer, tensor->data);
-     if (tensor->buffer == nullptr) {
-         //No buffer allocated.
--        buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
-+        buft = rpc_server_get_buft(backends[dev_id]);
-     } else {
-         buft = tensor->buffer->buft;
-     }
-@@ -914,7 +914,7 @@
-     if (dev_id >= backends.size()) {
-         return false;
-     }
--    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
-+    ggml_backend_buffer_type_t buft = rpc_server_get_buft(backends[dev_id]);
-     ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, request.size);
-     response.remote_ptr = 0;
-     response.remote_size = 0;
-@@ -935,7 +935,7 @@
-     if (dev_id >= backends.size()) {
-         return false;
-     }
--    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
-+    ggml_backend_buffer_type_t buft = rpc_server_get_buft(backends[dev_id]);
-     size_t alignment = ggml_backend_buft_get_alignment(buft);
-     LOG_DBG("[%s] device: %d, alignment: %lu\n", __func__, dev_id, alignment);
-     response.alignment = alignment;
-@@ -947,7 +947,7 @@
-     if (dev_id >= backends.size()) {
-         return false;
-     }
--    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
-+    ggml_backend_buffer_type_t buft = rpc_server_get_buft(backends[dev_id]);
-     size_t max_size = ggml_backend_buft_get_max_size(buft);
-     LOG_DBG("[%s] device: %d, max_size: %lu\n", __func__, dev_id, max_size);
-     response.max_size = max_size;
-@@ -989,6 +989,28 @@
-     return true;
- }
+@@ -862,6 +862,29 @@
+     std::vector<stored_graph> stored_graphs;
+ };
  
 +// Pick the buffer type for a device. For CPU devices prefer the repack
 +// buffer type (when available) so quantized weights (mxfp4, q4_0, ...) get
 +// repacked into the interleaved layouts used by the fast GEMV kernels.
 +// Without this, RPC-served weights always take the slower plain vec_dot path.
-+static ggml_backend_buffer_type_t rpc_server_get_buft(ggml_backend_dev_t dev) {
-+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(dev);
-+    if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
++static ggml_backend_buffer_type_t rpc_server_get_buft(ggml_backend_t backend) {
++    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
++    if (ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
 +        static ggml_backend_buffer_type_t repack_buft = nullptr;
 +        if (repack_buft == nullptr) {
++            auto * dev = ggml_backend_get_device(backend);
 +            auto * reg = ggml_backend_dev_backend_reg(dev);
 +            if (reg != nullptr) {
 +                repack_buft = (ggml_backend_buffer_type_t) ggml_backend_reg_get_proc_address(
@@ -103,10 +68,46 @@
 +    return buft;
 +}
 +
- ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
-     // Validate tensor type before using it
-     if (tensor->type >= GGML_TYPE_COUNT) {
-@@ -1019,6 +1041,27 @@
+ void rpc_server::hello(rpc_msg_hello_rsp & response) {
+     response.major = RPC_PROTO_MAJOR_VERSION;
+     response.minor = RPC_PROTO_MINOR_VERSION;
+@@ -899,7 +922,7 @@
+     LOG_DBG("[%s] device: %d, buffer: %p, data: %p\n", __func__, dev_id, (void*)tensor->buffer, tensor->data);
+     if (tensor->buffer == nullptr) {
+         //No buffer allocated.
+-        buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
++        buft = rpc_server_get_buft(backends[dev_id]);
+     } else {
+         buft = tensor->buffer->buft;
+     }
+@@ -914,7 +937,7 @@
+     if (dev_id >= backends.size()) {
+         return false;
+     }
+-    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
++    ggml_backend_buffer_type_t buft = rpc_server_get_buft(backends[dev_id]);
+     ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, request.size);
+     response.remote_ptr = 0;
+     response.remote_size = 0;
+@@ -935,7 +958,7 @@
+     if (dev_id >= backends.size()) {
+         return false;
+     }
+-    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
++    ggml_backend_buffer_type_t buft = rpc_server_get_buft(backends[dev_id]);
+     size_t alignment = ggml_backend_buft_get_alignment(buft);
+     LOG_DBG("[%s] device: %d, alignment: %lu\n", __func__, dev_id, alignment);
+     response.alignment = alignment;
+@@ -947,7 +970,7 @@
+     if (dev_id >= backends.size()) {
+         return false;
+     }
+-    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
++    ggml_backend_buffer_type_t buft = rpc_server_get_buft(backends[dev_id]);
+     size_t max_size = ggml_backend_buft_get_max_size(buft);
+     LOG_DBG("[%s] device: %d, max_size: %lu\n", __func__, dev_id, max_size);
+     response.max_size = max_size;
+@@ -1019,6 +1042,27 @@
          result->buffer = nullptr;
      }
  
