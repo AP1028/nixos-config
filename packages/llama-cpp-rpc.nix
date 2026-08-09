@@ -42,6 +42,7 @@ stdenv.mkDerivation (finalAttrs: {
   # instead, so identical per-token graphs hit the cache.
   patches = [
     ./patches/rpc-graph-cache.patch
+    ./patches/rpc-dspark-draft-path.patch
   ];
 
   nativeBuildInputs = [
