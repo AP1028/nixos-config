@@ -54,8 +54,10 @@ llama-server --host 0.0.0.0 --port 8080 \
 - `--fit off` — the default fit-params pass sabotages RPC device
   registration (devices silently dropped).
 - `--no-kv-offload` — kv-offload crashes ANY rpc-server with
-  `[create_node] invalid data ptr` (cross-arch RPC bug, unfixed upstream;
-  issue #21006 / PR #21030).
+  `[create_node] invalid data ptr`. NOT Blackwell/Pascal-specific: verified
+  on the Pascal-only gpu-vm server (P40/1060/CPU) after dropping the 5080.
+  b10133 already contains the #21030 fix and still crashes — a residual,
+  unfixed upstream RPC kv-offload bug (issue #21006 / PR #21030).
 - `--tensor-split` values must sum to n_layers+1 (44) or every device
   boundary shifts by one layer (over-allocates buffers, OOM).
 - Client stdout is block-buffered; use `stdbuf -oL -eL`.
