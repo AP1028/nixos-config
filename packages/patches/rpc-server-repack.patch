@@ -1,6 +1,7 @@
---- a//proc/self/fd/11	2026-08-10 07:44:57.585053528 +0800
-+++ b/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:44:57.581403184 +0800
-@@ -4723,6 +4723,23 @@
+diff -ruN pt-pristine/llama.cpp-b10331/ggml/src/ggml-cpu/repack.cpp pt-edit/llama.cpp-b10331/ggml/src/ggml-cpu/repack.cpp
+--- pt-pristine/llama.cpp-b10331/ggml/src/ggml-cpu/repack.cpp	2026-08-09 06:42:50.000000000 +0800
++++ pt-edit/llama.cpp-b10331/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:50:19.925370484 +0800
+@@ -4723,6 +4723,24 @@
      return nullptr;
  }
  
@@ -25,7 +26,7 @@
  static enum ggml_status ggml_backend_cpu_repack_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
      tensor->extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(tensor));
  
-@@ -4812,6 +4829,11 @@
+@@ -4812,6 +4830,11 @@
              if (op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_repack_buffer_type()) {
                  return (ggml::cpu::tensor_traits *) op->src[0]->extra;
              }
@@ -37,8 +38,9 @@
          }
          return nullptr;
      }
---- a//proc/self/fd/11	2026-08-10 07:44:57.881082321 +0800
-+++ b/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:44:57.582490334 +0800
+diff -ruN pt-pristine/llama.cpp-b10331/ggml/src/ggml-rpc/ggml-rpc.cpp pt-edit/llama.cpp-b10331/ggml/src/ggml-rpc/ggml-rpc.cpp
+--- pt-pristine/llama.cpp-b10331/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-09 06:42:50.000000000 +0800
++++ pt-edit/llama.cpp-b10331/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:50:19.926457820 +0800
 @@ -412,6 +412,8 @@
      return buffer->iface.free_buffer == ggml_backend_rpc_buffer_free_buffer;
  }
