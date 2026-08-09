@@ -35,6 +35,13 @@ stdenv.mkDerivation (finalAttrs: {
     '';
   };
 
+  # RPC servers must repack quantized weights (mxfp4, ...) into the
+  # interleaved layouts used by the fast CPU GEMV kernels, otherwise
+  # RPC-served layers run the slow plain vec_dot path (~2-4x slower).
+  patches = [
+    ./patches/rpc-repack.patch
+  ];
+
   nativeBuildInputs = [
     cmake
     ninja

@@ -1,0 +1,136 @@
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -667,6 +667,11 @@
+     if (strcmp(name, "ggml_backend_cpu_set_use_ref") == 0) {
+         return (void *)ggml_backend_cpu_set_use_ref;
+     }
++#ifdef GGML_USE_CPU_REPACK
++    if (strcmp(name, "ggml_backend_cpu_repack_buffer_type") == 0) {
++        return (void *)ggml_backend_cpu_repack_buffer_type;
++    }
++#endif
+ 
+     // threadpool - TODO:  move to ggml-base
+     if (strcmp(name, "ggml_threadpool_new") == 0) {
+--- a/ggml/src/ggml-cpu/repack.cpp
++++ b/ggml/src/ggml-cpu/repack.cpp
+@@ -4732,13 +4732,20 @@
+ 
+ static void ggml_backend_cpu_repack_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor,
+                                                        const void * data, size_t offset, size_t size) {
+-    GGML_ASSERT(offset == 0);
++    // NOTE: tensors may live at non-zero offsets within a shared buffer
++    // (e.g. RPC). tensor->data already points at the tensor's position, so
++    // both the repack and the raw copy below are offset-agnostic.
+     GGML_ASSERT(size == ggml_nbytes(tensor));
+ 
+     auto tensor_traits = (ggml::cpu::repack::tensor_traits_base *) tensor->extra;
+-    auto OK            = tensor_traits->repack(tensor, data, size);
+-
+-    GGML_ASSERT(OK == 0);
++    if (tensor_traits != nullptr) {
++        auto OK = tensor_traits->repack(tensor, data, size);
++        GGML_ASSERT(OK == 0);
++    } else {
++        // non-repackable type (f32/f16 norms, odd shapes, ...): plain copy
++        memcpy(tensor->data, data, size);
++    }
++    GGML_UNUSED(offset);
+     GGML_UNUSED(buffer);
+ }
+ 
+--- a/ggml/src/ggml-rpc/ggml-rpc.cpp
++++ b/ggml/src/ggml-rpc/ggml-rpc.cpp
+@@ -899,7 +899,7 @@
+     LOG_DBG("[%s] device: %d, buffer: %p, data: %p\n", __func__, dev_id, (void*)tensor->buffer, tensor->data);
+     if (tensor->buffer == nullptr) {
+         //No buffer allocated.
+-        buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
++        buft = rpc_server_get_buft(backends[dev_id]);
+     } else {
+         buft = tensor->buffer->buft;
+     }
+@@ -914,7 +914,7 @@
+     if (dev_id >= backends.size()) {
+         return false;
+     }
+-    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
++    ggml_backend_buffer_type_t buft = rpc_server_get_buft(backends[dev_id]);
+     ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, request.size);
+     response.remote_ptr = 0;
+     response.remote_size = 0;
+@@ -935,7 +935,7 @@
+     if (dev_id >= backends.size()) {
+         return false;
+     }
+-    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
++    ggml_backend_buffer_type_t buft = rpc_server_get_buft(backends[dev_id]);
+     size_t alignment = ggml_backend_buft_get_alignment(buft);
+     LOG_DBG("[%s] device: %d, alignment: %lu\n", __func__, dev_id, alignment);
+     response.alignment = alignment;
+@@ -947,7 +947,7 @@
+     if (dev_id >= backends.size()) {
+         return false;
+     }
+-    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
++    ggml_backend_buffer_type_t buft = rpc_server_get_buft(backends[dev_id]);
+     size_t max_size = ggml_backend_buft_get_max_size(buft);
+     LOG_DBG("[%s] device: %d, max_size: %lu\n", __func__, dev_id, max_size);
+     response.max_size = max_size;
+@@ -989,6 +989,28 @@
+     return true;
+ }
+ 
++// Pick the buffer type for a device. For CPU devices prefer the repack
++// buffer type (when available) so quantized weights (mxfp4, q4_0, ...) get
++// repacked into the interleaved layouts used by the fast GEMV kernels.
++// Without this, RPC-served weights always take the slower plain vec_dot path.
++static ggml_backend_buffer_type_t rpc_server_get_buft(ggml_backend_dev_t dev) {
++    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(dev);
++    if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
++        static ggml_backend_buffer_type_t repack_buft = nullptr;
++        if (repack_buft == nullptr) {
++            auto * reg = ggml_backend_dev_backend_reg(dev);
++            if (reg != nullptr) {
++                repack_buft = (ggml_backend_buffer_type_t) ggml_backend_reg_get_proc_address(
++                    reg, "ggml_backend_cpu_repack_buffer_type");
++            }
++        }
++        if (repack_buft != nullptr) {
++            buft = repack_buft;
++        }
++    }
++    return buft;
++}
++
+ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
+     // Validate tensor type before using it
+     if (tensor->type >= GGML_TYPE_COUNT) {
+@@ -1019,6 +1041,27 @@
+         result->buffer = nullptr;
+     }
+ 
++    // If the tensor lives in a repack buffer, attach the repack traits so the
++    // CPU backend picks the fast repacked GEMV kernels. Freshly deserialized
++    // graph tensors carry no traits otherwise and would fall back to the plain
++    // vec_dot path even though the weights were repacked.
++    if (result->buffer) {
++        static ggml_backend_buffer_type_t repack_buft = nullptr;
++        if (repack_buft == nullptr) {
++            auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
++            if (cpu_dev != nullptr) {
++                auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
++                if (reg != nullptr) {
++                    repack_buft = (ggml_backend_buffer_type_t) ggml_backend_reg_get_proc_address(
++                        reg, "ggml_backend_cpu_repack_buffer_type");
++                }
++            }
++        }
++        if (repack_buft != nullptr && result->buffer->buft == repack_buft) {
++            ggml_backend_buffer_init_tensor(result->buffer, result);
++        }
++    }
++
+     if (result->buffer) {
+         // require that the tensor data does not go beyond the buffer end
+         uint64_t tensor_size = (uint64_t) ggml_nbytes(result);
