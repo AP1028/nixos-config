@@ -45,6 +45,7 @@ stdenv.mkDerivation (finalAttrs: {
     ./patches/rpc-dspark-draft-path.patch
     ./patches/rpc-debug-tensor-name.patch
     ./patches/rpc-dsv4-compressed-cpu.patch
+    ./patches/rpc-server-repack.patch
   ];
 
   nativeBuildInputs = [

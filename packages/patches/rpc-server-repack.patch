@@ -1,0 +1,67 @@
+--- a//proc/self/fd/11	2026-08-10 07:44:57.585053528 +0800
++++ b/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:44:57.581403184 +0800
+@@ -4723,6 +4723,23 @@
+     return nullptr;
+ }
+ 
++
++// RPC servers: the client cannot know the remote hardware, so weights arrive
++// unrepacked via SET_TENSOR. Repack them in-place here (8x8 interleaved
++// layout) and tag the tensor so the CPU backend dispatches the fast
++// gemv/gemm path.
++extern "C" int ggml_backend_cpu_repack_tensor(struct ggml_tensor * t, const void * data, size_t data_size) {
++    const ggml::cpu::tensor_traits * traits = ggml_repack_get_optimal_repack_type(t);
++    if (traits == nullptr) {
++        return -1;
++    }
++    if (traits->repack(t, data, data_size) != 0) {
++        return -1;
++    }
++    t->extra = (void *) traits;
++    return 0;
++}
++
+ static enum ggml_status ggml_backend_cpu_repack_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
+     tensor->extra = (void *) const_cast<ggml::cpu::tensor_traits *>(ggml_repack_get_optimal_repack_type(tensor));
+ 
+@@ -4812,6 +4829,11 @@
+             if (op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_repack_buffer_type()) {
+                 return (ggml::cpu::tensor_traits *) op->src[0]->extra;
+             }
++            // RPC servers: weights repacked in-place at SET_TENSOR time carry
++            // their traits in tensor->extra (the plain CPU buft never sets it).
++            if (op->src[0]->extra) {
++                return (ggml::cpu::tensor_traits *) op->src[0]->extra;
++            }
+         }
+         return nullptr;
+     }
+--- a//proc/self/fd/11	2026-08-10 07:44:57.881082321 +0800
++++ b/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:44:57.582490334 +0800
+@@ -412,6 +412,8 @@
+     return buffer->iface.free_buffer == ggml_backend_rpc_buffer_free_buffer;
+ }
+ 
++extern "C" int ggml_backend_cpu_repack_tensor(struct ggml_tensor * t, const void * data, size_t data_size);
++
+ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
+     rpc_tensor result;
+     if (!tensor) {
+@@ -1216,6 +1218,17 @@
+             return false;
+         }
+     }
++    // RPC server-side MXFP4 repack: the weights arrive once at load time with
++    // offset 0; repack them to the 8x8 interleaved layout in-place so the CPU
++    // backend can use the fast gemv/gemm path. The incoming data is a separate
++    // network buffer, so there is no aliasing.
++    if (request.offset == 0 && size == ggml_nbytes(tensor) && tensor->type == GGML_TYPE_MXFP4) {
++        if (ggml_backend_cpu_repack_tensor(tensor, cached_file.data(), size) == 0) {
++            response.result = 1;
++            return true;
++        }
++        GGML_LOG_ERROR("[%s] repack failed for tensor %s, using unrepacked path\n", __func__, tensor->name);
++    }
+     ggml_backend_tensor_set(tensor, cached_file.data(), request.offset, size);
+     response.result = 1;
+     return true;

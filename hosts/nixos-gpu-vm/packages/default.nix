@@ -37,7 +37,7 @@ in {
         postFetch = old.src.postFetch;
       };
       # stable split-graph uids so the RPC graph cache (GRAPH_RECOMPUTE) engages
-      patches = (old.patches or [ ]) ++ [ ../../../packages/patches/rpc-graph-cache.patch ../../../packages/patches/rpc-dspark-draft-path.patch ../../../packages/patches/rpc-debug-tensor-name.patch ../../../packages/patches/rpc-dsv4-compressed-cpu.patch ];
+      patches = (old.patches or [ ]) ++ [ ../../../packages/patches/rpc-graph-cache.patch ../../../packages/patches/rpc-dspark-draft-path.patch ../../../packages/patches/rpc-debug-tensor-name.patch ../../../packages/patches/rpc-dsv4-compressed-cpu.patch ../../../packages/patches/rpc-server-repack.patch ];
       # b10331 moved the rpc-server to tools/rpc (target ggml-rpc-server) and
       # only installs it with LLAMA_TOOLS_INSTALL=ON
       cmakeFlags = old.cmakeFlags ++ [ "-DLLAMA_TOOLS_INSTALL=ON" ];
