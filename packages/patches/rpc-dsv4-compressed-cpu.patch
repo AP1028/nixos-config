@@ -1,5 +1,5 @@
---- a/src/llama-kv-cache-dsv4.cpp	2026-08-09 06:42:50.000000000 +0800
-+++ b/src/llama-kv-cache-dsv4.cpp	2026-08-10 04:23:39.759149752 +0800
+--- a//proc/self/fd/11	2026-08-10 05:05:56.906867396 +0800
++++ b/src/llama-kv-cache-dsv4.cpp	2026-08-10 05:05:56.903825194 +0800
 @@ -1237,9 +1237,16 @@
      LLAMA_LOG_INFO("%s: creating DSV4 CSA compressed KV cache, size = %u cells\n",
              __func__, dsv4_comp_size(kv_size, DSV4_CSA_RATIO));
@@ -27,7 +27,7 @@
              0, LLAMA_SWA_TYPE_NONE, nullptr, filter_hca, nullptr, nullptr);
  
      LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer KV cache, size = %u cells\n",
-@@ -1255,7 +1262,7 @@
+@@ -1255,25 +1262,25 @@
  
      kv_lid = std::make_unique<llama_kv_cache>(
              model, hparams_lid, type_k, type_v,
@@ -36,3 +36,24 @@
              0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr);
  
      LLAMA_LOG_INFO("%s: creating DSV4 CSA compressor state\n", __func__);
+ 
+     csa_state = std::make_unique<llama_dsv4_comp_state>(
+-            model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
++            model, offload_compressed, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
+             2*model.hparams.n_embd_head_k(), n_rs_seq, "csa", filter_csa);
+ 
+     LLAMA_LOG_INFO("%s: creating DSV4 HCA compressor state\n", __func__);
+ 
+     hca_state = std::make_unique<llama_dsv4_comp_state>(
+-            model, offload, unified_compressed, n_seq_max, DSV4_HCA_RATIO, DSV4_HCA_RATIO,
++            model, offload_compressed, unified_compressed, n_seq_max, DSV4_HCA_RATIO, DSV4_HCA_RATIO,
+             model.hparams.n_embd_head_k(), n_rs_seq, "hca", filter_hca);
+ 
+     LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer compressor state\n", __func__);
+ 
+     lid_state = std::make_unique<llama_dsv4_comp_state>(
+-            model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
++            model, offload_compressed, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
+             2*model.hparams.indexer_head_size, n_rs_seq, "lid", filter_csa);
+ 
+     // DSV4 attention reads compressed-K / compressor-state rows that the current
