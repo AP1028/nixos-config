@@ -1,6 +1,6 @@
-diff -ruN pt-pristine/llama.cpp-b10331/ggml/src/ggml-cpu/repack.cpp pt-edit/llama.cpp-b10331/ggml/src/ggml-cpu/repack.cpp
---- pt-pristine/llama.cpp-b10331/ggml/src/ggml-cpu/repack.cpp	2026-08-09 06:42:50.000000000 +0800
-+++ pt-edit/llama.cpp-b10331/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:50:19.925370484 +0800
+diff -ruN A/ggml/src/ggml-cpu/repack.cpp B/ggml/src/ggml-cpu/repack.cpp
+--- A/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:51:47.538180206 +0800
++++ B/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:51:47.540122691 +0800
 @@ -4723,6 +4723,24 @@
      return nullptr;
  }
@@ -38,9 +38,9 @@ diff -ruN pt-pristine/llama.cpp-b10331/ggml/src/ggml-cpu/repack.cpp pt-edit/llam
          }
          return nullptr;
      }
-diff -ruN pt-pristine/llama.cpp-b10331/ggml/src/ggml-rpc/ggml-rpc.cpp pt-edit/llama.cpp-b10331/ggml/src/ggml-rpc/ggml-rpc.cpp
---- pt-pristine/llama.cpp-b10331/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-09 06:42:50.000000000 +0800
-+++ pt-edit/llama.cpp-b10331/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:50:19.926457820 +0800
+diff -ruN A/ggml/src/ggml-rpc/ggml-rpc.cpp B/ggml/src/ggml-rpc/ggml-rpc.cpp
+--- A/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:51:47.538249578 +0800
++++ B/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:51:47.540174743 +0800
 @@ -412,6 +412,8 @@
      return buffer->iface.free_buffer == ggml_backend_rpc_buffer_free_buffer;
  }
