@@ -123,3 +123,53 @@ paste. Each client process re-streams its own copy of the model (~20 min).)
 - `hosts/nixos-intel-7700k/packages/default.nix` — llama-cpp-rpc via current
   pkgs, mesa + vulkan-loader added, rocm-570/rocminfo kept.
 - `hosts/nixos-gpu-vm/packages/default.nix` — python3 + numpy for gguf tooling.
+
+## Progress log 2026-08-09 (evening)
+
+### Graph-serialization fix (RPC metadata explosion)
+- Root cause: the scheduler assigned a fresh uid to every split graph on every
+  compute (`ggml_backend_sched_split_graph`), so the RPC backend's
+  GRAPH_RECOMPUTE cache (keyed on `cgraph->uid`) never engaged. The client
+  re-serialized and re-sent the full graph topology (~0.7-1.8 MiB structs per
+  token) every token.
+- Fix (`packages/patches/rpc-graph-cache.patch`): derive the split uid from a
+  hash of the graph structure (node/leaf pointers + counts). Identical
+  per-token graphs get identical uids -> the cache hits; changed structures
+  get new uids. Applied on all 3 machines (commit 7462c29).
+- Measured: traffic dropped ~8 MiB/token (1323 -> 1015 MiB/40s), but token
+  time unchanged (~1044 ms): the network was already hidden behind the CPU
+  compute. ~2-4% gain at best.
+
+### Repack patch REVERTED (wrong direction)
+- `rpc-repack.patch` (make rpc-servers repack mxfp4 weights) crashed the
+  server (SIGSEGV in `ggml_backend_buft_get_alignment` from the repack-buft
+  lookup) AND upstream explicitly does not support repacking on RPC servers
+  (discussion #21130: "with RPC, we don't know what is the remote hardware").
+  Removed from all configs; gpu-vm had to be rebuilt once more because its
+  switch predated the removal (the crashing build was in /run/current-system).
+
+### CPU performance investigation (the real bottleneck)
+Measured per-token CPU busy phases (10ms /proc sampling):
+- gpu-vm server (15 CPU layers, -t 32): ~300-470 ms busy at ~27 cores ->
+  ~7.4 GB/s effective. The 27 "busy" cores are largely threadpool spin;
+  per-core rate ~0.27 GB/s (dequant ALU bound).
+- asusg16 server (12-18 CPU layers, -t 16): ~500 ms busy at only ~1.5 cores!
+  Per-core rate ~2.5 GB/s. The kernel barely parallelizes there.
+- RAM is healthy everywhere: gpu-vm 105 GB/s (32 threads), asusg16 71 GB/s.
+- The CPU layers ARE the entire token time; the network is fully hidden.
+- Ongoing: the asusg16 single-thread mystery - suspect the CPU backend
+  variant. The 285H has NO AVX512 but the alderlake variant (compiled with
+  AVX512) was selected. Experiment in progress: forced the haswell variant
+  (/tmp/llama-haswell with only libggml-cpu-haswell.so) and re-measuring.
+
+### Operational gotchas discovered
+- gpu-vm rpc-server dies with SIGABRT/SIGSEGV when its GPU state is polluted
+  (leftover VRAM from crashed clients); a VM reboot fixes it. The crash
+  signature: GP fault at libggml-base+0x1e265, or abort in get_alignment.
+- RPC servers are single-client with listen backlog 1: stale connections
+  from dead clients jam registration ("Failed to connect" / "invalid device").
+  Restart all servers cleanly before launching a client.
+- The 1-layer model extraction for isolated CPU benchmarks fought the gguf
+  writer conventions (dims reversed, byte vs element shapes, tokenizer KV
+  drift); not yet completed. Alternative: force CPU variants via a copied
+  bin dir (the /tmp/llama-haswell trick) - no rebuild needed.
