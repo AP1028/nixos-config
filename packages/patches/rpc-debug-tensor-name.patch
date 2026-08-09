@@ -1,0 +1,21 @@
+--- a/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-09 06:42:50.000000000 +0800
++++ b/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 02:44:02.453981374 +0800
+@@ -1084,6 +1084,8 @@
+     }
+     result->buffer = reinterpret_cast<ggml_backend_buffer_t>(tensor->buffer);
+     if (result->buffer && buffers.find(result->buffer) == buffers.end()) {
++        GGML_LOG_ERROR("[%s] buffer 0x%" PRIx64 " not found on this server (tensor: %s, op: %s)\n",
++                __func__, tensor->buffer, tensor->name, ggml_op_name((ggml_op) tensor->op));
+         result->buffer = nullptr;
+     }
+ 
+@@ -1351,7 +1353,8 @@
+         return nullptr;
+     }
+     if (result->buffer == nullptr && result->data != nullptr) {
+-        GGML_LOG_ERROR("[%s] invalid data ptr", __func__);
++        GGML_LOG_ERROR("[%s] invalid data ptr (tensor: %s, op: %s, view_src: %s, view_offs: %zu)\n",
++                __func__, result->name, ggml_op_name(result->op), result->view_src ? result->view_src->name : "-", result->view_offs);
+         return nullptr;
+     }
+     tensor_map[id] = result;

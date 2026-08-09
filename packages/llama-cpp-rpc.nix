@@ -43,6 +43,7 @@ stdenv.mkDerivation (finalAttrs: {
   patches = [
     ./patches/rpc-graph-cache.patch
     ./patches/rpc-dspark-draft-path.patch
+    ./patches/rpc-debug-tensor-name.patch
   ];
 
   nativeBuildInputs = [
