@@ -71,8 +71,9 @@
     "typer"
     "chardet"
   ];
-  noTestOverrides = lib.genAttrs noTestPkgs (name: prev.${name}.overridePythonAttrs (old: {doCheck = false;}));
-  pythonOverrides = final: prev: (basePythonOverrides final prev) // noTestOverrides;
+  pythonOverrides = final: prev:
+    (basePythonOverrides final prev)
+    // lib.genAttrs noTestPkgs (name: prev.${name}.overridePythonAttrs (old: {doCheck = false;}));
 
   comfyuiCuda = import "${comfyuiSrc}/nix/packages.nix" {
     inherit pkgs lib versions pythonOverrides;
