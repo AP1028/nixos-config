@@ -255,3 +255,15 @@ server) are added, not overlapped.
 - llama.cpp RPC has an RDMA path (GGML_RPC_RDMA) if TCP is later a limit.
 - With the network gone, the remaining walls: CPU sum (~120 ms -> ~30-60
   ms with DSpark) and the client (~53 ms).
+
+### Final latency breakup (~910 ms/token)
+
+| component | ms | provenance |
+|---|---|---|
+| network wire time (31 MiB @ ~100 MiB/s) | ~290-310 | NIC deltas + link rate |
+| pipeline serialization slack | ~380-430 | remainder: per-split transfers + computes strictly serial (no overlap), RTTs, server-side deserialize |
+| CPU layers (repacked) | ~100-150 | floor 82 ms (bandwidth-saturated sum 37+9+36 ms); kernel at ~55-80% of it |
+| client | ~53 | clean utime+stime, 40-100 token runs |
+| GPU layers | ~20 | 5080/P40/1060 |
+
+Network + slack together = ~75-80% of the token; both die with 40GbE.
