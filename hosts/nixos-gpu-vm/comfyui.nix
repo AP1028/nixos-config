@@ -76,7 +76,6 @@
     "alembic"
     "pydantic"
     "pydantic-settings"
-    "opencv4"
   ];
   pythonOverrides = final: prev:
     (basePythonOverrides final prev)
