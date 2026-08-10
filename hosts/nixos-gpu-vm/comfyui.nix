@@ -76,6 +76,14 @@
     "alembic"
     "pydantic"
     "pydantic-settings"
+    "flask-sqlalchemy"
+    "flask"
+    "sqlalchemy-utils"
+    "django"
+    "factory-boy"
+    "pytest-randomly"
+    "httplib2"
+    "hypothesis"
   ];
   pythonOverrides = final: prev:
     (basePythonOverrides final prev)
