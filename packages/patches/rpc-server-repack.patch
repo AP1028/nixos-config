@@ -1,58 +1,18 @@
 diff -ruN A/ggml/src/ggml-backend-dl.cpp B/ggml/src/ggml-backend-dl.cpp
---- A/ggml/src/ggml-backend-dl.cpp	1970-01-01 08:00:00.000000000 +0800
-+++ B/ggml/src/ggml-backend-dl.cpp	2026-08-10 08:13:25.457544072 +0800
-@@ -0,0 +1,48 @@
-+#include "ggml-backend-dl.h"
-+
-+#ifdef _WIN32
-+
-+dl_handle * dl_load_library(const fs::path & path) {
-+    // suppress error dialogs for missing DLLs
-+    DWORD old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
-+    SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
-+
-+    HMODULE handle = LoadLibraryW(path.wstring().c_str());
-+
-+    SetErrorMode(old_mode);
-+
-+    return handle;
-+}
-+
-+void * dl_get_sym(dl_handle * handle, const char * name) {
-+    DWORD old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
-+    SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
-+
-+    void * p = (void *) GetProcAddress(handle, name);
-+
-+    SetErrorMode(old_mode);
-+
-+    return p;
-+}
-+
-+const char * dl_error() {
-+    return "";
-+}
-+
-+#else
-+
-+dl_handle * dl_load_library(const fs::path & path) {
+--- A/ggml/src/ggml-backend-dl.cpp	2026-08-10 08:15:10.175196769 +0800
++++ B/ggml/src/ggml-backend-dl.cpp	2026-08-10 08:15:10.176941079 +0800
+@@ -32,7 +32,7 @@
+ #else
+ 
+ dl_handle * dl_load_library(const fs::path & path) {
+-    dl_handle * handle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
 +    dl_handle * handle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_GLOBAL);
-+    return handle;
-+}
-+
-+void * dl_get_sym(dl_handle * handle, const char * name) {
-+    return dlsym(handle, name);
-+}
-+
-+const char * dl_error() {
-+    const char *rslt = dlerror();
-+    return rslt != nullptr ? rslt : "";
-+}
-+
-+#endif
+     return handle;
+ }
+ 
 diff -ruN A/ggml/src/ggml-cpu/repack.cpp B/ggml/src/ggml-cpu/repack.cpp
---- A/ggml/src/ggml-cpu/repack.cpp	2026-08-10 08:13:25.456202285 +0800
-+++ B/ggml/src/ggml-cpu/repack.cpp	2026-08-10 08:13:25.457497518 +0800
+--- A/ggml/src/ggml-cpu/repack.cpp	2026-08-10 08:15:10.175136455 +0800
++++ B/ggml/src/ggml-cpu/repack.cpp	2026-08-10 08:15:10.176893933 +0800
 @@ -4723,6 +4723,24 @@
      return nullptr;
  }
@@ -91,8 +51,8 @@ diff -ruN A/ggml/src/ggml-cpu/repack.cpp B/ggml/src/ggml-cpu/repack.cpp
          return nullptr;
      }
 diff -ruN A/ggml/src/ggml-rpc/ggml-rpc.cpp B/ggml/src/ggml-rpc/ggml-rpc.cpp
---- A/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 08:13:25.456254638 +0800
-+++ B/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 08:13:25.457544072 +0800
+--- A/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 08:15:10.175196769 +0800
++++ B/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 08:15:10.176941079 +0800
 @@ -1,5 +1,7 @@
  #include "ggml-rpc.h"
  #include "ggml-impl.h"
