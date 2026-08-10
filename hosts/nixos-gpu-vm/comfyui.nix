@@ -27,9 +27,17 @@
 
   versions = import "${comfyuiSrc}/nix/versions.nix";
 
-  pythonOverrides = import "${comfyuiSrc}/nix/python-overrides.nix" {
+  basePythonOverrides = import "${comfyuiSrc}/nix/python-overrides.nix" {
     inherit pkgs versions;
     gpuSupport = "cuda";
+  };
+
+  # einops' checkInputs pull in the full Jupyter stack (jupyter -> notebook ->
+  # jupyterlab -> jupyter-server); jupyter-server's test suite is flaky
+  # (TimeoutError in test_disconnect_resolves_orphaned_kernel_info_future).
+  # The stack is only needed for einops' docs tests, so skip them.
+  pythonOverrides = final: prev: (basePythonOverrides final prev) // {
+    einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
   };
 
   comfyuiCuda = import "${comfyuiSrc}/nix/packages.nix" {
