@@ -2,9 +2,9 @@
   pkgs,
   ...
 }: let
-  # Both GPUs here are Pascal (GTX 1060 / Tesla P40, sm_61). The default CUDA
-  # arch list omits sm_61, so build llama.cpp against cudaPackages_12_9 (last
-  # CUDA line with Pascal support; CUDA 13 dropped it) with sm_61 added.
+  # GPUs here are 2x RTX 2080 Ti (Turing, sm_75). The CUDA arch list still
+  # carries the old sm_61 (Pascal) entries plus sm_75 for the 2080 Ti; llama.cpp
+  # builds against cudaPackages_12_9 which supports both.
   # rpcSupport compiles in the RPC backend + rpc-server for future llama RPC
   # work, but no RPC services/clients are configured yet.
   cudaPackages = pkgs.cudaPackages_12_9.overrideScope (final: prev: {

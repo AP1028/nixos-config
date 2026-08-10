@@ -51,6 +51,13 @@
       url = "github:powerofthe69/nix-gaming-edge";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # ComfyUI flake with NixOS service module + bundled comfy-kitchen
+    # (NVFP4 / int8 ConvRot kernels) and pre-built PyTorch CUDA wheels.
+    comfyui-nix = {
+      url = "github:utensils/comfyui-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {
@@ -63,6 +70,7 @@
     apple-silicon,
     home-manager,
     nixvirt,
+    comfyui-nix,
     ...
   }: {
     nixosConfigurations = {

@@ -8,11 +8,13 @@
 
   hardware.graphics.enable = true;
 
+  # Driver unpinned: previously pinned to legacy_580 for the old Pascal cards
+  # (GTX 1060 / Tesla P40). Now on 2x RTX 2080 Ti (Turing), so the default
+  # stable driver (595.x) is used.
   hardware.nvidia = {
     modesetting.enable = true;
     nvidiaSettings = true;
     open = false;
-    package = config.boot.kernelPackages.nvidiaPackages.legacy_580;
   };
 
   environment.systemPackages = with pkgs; [
