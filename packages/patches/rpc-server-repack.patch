@@ -1,6 +1,58 @@
+diff -ruN A/ggml/src/ggml-backend-dl.cpp B/ggml/src/ggml-backend-dl.cpp
+--- A/ggml/src/ggml-backend-dl.cpp	1970-01-01 08:00:00.000000000 +0800
++++ B/ggml/src/ggml-backend-dl.cpp	2026-08-10 08:13:25.457544072 +0800
+@@ -0,0 +1,48 @@
++#include "ggml-backend-dl.h"
++
++#ifdef _WIN32
++
++dl_handle * dl_load_library(const fs::path & path) {
++    // suppress error dialogs for missing DLLs
++    DWORD old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
++    SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
++
++    HMODULE handle = LoadLibraryW(path.wstring().c_str());
++
++    SetErrorMode(old_mode);
++
++    return handle;
++}
++
++void * dl_get_sym(dl_handle * handle, const char * name) {
++    DWORD old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
++    SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
++
++    void * p = (void *) GetProcAddress(handle, name);
++
++    SetErrorMode(old_mode);
++
++    return p;
++}
++
++const char * dl_error() {
++    return "";
++}
++
++#else
++
++dl_handle * dl_load_library(const fs::path & path) {
++    dl_handle * handle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_GLOBAL);
++    return handle;
++}
++
++void * dl_get_sym(dl_handle * handle, const char * name) {
++    return dlsym(handle, name);
++}
++
++const char * dl_error() {
++    const char *rslt = dlerror();
++    return rslt != nullptr ? rslt : "";
++}
++
++#endif
 diff -ruN A/ggml/src/ggml-cpu/repack.cpp B/ggml/src/ggml-cpu/repack.cpp
---- A/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:54:41.430070831 +0800
-+++ B/ggml/src/ggml-cpu/repack.cpp	2026-08-10 07:54:41.431630924 +0800
+--- A/ggml/src/ggml-cpu/repack.cpp	2026-08-10 08:13:25.456202285 +0800
++++ B/ggml/src/ggml-cpu/repack.cpp	2026-08-10 08:13:25.457497518 +0800
 @@ -4723,6 +4723,24 @@
      return nullptr;
  }
@@ -39,27 +91,33 @@ diff -ruN A/ggml/src/ggml-cpu/repack.cpp B/ggml/src/ggml-cpu/repack.cpp
          return nullptr;
      }
 diff -ruN A/ggml/src/ggml-rpc/ggml-rpc.cpp B/ggml/src/ggml-rpc/ggml-rpc.cpp
---- A/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:54:41.430127934 +0800
-+++ B/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 07:54:41.431674834 +0800
-@@ -412,6 +412,8 @@
-     return buffer->iface.free_buffer == ggml_backend_rpc_buffer_free_buffer;
- }
- 
-+extern "C" int ggml_backend_cpu_repack_tensor(struct ggml_tensor * t, const void * data, size_t data_size);
+--- A/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 08:13:25.456254638 +0800
++++ B/ggml/src/ggml-rpc/ggml-rpc.cpp	2026-08-10 08:13:25.457544072 +0800
+@@ -1,5 +1,7 @@
+ #include "ggml-rpc.h"
+ #include "ggml-impl.h"
++#include <dlfcn.h>
 +
- static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
-     rpc_tensor result;
-     if (!tensor) {
-@@ -1216,6 +1218,17 @@
+ #include "ggml-backend-impl.h"
+ #include "ggml-cpp.h"
+ #include "transport.h"
+@@ -1216,6 +1218,24 @@
              return false;
          }
      }
 +    // RPC server-side MXFP4 repack: the weights arrive once at load time with
 +    // offset 0; repack them to the 8x8 interleaved layout in-place so the CPU
 +    // backend can use the fast gemv/gemm path. The incoming data is a separate
-+    // network buffer, so there is no aliasing.
++    // network buffer, so there is no aliasing. The repack entry point lives in
++    // the dlopen'd CPU backend library, so resolve it at runtime (a link-time
++    // reference would break libggml-rpc.so loading).
 +    if (request.offset == 0 && size == ggml_nbytes(tensor) && tensor->type == GGML_TYPE_MXFP4) {
-+        if (ggml_backend_cpu_repack_tensor(tensor, cached_file.data(), size) == 0) {
++        static int (*repack_fn)(struct ggml_tensor *, const void *, size_t) = nullptr;
++        if (repack_fn == nullptr) {
++            repack_fn = (int (*)(struct ggml_tensor *, const void *, size_t))
++                dlsym(RTLD_DEFAULT, "ggml_backend_cpu_repack_tensor");
++        }
++        if (repack_fn != nullptr && repack_fn(tensor, cached_file.data(), size) == 0) {
 +            response.result = 1;
 +            return true;
 +        }
