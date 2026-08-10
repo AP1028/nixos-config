@@ -70,6 +70,13 @@
     "tqdm"
     "typer"
     "chardet"
+    "fsspec"
+    "huggingface-hub"
+    "sqlalchemy"
+    "alembic"
+    "pydantic"
+    "pydantic-settings"
+    "opencv4"
   ];
   pythonOverrides = final: prev:
     (basePythonOverrides final prev)
