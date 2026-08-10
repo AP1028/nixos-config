@@ -39,12 +39,40 @@
   # scipy/triton/onnxruntime: huge upstream test suites, one flaky test kills
   # the build (scipy: 1 failed / 87695 passed). They're runtime deps here, so
   # tests are pure build cost.
-  pythonOverrides = final: prev: (basePythonOverrides final prev) // {
-    einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
-    scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
-    triton = prev.triton.overridePythonAttrs (old: {doCheck = false;});
-    onnxruntime = prev.onnxruntime.overridePythonAttrs (old: {doCheck = false;});
-  };
+  #
+  # Same for the remaining big-suite packages in the env closure (fastapi's
+  # checkInput inline-snapshot flaked 3/1402, etc.). Keep the env test-free.
+  noTestPkgs = [
+    "einops"
+    "scipy"
+    "triton"
+    "onnxruntime"
+    "inline-snapshot"
+    "fastapi"
+    "starlette"
+    "uvicorn"
+    "anyio"
+    "httpx"
+    "pandas"
+    "matplotlib"
+    "sympy"
+    "networkx"
+    "pygithub"
+    "scikit-image"
+    "librosa"
+    "ultralytics"
+    "pytest-mpl"
+    "aiohttp"
+    "yarl"
+    "jinja2"
+    "orjson"
+    "safehttpx"
+    "tqdm"
+    "typer"
+    "chardet"
+  ];
+  noTestOverrides = lib.genAttrs noTestPkgs (name: prev.${name}.overridePythonAttrs (old: {doCheck = false;}));
+  pythonOverrides = final: prev: (basePythonOverrides final prev) // noTestOverrides;
 
   comfyuiCuda = import "${comfyuiSrc}/nix/packages.nix" {
     inherit pkgs lib versions pythonOverrides;
