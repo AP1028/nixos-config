@@ -201,3 +201,57 @@ So: the mxfp4 dequant latency chain (not ALU, not DRAM) WAS the CPU wall —
 the repack removed it. What remains is architectural (sequential F32 states
 on 1 GbE) and fixed cost (client graph build). Levers left: `-np 1` shrinks
 the state planes 4x (n_planes = n_seq_max); 10GbE; more VRAM.
+
+## 7. FINAL measured state (2026-08-10, careful re-benchmark)
+
+Cluster serving: b10331 + all patches (graph-cache, dspark-path, debug,
+states-CPU, server-side 8x8 repack), kv-offload ON, tensor-split
+4,6,1,6,16,11, ctx 8192, 3 x 100-token runs, greedy, same prompt:
+
+| metric | value |
+|---|---|
+| generation | **1.07-1.11 tok/s (897-935 ms/token)** |
+| prompt processing | 1.85-2.14 tok/s |
+| traffic | ~31 MiB/token (3066-3104 MiB per 100-token run) |
+| client CPU | **53 ms/token** (utime+stime, /proc/PID/stat) |
+| server CPU duty (asusg16, gen) | ~3.7% (was 12.4% pre-repack) |
+
+Corrected per-token budget (~910 ms):
+
+| component | ms | evidence |
+|---|---|---|
+| network (DSV4 F32 states + window, 31 MiB) | ~310 | NIC deltas @ ~100 MiB/s |
+| CPU layers (repacked 8x8) | ~100-150 | duty-based |
+| client (graph build + KV + sampling) | ~53 | measured |
+| GPU layers | ~20 | |
+| **sum** | ~480-530 | |
+| **pipeline serialization slack** | **~380-430** | RPC splits run strictly serially: copy(N) -> compute(N) -> copy(N+1); transfers never overlap computes; each split also pays an RTT |
+
+The old "client ~150-200 ms" estimate was wrong (pre-graph-cache measurement);
+the client is ~53 ms/token. The big slack is the serialized pipeline: the
+states transfer (~100 ms per server) and the server compute (~40 ms per
+server) are added, not overlapped.
+
+### What was tried and its verdict
+- mxfp4 CPU kernel: fixed via the server-side 8x8 repack (12.4% -> 3.7% duty;
+  the kernel now runs at ~55-80% of the ~82 ms bandwidth-saturated floor).
+- UD-Q4_K_XL quant: slower (0.85 tok/s; bigger states -> more traffic).
+- DSpark: works (loads/serves) but loses on 1 GbE (batch-5 pass traffic
+  balloons to ~160 MiB/pass; the states dominate).
+- KV-offload: fixed (states-CPU patch), +14% over the old config.
+- `-np 1` (states 4x smaller): NOT measured (session ended) - expected
+  ~1.5-1.8 tok/s on 1 GbE; irrelevant once 40GbE arrives.
+- Async-RPC pipelining (overlap transfers with computes): analyzed, not
+  implemented. Worth ~1.5-2x on 1 GbE; pointless on 40GbE.
+
+### 40GbE plan (hardware on order)
+- The pipeline serialization is network time: the transfers are the long
+  poles. 40GbE (~4-5 GB/s) shrinks the per-split transfer to ~2-3 ms.
+- Expected: token ~200 ms -> **~5 tok/s** without DSpark; **~4-7 tok/s**
+  with DSpark (the states become cheap, batch-5 amortizes the dense reads).
+- Setup: client <-> each server directly (or a small switch; the client's
+  single 40GbE port is the aggregate pipe), MTU 9000 jumbo frames,
+  static routes for the 50052 traffic (route-gateway.sh pattern).
+- llama.cpp RPC has an RDMA path (GGML_RPC_RDMA) if TCP is later a limit.
+- With the network gone, the remaining walls: CPU sum (~120 ms -> ~30-60
+  ms with DSpark) and the client (~53 ms).
