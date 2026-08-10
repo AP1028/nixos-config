@@ -36,8 +36,14 @@
   # jupyterlab -> jupyter-server); jupyter-server's test suite is flaky
   # (TimeoutError in test_disconnect_resolves_orphaned_kernel_info_future).
   # The stack is only needed for einops' docs tests, so skip them.
+  # scipy/triton/onnxruntime: huge upstream test suites, one flaky test kills
+  # the build (scipy: 1 failed / 87695 passed). They're runtime deps here, so
+  # tests are pure build cost.
   pythonOverrides = final: prev: (basePythonOverrides final prev) // {
     einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
+    scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
+    triton = prev.triton.overridePythonAttrs (old: {doCheck = false;});
+    onnxruntime = prev.onnxruntime.overridePythonAttrs (old: {doCheck = false;});
   };
 
   comfyuiCuda = import "${comfyuiSrc}/nix/packages.nix" {
