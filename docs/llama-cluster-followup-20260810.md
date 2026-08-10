@@ -166,3 +166,38 @@ Notes vs the old config:
 - `nix build --impure --expr` for one-off llama.cpp builds against the
   channel nixpkgs; the flake's nixpkgs src hash must match for config
   rebuilds (the flake's own source is fetched on demand).
+
+## 6. UPDATE (2026-08-10 late): the server-side 8x8 repack works — CPU no longer the wall
+
+`packages/patches/rpc-server-repack.patch` (3 files):
+
+1. `ggml/src/ggml-cpu/repack.cpp` — export `ggml_backend_cpu_repack_tensor()`
+   (optimal-repack traits + in-place 8x8 repack + `tensor->extra` tag); the
+   extra-buft's `get_tensor_traits` also accepts `extra`-tagged tensors (the
+   plain CPU buft never sets `extra`, so this is unambiguous).
+2. `ggml/src/ggml-rpc/ggml-rpc.cpp` — in `rpc_server::set_tensor`, when a full
+   MXFP4 weight arrives (offset==0, size==nbytes), repack it in place instead
+   of the raw write. Resolves the repack entry point with `dlsym(RTLD_DEFAULT)`
+   (a link-time reference would break libggml-rpc.so loading — the CPU
+   backend lib is dlopen'd RTLD_LOCAL).
+3. `ggml/src/ggml-backend-dl.cpp` — dlopen backends with `RTLD_GLOBAL` so the
+   dlsym resolves.
+
+This is exactly what upstream says is "unusable on RPC servers" (the client
+cannot know the remote hardware) — done on the server instead, where the
+hardware IS known. Falls back to the unrepacked path for non-repackable
+tensors (ne[1] % 8 != 0).
+
+Measured effect (kv-offload config, generation): **asusg16's CPU duty during
+generation dropped 12.4% -> 3.7%** (~3x faster CPU layers on the 16-layer
+machine) with correct output. The per-token time stayed 1.14 tok/s because
+the wall is now the network + client:
+- network: ~30 MiB/token (~300 ms) — the DSV4 F32 compressed states
+- client: ~150-200 ms graph build for the 43-layer compression machinery
+- CPU layers: ~100-150 ms (was ~420 ms)
+- GPU layers: ~20 ms
+
+So: the mxfp4 dequant latency chain (not ALU, not DRAM) WAS the CPU wall —
+the repack removed it. What remains is architectural (sequential F32 states
+on 1 GbE) and fixed cost (client graph build). Levers left: `-np 1` shrinks
+the state planes 4x (n_planes = n_seq_max); 10GbE; more VRAM.
