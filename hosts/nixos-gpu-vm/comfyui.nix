@@ -1,6 +1,7 @@
 {
   inputs,
   lib,
+  pkgs,
   ...
 }: let
   # Uses upstream comfyui-nix unmodified: comfyui-nix pins its own nixpkgs
@@ -121,5 +122,15 @@ in {
     # Models live under /var/lib/comfyui/models/{diffusion_models,text_encoders,vae}
     dataDir = "/var/lib/comfyui";
     openFirewall = true;
+    # Per-component GPU placement + layer distribution across the 2x 2080 Ti
+    # (the built-in Select*Device nodes only create work-unit deepclones).
+    customNodes = {
+      ComfyUI-MultiGPU = pkgs.fetchFromGitHub {
+        owner = "pollockjj";
+        repo = "ComfyUI-MultiGPU";
+        rev = "b51c99a525e9607e43545ee2a8b7694c74a4775a";
+        hash = "sha256-Y3C4WgOtTyQ+S1mvSGd/2ypiUmuhdNGEKeMW/SPS2gI=";
+      };
+    };
   };
 }
