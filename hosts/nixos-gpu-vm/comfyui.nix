@@ -11,6 +11,17 @@
   # comfyui-nix's OWN pinned nixpkgs (their CI builds/tests against it).
   comfyuiNix = inputs.comfyui-nix.inputs.nixpkgs.outPath;
 
+  # The vendored comfyui-manager wheel declares Requires-Dist deps that only
+  # exist at runtime in the final python env, so nixpkgs'
+  # pythonRuntimeDepsCheck fails its build on ANY nixpkgs (upstream CI
+  # doesn't build this drv). Skip the check, matching the project's own
+  # pattern (dontCheckRuntimeDeps).
+  comfyuiPatched = pkgs.applyPatches {
+    name = "comfyui-nix";
+    src = comfyuiSrc;
+    patches = [../../packages/patches/comfyui-nix-deps-check.patch];
+  };
+
   # Fresh nixpkgs instance (not the system pkgs): avoids infinite recursion
   # with the comfy-ui-cuda overlay defined below, and matches how the
   # upstream flake builds its packages. Uses comfyui-nix's OWN pinned nixpkgs
@@ -20,9 +31,9 @@
     config.allowUnfree = true;
   };
 
-  versions = import "${comfyuiSrc}/nix/versions.nix";
+  versions = import "${comfyuiPatched}/nix/versions.nix";
 
-  basePythonOverrides = import "${comfyuiSrc}/nix/python-overrides.nix" {
+  basePythonOverrides = import "${comfyuiPatched}/nix/python-overrides.nix" {
     inherit pkgs versions;
     gpuSupport = "cuda";
   };
@@ -35,13 +46,13 @@
     mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
   };
 
-  comfyuiCuda = import "${comfyuiSrc}/nix/packages.nix" {
+  comfyuiCuda = import "${comfyuiPatched}/nix/packages.nix" {
     inherit pkgs lib versions pythonOverrides;
     gpuSupport = "cuda";
   };
 in {
   imports = [
-    "${comfyuiSrc}/nix/modules/comfyui.nix"
+    "${comfyuiPatched}/nix/modules/comfyui.nix"
   ];
 
   nixpkgs.overlays = [
