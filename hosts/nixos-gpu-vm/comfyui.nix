@@ -27,7 +27,13 @@
     gpuSupport = "cuda";
   };
 
-  pythonOverrides = basePythonOverrides;
+  # mss (screen capture, KJNodes dep) has a test that needs an X display
+  # (test_missing_fast_function_for_monitor_details_retrieval) which the nix
+  # build sandbox never provides -> disable its tests. Everything else is
+  # upstream-unmodified on their CI-tested nixpkgs.
+  pythonOverrides = final: prev: (basePythonOverrides final prev) // {
+    mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
+  };
 
   comfyuiCuda = import "${comfyuiSrc}/nix/packages.nix" {
     inherit pkgs lib versions pythonOverrides;
