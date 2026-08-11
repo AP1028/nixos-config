@@ -54,9 +54,11 @@
 
     # ComfyUI flake with NixOS service module + bundled comfy-kitchen
     # (NVFP4 / int8 ConvRot kernels) and pre-built PyTorch CUDA wheels.
+    # Deliberately does NOT follow our nixpkgs: upstream's own pinned nixpkgs
+    # matches the prebuilt store paths they publish to comfyui.cachix.org,
+    # so we download instead of building (and their test suites pass there).
     comfyui-nix = {
       url = "github:utensils/comfyui-nix";
-      inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 

@@ -9,12 +9,13 @@
   # Requires-Dist deps that only exist at runtime in the final python env, so
   # nixpkgs' pythonRuntimeDepsCheck fails the build. Skip the check, matching
   # the project's own pattern (dontCheckRuntimeDeps).
-  comfyuiNix = import "${inputs.nixpkgs}";
+  comfyuiNix = inputs.comfyui-nix.inputs.nixpkgs.outPath;
 
   # Fresh nixpkgs instance (not the system pkgs): avoids infinite recursion
   # with the comfy-ui-cuda overlay defined below, and matches how the
-  # upstream flake builds its packages.
-  pkgs = comfyuiNix {
+  # upstream flake builds its packages. Uses comfyui-nix's OWN pinned nixpkgs
+  # so store paths hit their comfyui.cachix.org binary cache.
+  pkgs = import comfyuiNix {
     system = "x86_64-linux";
     config.allowUnfree = true;
   };
@@ -32,62 +33,12 @@
     gpuSupport = "cuda";
   };
 
-  # einops' checkInputs pull in the full Jupyter stack (jupyter -> notebook ->
-  # jupyterlab -> jupyter-server); jupyter-server's test suite is flaky
-  # (TimeoutError in test_disconnect_resolves_orphaned_kernel_info_future).
-  # The stack is only needed for einops' docs tests, so skip them.
-  # scipy/triton/onnxruntime: huge upstream test suites, one flaky test kills
-  # the build (scipy: 1 failed / 87695 passed). They're runtime deps here, so
-  # tests are pure build cost.
-  #
-  # Same for the remaining big-suite packages in the env closure (fastapi's
-  # checkInput inline-snapshot flaked 3/1402, etc.). Keep the env test-free.
-  noTestPkgs = [
-    "einops"
-    "scipy"
-    "triton"
-    "onnxruntime"
-    "inline-snapshot"
-    "fastapi"
-    "starlette"
-    "uvicorn"
-    "anyio"
-    "httpx"
-    "pandas"
-    "matplotlib"
-    "sympy"
-    "networkx"
-    "pygithub"
-    "scikit-image"
-    "librosa"
-    "ultralytics"
-    "pytest-mpl"
-    "aiohttp"
-    "yarl"
-    "jinja2"
-    "orjson"
-    "safehttpx"
-    "tqdm"
-    "typer"
-    "chardet"
-    "fsspec"
-    "huggingface-hub"
-    "sqlalchemy"
-    "alembic"
-    "pydantic"
-    "pydantic-settings"
-    "flask-sqlalchemy"
-    "flask"
-    "sqlalchemy-utils"
-    "django"
-    "factory-boy"
-    "pytest-randomly"
-    "httplib2"
-    "hypothesis"
-  ];
-  pythonOverrides = final: prev:
-    (basePythonOverrides final prev)
-    // lib.genAttrs noTestPkgs (name: prev.${name}.overridePythonAttrs (old: {doCheck = false;}));
+  # Note: no doCheck overrides needed — comfyui-nix pins its own nixpkgs
+  # (f13ff45a) whose package closures match comfyui.cachix.org, so the whole
+  # python env is downloaded prebuilt instead of built locally. Only the
+  # patched vendored wheels (dontCheckRuntimeDeps) build locally, and those
+  # have no test suites.
+  pythonOverrides = basePythonOverrides;
 
   comfyuiCuda = import "${comfyuiSrc}/nix/packages.nix" {
     inherit pkgs lib versions pythonOverrides;
