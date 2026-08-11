@@ -44,12 +44,16 @@
   # - mss: test needs an X display, absent in the nix build sandbox.
   # - scipy: hypothesis property test flakes (1 failed / 87695 passed).
   # - triton/onnxruntime: same huge-suite risk class; runtime deps only.
+  # - inline-snapshot: flaky doc-snapshot suite (3/1402); checkInput of
+  #   fastapi, whose own suite then follows -> disable both.
   pythonOverrides = final: prev: (basePythonOverrides final prev) // {
     einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
     mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
     scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
     triton = prev.triton.overridePythonAttrs (old: {doCheck = false;});
     onnxruntime = prev.onnxruntime.overridePythonAttrs (old: {doCheck = false;});
+    inline-snapshot = prev."inline-snapshot".overridePythonAttrs (old: {doCheck = false;});
+    fastapi = prev.fastapi.overridePythonAttrs (old: {doCheck = false;});
   };
 
   comfyuiCuda = import "${comfyuiPatched}/nix/packages.nix" {
