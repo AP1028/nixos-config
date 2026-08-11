@@ -21,6 +21,31 @@
     SILENT=false
     case "''${1:-}" in -s) SILENT=true; shift;; esac
 
+    # ── GPU-holder helpers (used by the force path) ──────────────
+    # System daemons are tolerated here — they are stopped via systemd later
+    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced"
+
+    # List live (non-zombie) PIDs holding NVIDIA devices
+    gpu_holders() {
+        local pids=""
+        for nvdev in /dev/nvidia*; do
+            [ -e "$nvdev" ] || continue
+            pids="$pids $(${psmisc}/bin/fuser "$nvdev" 2>/dev/null || true)"
+        done
+        for dev in "''${ALL_DEVS[@]}"; do
+            pids="$pids $(${psmisc}/bin/fuser "/sys/bus/pci/devices/$dev" 2>/dev/null || true)"
+        done
+        local out=""
+        for pid in $pids; do
+            pname=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
+            if echo "$pname" | grep -qE "$IGNORE_PROCS"; then continue; fi
+            state=$(ps -o stat= -p "$pid" 2>/dev/null || true)
+            case "$state" in *Z*|*z*) continue;; esac
+            out="$out $pid"
+        done
+        echo "$out"
+    }
+
     # ── Discover / wake NVIDIA dGPU ──────────────────────────────
     ASUS_DGPU_DISABLE=/sys/devices/platform/asus-nb-wmi/dgpu_disable
     info "Discovering NVIDIA dGPU..."
@@ -161,8 +186,6 @@
 
     # ── Check for processes using nvidia devices ─────────────────
     info "Checking for processes using NVIDIA devices..."
-    # System daemons handled separately — filter them out
-    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced"
     has_procs=false
     for nvdev in /dev/nvidia*; do
         [ -e "$nvdev" ] || continue
@@ -226,6 +249,9 @@
         case "$answer" in
             [fF])
                 warn "Forcing GPU unbind — this may crash your desktop."
+
+                # ── Kill everything holding the GPU (SIGKILL) ──────
+                info "Killing processes using the GPU..."
                 for nvdev in /dev/nvidia*; do
                     [ -e "$nvdev" ] || continue
                     ${psmisc}/bin/fuser -k "$nvdev" 2>/dev/null || true
@@ -233,8 +259,36 @@
                 for dev in "''${ALL_DEVS[@]}"; do
                     ${psmisc}/bin/fuser -k "/sys/bus/pci/devices/$dev" 2>/dev/null || true
                 done
-                sleep 1
-                ok "Processes terminated."
+
+                # ── Wait for the GPU to be fully released ───────────
+                info "Waiting for processes to release the GPU..."
+                waited=0
+                escalated=false
+                while :; do
+                    remaining=$(gpu_holders)
+                    if [ -z "$remaining" ]; then
+                        ok "GPU released."
+                        break
+                    fi
+                    # Grace period, then re-kill any survivors with SIGKILL
+                    if ! $escalated && [ "$waited" -ge 6 ]; then
+                        escalated=true
+                        warn "Escalating — SIGKILL to survivors: $remaining"
+                        kill -9 $remaining 2>/dev/null || true
+                    fi
+                    if [ "$waited" -ge 30 ]; then   # 30 × 0.5s = 15s
+                        red "ERROR: processes still hold the GPU after 15s:"
+                        for pid in $remaining; do
+                            red "  PID $pid  ($(ps -p "$pid" -o comm= 2>/dev/null || echo unknown))"
+                        done
+                        red ""
+                        red "Unbinding now would hang the kernel (nvidia os_delay)."
+                        red "Aborting — log out of your desktop and use the [l] Logout path instead."
+                        exit 1
+                    fi
+                    sleep 0.5
+                    waited=$((waited + 1))
+                done
                 ;;
             [lL])
                 mkdir -p /etc/gpu-switch
@@ -300,6 +354,19 @@
         # Unbind from current driver
         cur_drv=$(readlink "/sys/bus/pci/devices/$dev/driver" 2>/dev/null | xargs basename 2>/dev/null || echo "")
         if [ -n "$cur_drv" ] && [ "$cur_drv" != "vfio-pci" ]; then
+            # Final safety check: unbinding a busy nvidia driver hangs the kernel
+            if [ "$cur_drv" = "nvidia" ]; then
+                remaining=$(gpu_holders)
+                if [ -n "$remaining" ]; then
+                    fail "Processes still hold the GPU — aborting to avoid a kernel hang:"
+                    for pid in $remaining; do
+                        fail "  PID $pid  ($(ps -p "$pid" -o comm= 2>/dev/null || echo unknown))"
+                    done
+                    fail ""
+                    fail "Log out of your desktop, then run:  gpu-vfio-apply"
+                    exit 1
+                fi
+            fi
             echo "$dev" > "/sys/bus/pci/drivers/$cur_drv/unbind" 2>/dev/null || true
         fi
 
