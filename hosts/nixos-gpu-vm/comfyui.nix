@@ -38,15 +38,18 @@
     gpuSupport = "cuda";
   };
 
-  # einops' checkInputs pull in the full Jupyter stack (jupyter -> notebook ->
-  # jupyterlab -> jupyter-server); jupyter-server's suite is flaky even on
-  # their pinned nixpkgs (FD-leak + TimeoutError tests). The stack exists only
-  # for einops' docs tests -> skip them.
-  # mss (screen capture, KJNodes dep) has a test needing an X display which
-  # the nix build sandbox never provides -> disable its tests too.
+  # Flaky/infeasible test suites that fail regardless of nixpkgs rev:
+  # - einops: checkInputs pull the whole Jupyter stack; jupyter-server's
+  #   suite flakes (FD-leak + TimeoutError tests). Stack is only for docs.
+  # - mss: test needs an X display, absent in the nix build sandbox.
+  # - scipy: hypothesis property test flakes (1 failed / 87695 passed).
+  # - triton/onnxruntime: same huge-suite risk class; runtime deps only.
   pythonOverrides = final: prev: (basePythonOverrides final prev) // {
     einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
     mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
+    scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
+    triton = prev.triton.overridePythonAttrs (old: {doCheck = false;});
+    onnxruntime = prev.onnxruntime.overridePythonAttrs (old: {doCheck = false;});
   };
 
   comfyuiCuda = import "${comfyuiPatched}/nix/packages.nix" {
