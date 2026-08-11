@@ -27,7 +27,6 @@
     ../../modules/services/firewall-open.nix
 
     ./gpu.nix
-    ./comfyui.nix
 
     ./packages
   ];

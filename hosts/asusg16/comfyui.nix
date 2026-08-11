@@ -32,4 +32,8 @@
       enable = true;
     })
   ];
+
+  # ComfyUI must NOT auto-start at boot (manual `systemctl start comfyui`).
+  # The comfyui-nix module wants multi-user.target; force that off.
+  systemd.services.comfyui.wantedBy = lib.mkForce [];
 }
