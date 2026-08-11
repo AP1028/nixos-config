@@ -3,12 +3,12 @@
   lib,
   ...
 }: let
-  comfyuiNixSrc = inputs.comfyui-nix.outPath;
+  # Uses upstream comfyui-nix unmodified: comfyui-nix pins its own nixpkgs
+  # (f13ff45a) whose closures their CI builds and tests on main, so the env
+  # is built from versions known to pass. No local patches/overrides.
+  comfyuiSrc = inputs.comfyui-nix.outPath;
 
-  # The vendored wheel builds (comfyui-manager, comfy-kitchen, ...) declare
-  # Requires-Dist deps that only exist at runtime in the final python env, so
-  # nixpkgs' pythonRuntimeDepsCheck fails the build. Skip the check, matching
-  # the project's own pattern (dontCheckRuntimeDeps).
+  # comfyui-nix's OWN pinned nixpkgs (their CI builds/tests against it).
   comfyuiNix = inputs.comfyui-nix.inputs.nixpkgs.outPath;
 
   # Fresh nixpkgs instance (not the system pkgs): avoids infinite recursion
@@ -20,12 +20,6 @@
     config.allowUnfree = true;
   };
 
-  comfyuiSrc = pkgs.applyPatches {
-    name = "comfyui-nix";
-    src = comfyuiNixSrc;
-    patches = [../../packages/patches/comfyui-nix-deps-check.patch];
-  };
-
   versions = import "${comfyuiSrc}/nix/versions.nix";
 
   basePythonOverrides = import "${comfyuiSrc}/nix/python-overrides.nix" {
@@ -33,11 +27,6 @@
     gpuSupport = "cuda";
   };
 
-  # Note: no doCheck overrides needed — comfyui-nix pins its own nixpkgs
-  # (f13ff45a) whose package closures match comfyui.cachix.org, so the whole
-  # python env is downloaded prebuilt instead of built locally. Only the
-  # patched vendored wheels (dontCheckRuntimeDeps) build locally, and those
-  # have no test suites.
   pythonOverrides = basePythonOverrides;
 
   comfyuiCuda = import "${comfyuiSrc}/nix/packages.nix" {
