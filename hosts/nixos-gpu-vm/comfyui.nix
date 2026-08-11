@@ -54,7 +54,19 @@
       base = basePythonOverrides final prev;
     in
     base // {
-      torch = base.torch.overridePythonAttrs (old: {dontCheckRuntimeDeps = true;});
+      torch = base.torch.overridePythonAttrs (old: {
+        dontCheckRuntimeDeps = true;
+        # torch 2.10's METADATA also Requires-Dist cuda-bindings (a PyPI
+        # wheel dep nix doesn't provide); upstream's sed only strips
+        # nvidia-*/triton -> strip it here too.
+        postInstall = (old.postInstall or "") + ''
+          for metadata in "$out/${final.python.sitePackages}"/torch-*.dist-info/METADATA; do
+            if [[ -f "$metadata" ]]; then
+              sed -i '/^Requires-Dist: cuda-bindings/d' "$metadata"
+            fi
+          done
+        '';
+      });
       # facexlib wheel METADATA names deps opencv-python/tqdm; nix provides
       # opencv4 -> name mismatch -> same pre-install check failure.
       facexlib = base.facexlib.overridePythonAttrs (old: {dontCheckRuntimeDeps = true;});
