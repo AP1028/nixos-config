@@ -5,6 +5,10 @@
   inputs,
   ...
 }: {
+  # Cap parallel build cores: heavy derivations (torch/llama.cpp) would
+  # otherwise peg every core while gaming. 8 cores max.
+  nix.settings.cores = 8;
+
   imports = [
     ./hardware-configuration.nix
     ./kernel
@@ -17,6 +21,8 @@
 
     ./hardware/nvme-vfio.nix
     ./hardware/scripts.nix
+
+    ./comfyui.nix
 
     ../../modules/hardware/nvidia.nix
     ../../modules/hardware/i915-sriov.nix
