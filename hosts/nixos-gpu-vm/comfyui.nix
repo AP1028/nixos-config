@@ -58,6 +58,11 @@
       # facexlib wheel METADATA names deps opencv-python/tqdm; nix provides
       # opencv4 -> name mismatch -> same pre-install check failure.
       facexlib = base.facexlib.overridePythonAttrs (old: {dontCheckRuntimeDeps = true;});
+      # xformers setup.py requires cuda-bindings==12.9.4 (a torch-2.10 wheel
+      # dep nix strips); relax that requirement too.
+      xformers = base.xformers.overridePythonAttrs (old: {
+        pythonRelaxDeps = (old.pythonRelaxDeps or []) ++ ["cuda-bindings"];
+      });
       einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
       mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
       scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
