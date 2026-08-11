@@ -38,11 +38,14 @@
     gpuSupport = "cuda";
   };
 
-  # mss (screen capture, KJNodes dep) has a test that needs an X display
-  # (test_missing_fast_function_for_monitor_details_retrieval) which the nix
-  # build sandbox never provides -> disable its tests. Everything else is
-  # upstream-unmodified on their CI-tested nixpkgs.
+  # einops' checkInputs pull in the full Jupyter stack (jupyter -> notebook ->
+  # jupyterlab -> jupyter-server); jupyter-server's suite is flaky even on
+  # their pinned nixpkgs (FD-leak + TimeoutError tests). The stack exists only
+  # for einops' docs tests -> skip them.
+  # mss (screen capture, KJNodes dep) has a test needing an X display which
+  # the nix build sandbox never provides -> disable its tests too.
   pythonOverrides = final: prev: (basePythonOverrides final prev) // {
+    einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
     mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
   };
 
