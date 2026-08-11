@@ -55,6 +55,9 @@
     in
     base // {
       torch = base.torch.overridePythonAttrs (old: {dontCheckRuntimeDeps = true;});
+      # facexlib wheel METADATA names deps opencv-python/tqdm; nix provides
+      # opencv4 -> name mismatch -> same pre-install check failure.
+      facexlib = base.facexlib.overridePythonAttrs (old: {dontCheckRuntimeDeps = true;});
       einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
       mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
       scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
