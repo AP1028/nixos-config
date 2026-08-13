@@ -28,6 +28,7 @@
   environment.systemPackages = with pkgs; [
     (pkgs.callPackage ../../../packages/ysm-java { })
     (pkgs.callPackage ../../../packages/claw-code { })
+    (pkgs.callPackage ../../../packages/deepseek-harness { })
     (pkgs.callPackage ../../../packages/amulet-map-editor { })
     brightnessctl
     dialog
