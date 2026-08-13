@@ -1,7 +1,10 @@
 {pkgs, ...}: {
   imports = [
     ./default.nix
+    ../../system/sudo-env.nix
   ];
+
+  sudoEnv.headless = true;
 
   environment.systemPackages = with pkgs; [
     distrobox

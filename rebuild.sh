@@ -19,22 +19,20 @@ if [ "$(readlink -f /etc/nixos 2>/dev/null)" != "$CONFIG_DIR" ]; then
   sudo ln -s "$CONFIG_DIR" /etc/nixos
 fi
 
-declare -A HOSTNAME_MAP=(
-  ["asusg16"]="asusg16"
-  ["nixos-service-vm"]="nixos-service-vm"
-  ["nixos-git-vm"]="nixos-git-vm"
-  ["nixos-gpu-vm"]="nixos-gpu-vm"
-  ["nixos-intel-7700k"]="nixos-intel-7700k"
-  ["macbook"]="macbook"
-  ["nixos-essential-vm"]="nixos-essential-vm"
-)
-
-AVAILABLE_HOSTS=(asusg16 nixos-service-vm nixos-git-vm nixos-gpu-vm nixos-intel-7700k macbook nixos-essential-vm)
+# Discover machines from the hosts/ directory (each host is hosts/<name>/default.nix)
+AVAILABLE_HOSTS=()
+for d in "$CONFIG_DIR"/hosts/*/; do
+  [ -f "${d}default.nix" ] && AVAILABLE_HOSTS+=("$(basename "$d")")
+done
+if [ "${#AVAILABLE_HOSTS[@]}" -eq 0 ]; then
+  echo "No hosts found under $CONFIG_DIR/hosts/" >&2
+  exit 1
+fi
 
 if [ -z "$HOST" ]; then
   CURRENT_HOSTNAME="$(hostname)"
-  if [ -n "${HOSTNAME_MAP[$CURRENT_HOSTNAME]:-}" ]; then
-    HOST="${HOSTNAME_MAP[$CURRENT_HOSTNAME]}"
+  if [[ " ${AVAILABLE_HOSTS[*]} " == *" $CURRENT_HOSTNAME "* ]]; then
+    HOST="$CURRENT_HOSTNAME"
     echo "Auto-detected host: $HOST (from hostname: $CURRENT_HOSTNAME)"
   else
     echo "Could not auto-detect host from hostname: $CURRENT_HOSTNAME"
@@ -68,27 +66,6 @@ if [ ! -f "$CONFIG_DIR/local.nix" ]; then
 fi
 
 cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
-
-echo "Pulling latest changes..."
-git pull --ff-only || echo "Warning: git pull failed, continuing with local changes..."
-
-echo "Staging files..."
-# local.nix is untracked + gitignored, so it is never staged, committed or pushed.
-git add --all
-if git diff --cached --quiet; then
-  echo "No changes to commit."
-else
-  COMMIT_MSG="Auto-commit from rebuild ($HOST): $(date '+%Y-%m-%d %H:%M:%S')"
-  echo "Committing changes: $COMMIT_MSG"
-  git commit -m "$COMMIT_MSG"
-
-  echo "Pushing to remote..."
-  if ! git push; then
-    echo -e "\n\e[33mWARNING: Git push failed! Local changes are saved. Continuing with the rebuild...\e[0m\n"
-  else
-    echo "Push successful."
-  fi
-fi
 
 echo "Starting NixOS rebuild for $HOST..."
 sudo nixos-rebuild switch --impure --flake "$CONFIG_DIR#$HOST"

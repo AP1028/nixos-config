@@ -124,6 +124,7 @@
       libXScrnSaver
       libxcb
       libxshmfence
+      libpciaccess
       motif
       fontconfig
       freetype
@@ -191,6 +192,7 @@
       libXtst
       libXi
       libXp
+      libpciaccess
       sqlite
     ]);
 
