@@ -137,6 +137,15 @@
         ];
       };
 
+      nixos-essential-vm = nixpkgs.lib.nixosSystem {
+        specialArgs = {inherit inputs;};
+        modules = [
+          { nixpkgs.hostPlatform = "x86_64-linux"; }
+          ./hosts/nixos-essential-vm/hardware-configuration.nix
+          ./hosts/nixos-essential-vm/default.nix
+        ];
+      };
+
       nixos-intel-7700k = nixpkgs.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
