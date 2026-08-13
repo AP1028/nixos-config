@@ -20,5 +20,9 @@
       ProtectHome = true;
       PrivateTmp = true;
     };
+
+    environment = {
+      NOIP_IP_METHOD = "http://whatismyip.sjtu.edu.cn/";
+    };
   };
 }
