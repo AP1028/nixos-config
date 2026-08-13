@@ -5,7 +5,7 @@
 
   networking.interfaces.ens18.ipv4.addresses = [
     {
-      address = "192.168.3.227";
+      address = "192.168.3.151";
       prefixLength = 24;
     }
   ];
