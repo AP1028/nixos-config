@@ -30,5 +30,6 @@
     ./services/openvpn.nix
     ./services/wireguard.nix
     ./services/noip-duc.nix
+    ./services/fastapi-dls.nix
   ];
 }
