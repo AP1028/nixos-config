@@ -6,7 +6,7 @@
 }: {
   networking.wireguard.interfaces.wg0 = {
     privateKeyFile = "/etc/wireguard/private.key";
-    listenPort = 15000;
+    listenPort = 57844;
     ips = ["10.7.0.1/24"];
     peers = [
       {

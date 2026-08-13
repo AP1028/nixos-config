@@ -11,7 +11,7 @@
 
   services.openvpn.servers.essential = {
     config = ''
-      port 57842
+      port 57845
       proto udp
       dev tun
       user nobody
