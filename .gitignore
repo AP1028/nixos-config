@@ -1,5 +1,6 @@
 firmware/
 result
+.claw/
 # local.nix holds personal values (username, description, config dir); it lives
 # only on this machine and must never be committed. Tracked template:
 # local.nix.template (rebuild.sh copies it on first run).
