@@ -66,7 +66,7 @@ in {
         "DLS_PORT=443"
         "LEASE_EXPIRE_DAYS=90"
         "DATABASE=sqlite:///${stateDir}/db.sqlite"
-        "DEBUG=false"
+        "DEBUG="
         "INSTANCE_KEY_RSA=${stateDir}/cert/instance.private.pem"
         "INSTANCE_KEY_PUB=${stateDir}/cert/instance.public.pem"
       ];
@@ -74,6 +74,8 @@ in {
       RestartSec = "3s";
       DynamicUser = true;
       StateDirectory = "fastapi-dls";
+      AmbientCapabilities = ["CAP_NET_BIND_SERVICE"];
+      CapabilityBoundingSet = ["CAP_NET_BIND_SERVICE"];
     };
   };
 }
