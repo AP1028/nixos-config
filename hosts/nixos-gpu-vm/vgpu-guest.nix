@@ -69,6 +69,12 @@ in {
   environment.etc."ld.so.conf.d/nvidia-grid.conf".text = "${nvidiaGrid}/lib";
   environment.systemPackages = [nvidiaGrid.bin];
 
+  # NixOS has no automatic ldconfig: regenerate the cache at every
+  # activation/boot so CUDA apps find libcuda.so.1 etc.
+  system.activationScripts.nvidia-grid-ldconfig = lib.stringAfter ["etc"] ''
+    ${pkgs.glibc.bin}/bin/ldconfig
+  '';
+
   # gridd.conf for the license client: FeatureType=1 = auto (Q profile -> vWS,
   # which FastAPI-DLS serves). FeatureType=4 (vGPU for Compute) is NOT served
   # by FastAPI-DLS v1.x and leaves the vGPU unlicensed.
