@@ -3,9 +3,8 @@
     ../../../modules/packages/opencode.nix
   ];
 
+  # Gitea machine: hardware toolchain (riscv gcc / verilator) stripped out.
   environment.systemPackages = with pkgs; [
-    pkgsCross.riscv32-embedded.buildPackages.gcc
-    verilator
     python3
   ];
 }
