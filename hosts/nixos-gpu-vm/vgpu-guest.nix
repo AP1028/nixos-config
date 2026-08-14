@@ -75,7 +75,6 @@ in {
   systemd.services.nvidia-grid-ldconfig = {
     description = "Regenerate ld.so.cache for NVIDIA grid userspace";
     wantedBy = ["sysinit.target"];
-    before = ["sysinit.target"];
     serviceConfig = {
       Type = "oneshot";
       ExecStart = pkgs.writeShellScript "nvidia-grid-ldconfig" ''
