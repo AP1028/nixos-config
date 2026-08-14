@@ -64,9 +64,12 @@ in {
         old.postInstall;
       # vGPU guest driver libs (libcuda.so.1 etc.) are outside nixpkgs'
       # closure (grid driver from vgpu-guest.nix); NixOS has no working
-      # ld.so.cache, so bake the grid lib dir into the binaries' rpath.
+      # ld.so.cache, so bake the grid lib dir into the rpath of every ELF
+      # (libggml-cuda.so is what actually links libcuda.so.1; the fixup's
+      # rpath-shrink keeps entries that resolve a needed library).
       postFixup = (old.postFixup or "") + ''
-        for f in $out/bin/*; do
+        for f in $out/bin/* $out/lib/*.so*; do
+          [ -e "$f" ] || continue
           patchelf --add-rpath ${config.local.nvidiaGridLib} "$f" 2>/dev/null || true
         done
       '';
