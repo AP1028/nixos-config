@@ -17,7 +17,9 @@
     config.allowUnfree = true;
   };
   cudaPackages = cuda23.cudaPackages_12_2.overrideScope (final: prev: {
-    flags = prev.flags // {
+    # 23.11's cudaFlags shape differs from modern nixpkgs; the (modern)
+    # llama-cpp derivation only reads flags.cmakeCudaArchitecturesString.
+    flags = {
       cmakeCudaArchitecturesString = "61;75;80;86;89;90;100;103;120;121";
     };
   });
