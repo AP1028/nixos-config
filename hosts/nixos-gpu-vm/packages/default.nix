@@ -38,7 +38,7 @@ in {
         tag = "b10331";
         hash = "sha256-0uquzGXrLbuFFUauNl0R9tjfxLt5UBEC4cqNHnmdux4=";
         leaveDotGit = true;
-        postFetch = old.src.postFetch;
+        postFetch = old.src.postFetch or null;
       };
       # stable split-graph uids so the RPC graph cache (GRAPH_RECOMPUTE) engages
       patches = (old.patches or [ ]) ++ [ ../../../packages/patches/rpc-graph-cache.patch ../../../packages/patches/rpc-dspark-draft-path.patch ../../../packages/patches/rpc-debug-tensor-name.patch ../../../packages/patches/rpc-dsv4-compressed-cpu.patch ../../../packages/patches/rpc-server-repack.patch ];
@@ -58,7 +58,7 @@ in {
           tag = "b10331";
           hash = "sha256-0uquzGXrLbuFFUauNl0R9tjfxLt5UBEC4cqNHnmdux4=";
           leaveDotGit = true;
-          postFetch = old.src.postFetch;
+          postFetch = old.src.postFetch or null;
         };
         patches = [ ../../../packages/patches/rpc-graph-cache.patch ];
         preBuild = ''
@@ -69,7 +69,7 @@ in {
       postInstall = builtins.replaceStrings
         ["cp bin/rpc-server $out/bin/llama-rpc-server"]
         ["cp $out/bin/ggml-rpc-server $out/bin/llama-rpc-server"]
-        old.postInstall;
+        (old.postInstall or "");
       # vGPU guest driver libs (libcuda.so.1 etc.) are outside nixpkgs'
       # closure (grid driver from vgpu-guest.nix); NixOS has no working
       # ld.so.cache, so bake the grid lib dir into the rpath of every ELF
