@@ -9,6 +9,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    # Stable track for the VM fleet: infrastructure wants stability, not
+    # rolling churn. Eval-verified against all VM configs (2026-08).
+    nixpkgs-stable.url = "github:NixOS/nixpkgs/nixos-26.05";
+
     lanzaboote = {
       url = "github:nix-community/lanzaboote";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -65,6 +69,7 @@
   outputs = inputs @ {
     self,
     nixpkgs,
+    nixpkgs-stable,
     lanzaboote,
     i915-sriov-dkms,
     vscode-server,
@@ -107,7 +112,7 @@
         ];
       };
 
-      nixos-service-vm = nixpkgs.lib.nixosSystem {
+      nixos-service-vm = nixpkgs-stable.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
           { nixpkgs.hostPlatform = "x86_64-linux"; }
@@ -118,7 +123,7 @@
         ];
       };
 
-      nixos-git-vm = nixpkgs.lib.nixosSystem {
+      nixos-git-vm = nixpkgs-stable.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
           { nixpkgs.hostPlatform = "x86_64-linux"; }
@@ -129,7 +134,7 @@
         ];
       };
 
-      nixos-gpu-vm = nixpkgs.lib.nixosSystem {
+      nixos-gpu-vm = nixpkgs-stable.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
           { nixpkgs.hostPlatform = "x86_64-linux"; }
@@ -140,7 +145,7 @@
         ];
       };
 
-      nixos-essential-vm = nixpkgs.lib.nixosSystem {
+      nixos-essential-vm = nixpkgs-stable.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
           { nixpkgs.hostPlatform = "x86_64-linux"; }
