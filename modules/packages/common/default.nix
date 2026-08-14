@@ -1,11 +1,7 @@
 {pkgs, config, inputs, ...}: {
-  # Enable home-manager for every machine that pulls in the common module
-  # (desktops via their packages set, VMs via vm-common.nix). This is what
-  # makes modules/home (zsh, starship, fastfetch, ...) apply everywhere.
-  imports = [
-    inputs.home-manager.nixosModules.home-manager
-  ];
-
+  # Home-manager module is imported per-host in flake.nix with the matching
+  # release (VMs: home-manager-stable; desktops: home-manager), so this module
+  # only carries the shared home-manager configuration.
   home-manager.backupFileExtension = "hm-backup";
   home-manager.users.${config.local.username} = {
     imports = [ ../../home ];

@@ -46,6 +46,14 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Home Manager matching the stable track: the VM fleet builds from
+    # nixpkgs-stable (26.05), so its home-manager must be release-26.05
+    # (mismatch check would otherwise fire).
+    home-manager-stable = {
+      url = "github:nix-community/home-manager/release-26.05";
+      inputs.nixpkgs.follows = "nixpkgs-stable";
+    };
+
     nixvirt = {
       url = "github:AshleyYakeley/NixVirt";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -76,6 +84,7 @@
     nix-flatpak,
     apple-silicon,
     home-manager,
+    home-manager-stable,
     nixvirt,
     comfyui-nix,
     ...
@@ -116,6 +125,7 @@
         specialArgs = {inherit inputs;};
         modules = [
           { nixpkgs.hostPlatform = "x86_64-linux"; }
+          home-manager-stable.nixosModules.home-manager
           ./hosts/nixos-service-vm/hardware-configuration.nix
           ./hosts/nixos-service-vm/default.nix
 
@@ -127,6 +137,7 @@
         specialArgs = {inherit inputs;};
         modules = [
           { nixpkgs.hostPlatform = "x86_64-linux"; }
+          home-manager-stable.nixosModules.home-manager
           ./hosts/nixos-git-vm/hardware-configuration.nix
           ./hosts/nixos-git-vm/default.nix
 
@@ -138,6 +149,7 @@
         specialArgs = {inherit inputs;};
         modules = [
           { nixpkgs.hostPlatform = "x86_64-linux"; }
+          home-manager-stable.nixosModules.home-manager
           ./hosts/nixos-gpu-vm/hardware-configuration.nix
           ./hosts/nixos-gpu-vm/default.nix
 
@@ -149,6 +161,7 @@
         specialArgs = {inherit inputs;};
         modules = [
           { nixpkgs.hostPlatform = "x86_64-linux"; }
+          home-manager-stable.nixosModules.home-manager
           ./hosts/nixos-essential-vm/hardware-configuration.nix
           ./hosts/nixos-essential-vm/default.nix
         ];
