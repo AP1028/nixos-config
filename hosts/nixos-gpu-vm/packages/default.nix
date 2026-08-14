@@ -1,14 +1,22 @@
 {
   pkgs,
   config,
+  inputs,
   ...
 }: let
   # GPUs here are 2x RTX 2080 Ti (Turing, sm_75). The CUDA arch list still
-  # carries the old sm_61 (Pascal) entries plus sm_75 for the 2080 Ti; llama.cpp
-  # builds against cudaPackages_12_9 which supports both.
+  # carries the old sm_61 (Pascal) entries plus sm_75 for the 2080 Ti.
   # rpcSupport compiles in the RPC backend + rpc-server for future llama RPC
   # work, but no RPC services/clients are configured yet.
-  cudaPackages = pkgs.cudaPackages_12_2.overrideScope (final: prev: {
+  #
+  # CUDA must match the vGPU guest driver (535.309.01 = max CUDA 12.2):
+  # newer toolkits fail at kernel load ("device kernel image is invalid").
+  # nixpkgs removed 12.2 from current/old inputs; only nixos-23.11 carries it.
+  cuda23 = import inputs.nixos-23-11 {
+    system = "x86_64-linux";
+    config.allowUnfree = true;
+  };
+  cudaPackages = cuda23.cudaPackages_12_2.overrideScope (final: prev: {
     flags = prev.flags // {
       cmakeCudaArchitecturesString = "61;75;80;86;89;90;100;103;120;121";
     };
