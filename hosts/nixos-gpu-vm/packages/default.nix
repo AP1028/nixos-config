@@ -17,10 +17,14 @@
     config.allowUnfree = true;
   };
   cudaPackages = cuda23.cudaPackages_12_2.overrideScope (final: prev: {
+    # 23.11's backendStdenv (gcc 12.3) lacks nixInfoLog/concatTo which 26.05's
+    # cmake-4.1.6 / install-shell-files hooks require -> use 26.05's gcc12
+    # stdenv (nvcc 12.2 supports gcc 12; setup.sh has the functions).
+    backendStdenv = pkgs.gcc12Stdenv;
     # 23.11's cudaFlags shape differs from modern nixpkgs; the (modern)
     # llama-cpp derivation only reads flags.cmakeCudaArchitecturesString.
+    # nvcc 12.2 ceiling: sm_90 is the newest it knows (no 100/103/120/121).
     flags = {
-      # nvcc 12.2 ceiling: sm_90 is the newest it knows (no 100/103/120/121)
       cmakeCudaArchitecturesString = "61;75;80;86;89;90";
     };
   });
