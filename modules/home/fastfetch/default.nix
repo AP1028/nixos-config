@@ -20,11 +20,13 @@ in {
   config = lib.mkIf cfg.enable {
     programs.fastfetch.enable = true;
 
-    home.file = lib.mapAttrs' (name: target: {
-      name = target;
-      value.source = presetDir + "/${name}.jsonc";
-    }) presetFiles;
+    # Custom preset + config are commented out: fastfetch now uses its
+    # built-in default config (default look).
+    # home.file = lib.mapAttrs' (name: target: {
+    #   name = target;
+    #   value.source = presetDir + "/${name}.jsonc";
+    # }) presetFiles;
 
-    xdg.configFile."fastfetch/config.jsonc".source = presetDir + "/${selected}.jsonc";
+    # xdg.configFile."fastfetch/config.jsonc".source = presetDir + "/${selected}.jsonc";
   };
 }
