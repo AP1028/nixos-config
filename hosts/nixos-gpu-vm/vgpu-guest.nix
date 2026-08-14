@@ -50,6 +50,8 @@
     '';
   }).overrideAttrs (old: {src = gridRun;});
 in {
+  imports = [./vgpu-guest-options.nix];
+
   nixpkgs.config.nvidia.acceptLicense = true;
 
   # The nixpkgs desktop nvidia driver must NOT be used (see gpu.nix):
@@ -71,11 +73,8 @@ in {
   # ld.so.conf.d/ldconfig is a dead end on NixOS: glibc's sysconfdir is
   # compiled to a store path, so ldconfig can't write a cache and the loader
   # never reads /etc/ld.so.cache. CUDA binaries instead get the grid lib dir
-  # via rpath (see hosts/nixos-gpu-vm/packages/default.nix).
-  options.local.nvidiaGridLib = lib.mkOption {
-    type = lib.types.str;
-    description = "NVIDIA vGPU guest userspace lib dir (for CUDA binary rpaths)";
-  };
+  # via rpath (see hosts/nixos-gpu-vm/packages/default.nix). The
+  # local.nvidiaGridLib option is declared in vgpu-guest-options.nix.
   config.local.nvidiaGridLib = "${nvidiaGrid}/lib";
 
   # gridd.conf for the license client: FeatureType=1 = auto (Q profile -> vWS,
