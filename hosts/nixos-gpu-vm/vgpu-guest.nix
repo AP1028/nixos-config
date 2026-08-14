@@ -13,9 +13,31 @@
   #   - license: gridd fetches a token from FastAPI-DLS (essential-vm)
   # Served from the Proxmox node (LAN mirror, /root/vgpu): the upstream alist
   # mirror keeps resetting HTTP/2 streams mid-transfer for this 332MB file.
-  gridRunUrl = "http://192.168.3.100:8000/NVIDIA-Linux-x86_64-535.309.01-grid.run";
+  gridRunUrl = "https://alist.homelabproject.cc/d/foxipan/vGPU/16.14/NVIDIA-GRID-Linux-KVM-535.309.01-539.72/Guest_Drivers/NVIDIA-Linux-x86_64-535.309.01-grid.run";
 
-  nvidiaGrid = config.boot.kernelPackages.nvidiaPackages.mkDriver {
+  # Robust fetch: alist caps connections (~5min/~90MB per attempt, no matter
+  # the connection dies and curl resumes with --continue-at -), so retry a lot,
+  # force HTTP/1.1 (HTTP/2 stream resets), abort stalled connections fast, and
+  # fall back to the alist proxy endpoint, then the LAN mirror on the Proxmox
+  # node (vgpu-mirror.service). Same sha256 -> same store path regardless.
+  gridRun = pkgs.fetchurl {
+    urls = [
+      gridRunUrl
+      "https://alist.homelabproject.cc/p/foxipan/vGPU/16.14/NVIDIA-GRID-Linux-KVM-535.309.01-539.72/Guest_Drivers/NVIDIA-Linux-x86_64-535.309.01-grid.run"
+      "http://192.168.3.100:8000/NVIDIA-Linux-x86_64-535.309.01-grid.run"
+    ];
+    sha256 = "1zym4ra7hahjrl86xx93rnhgka13pij600dqgi73p5g45mnrdym5";
+    curlOptsList = [
+      "--http1.1"
+      "--retry" "10"
+      "--retry-delay" "1"
+      "--retry-all-errors"
+      "--speed-limit" "10240"
+      "--speed-time" "120"
+    ];
+  };
+
+  nvidiaGrid = (config.boot.kernelPackages.nvidiaPackages.mkDriver {
     version = "535.309.01";
     url = gridRunUrl;
     sha256_64bit = "1zym4ra7hahjrl86xx93rnhgka13pij600dqgi73p5g45mnrdym5";
@@ -26,7 +48,7 @@
       install -Dm755 nvidia-gridd $bin/bin/nvidia-gridd
       patchelf --set-rpath "$out/lib:$libPath" $bin/bin/nvidia-gridd
     '';
-  };
+  }).overrideAttrs (old: {src = gridRun;});
 in {
   nixpkgs.config.nvidia.acceptLicense = true;
 
