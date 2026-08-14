@@ -6,16 +6,26 @@ if [ "$(id -u)" -eq 0 ]; then
   exit 1
 fi
 
+# Guard: never proceed if the invoking user resolves to root — this would bake
+# username = "root" into local.nix and the users config. Belt-and-suspenders on
+# top of the id -u check above.
+if [ "$(whoami)" = "root" ]; then
+  echo "Refusing to run as root (whoami = root). Re-run as a regular user; sudo is handled internally." >&2
+  exit 1
+fi
+
 CONFIG_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST=""
 AUTO_REPLACE=0
 AUTO_ABORT=0
+AUTO_LOCAL_NIX=0
 
 usage() {
   echo "Usage: $0 [--host=HOST | HOST] [--replace-hardware | --abort-hardware]" >&2
   echo "  --host=HOST         Rebuild the given host (no auto-detect / selection prompt)" >&2
   echo "  --replace-hardware  Auto-choose 'replace' when /etc/nixos hardware config differs" >&2
   echo "  --abort-hardware    Auto-choose 'abort' when /etc/nixos hardware config differs" >&2
+  echo "  --auto-local-nix    Auto-create local.nix with the current user (no prompt)" >&2
   echo "  (no flags)          Interactive prompts as before" >&2
 }
 
@@ -38,6 +48,7 @@ while [ $# -gt 0 ]; do
       ;;
     --replace-hardware) AUTO_REPLACE=1 ;;
     --abort-hardware) AUTO_ABORT=1 ;;
+    --auto-local-nix) AUTO_LOCAL_NIX=1 ;;
     -h|--help) usage; exit 0 ;;
     -*)
       echo "Unknown option: $1" >&2
@@ -176,14 +187,21 @@ fi
 
 # First run: create local.nix from the tracked template
 if [ ! -f "$CONFIG_DIR/local.nix" ]; then
-  DEFAULT_USER="$(whoami)"
-  echo ""
-  echo "First time setup: configure the main user for this machine."
-  read -rp "Username [${DEFAULT_USER}]: " MAIN_USER
-  MAIN_USER="${MAIN_USER:-$DEFAULT_USER}"
-  sed -e "s|main-user|$MAIN_USER|g" \
+  if [ "$AUTO_LOCAL_NIX" -eq 1 ]; then
+    MAIN_USER="$(whoami)"
+    echo "Auto-creating local.nix with current user: $MAIN_USER"
+  else
+    DEFAULT_USER="$(whoami)"
+    echo ""
+    echo "First time setup: configure the main user for this machine."
+    read -rp "Username [${DEFAULT_USER}]: " MAIN_USER
+    MAIN_USER="${MAIN_USER:-$DEFAULT_USER}"
+  fi
+  # Path substitution first: 'main-user' inside the path would otherwise be
+  # rewritten by the username substitution below, leaving a wrong configDir.
+  sed -e "s|/home/main-user/nixos-config|$CONFIG_DIR|" \
+      -e "s|main-user|$MAIN_USER|g" \
       -e "s|Main User|$MAIN_USER|g" \
-      -e "s|/home/main-user/nixos-config|$CONFIG_DIR|" \
       "$CONFIG_DIR/local.nix.template" > "$CONFIG_DIR/local.nix"
   echo "Created local.nix with username: $MAIN_USER, configDir: $CONFIG_DIR"
 fi
