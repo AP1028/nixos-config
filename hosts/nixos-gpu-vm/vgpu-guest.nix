@@ -65,10 +65,12 @@ in {
   environment.etc."ld.so.conf.d/nvidia-grid.conf".text = "${nvidiaGrid}/lib";
   environment.systemPackages = [nvidiaGrid.bin];
 
-  # gridd.conf for the license client: FeatureType=4 = "NVIDIA vGPU for Compute"
+  # gridd.conf for the license client: FeatureType=1 = auto (Q profile -> vWS,
+  # which FastAPI-DLS serves). FeatureType=4 (vGPU for Compute) is NOT served
+  # by FastAPI-DLS v1.x and leaves the vGPU unlicensed.
   environment.etc."nvidia/gridd.conf".text = ''
-    # Generated for FastAPI-DLS licensing (vGPU for Compute)
-    FeatureType=4
+    # Generated for FastAPI-DLS licensing
+    FeatureType=1
   '';
 
   # nvidia-gridd fetches a client token from FastAPI-DLS on essential-vm
@@ -76,7 +78,6 @@ in {
   systemd.services.nvidia-gridd = {
     description = "NVIDIA vGPU Guest daemon (license client)";
     wantedBy = ["multi-user.target"];
-    unitConfig.ConditionPathExists = "/dev/nvidiactl";
 
     preStart = ''
       TOKEN_DIR=/etc/nvidia/ClientConfigToken
