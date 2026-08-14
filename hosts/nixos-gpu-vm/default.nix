@@ -35,4 +35,11 @@
   # nixpkgs added its own `services.comfyui` module (2026-08); the comfyui-nix
   # flake module declares the same option, so keep only comfyui-nix's.
   disabledModules = [ "services/misc/comfyui.nix" ];
+
+  # 32G VM: nix's default 16 parallel derivations (make -j16 each) OOM-kill
+  # cc1plus during triton/onnxruntime builds. Cap total build parallelism.
+  nix.settings = {
+    max-jobs = 2;
+    cores = 4;
+  };
 }
