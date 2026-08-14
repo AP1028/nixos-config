@@ -89,11 +89,8 @@
       scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
       triton = prev.triton.overridePythonAttrs (old: {
         doCheck = false;
-        # NVIDIA-only box: drop triton's amd backend (huge IR TUs, nothing to
-        # do with resources — just scope; keeps builds faster/smaller).
-        postPatch = (old.postPatch or "") + ''
-          sed -i 's/\["nvidia", "amd"\]/["nvidia"]/' setup.py
-        '';
+        # NOTE: cannot scope triton to the nvidia backend — 3.7's core
+        # (gluon_ir.cc) hard-includes the amd dialect's generated headers.
       });
       onnxruntime = prev.onnxruntime.overridePythonAttrs (old: {doCheck = false;});
       inline-snapshot = prev."inline-snapshot".overridePythonAttrs (old: {doCheck = false;});
