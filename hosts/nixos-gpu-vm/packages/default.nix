@@ -45,6 +45,11 @@ in {
       # 23.11's postPatch substitutes ggml-metal.m (macOS-only) which does not
       # exist in the b10331 source -> drop it (metalSupport is false here).
       postPatch = "";
+      # b10331 cmake leaves a CMAKE_BUILD_RPATH entry pointing into /build/
+      # (kept by rpath-shrink since a needed lib resolves there); the check
+      # would fail the build. The stale entry is harmless (loader skips
+      # missing dirs) and postFixup adds the grid rpath anyway.
+      forbiddenReferences = [];
       # b10331 moved the rpc-server to tools/rpc (target ggml-rpc-server) and
       # only installs it with LLAMA_TOOLS_INSTALL=ON. 23.11's llama-cpp has no
       # rpcSupport arg -> GGML_RPC here; arch list capped at sm_90 (nvcc 12.2).
