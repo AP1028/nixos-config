@@ -89,14 +89,10 @@
       scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
       triton = prev.triton.overridePythonAttrs (old: {
         doCheck = false;
-        # triton's setup.py builds nvidia+amd backends (huge AMDGPU IR TUs
-        # that OOM the 32G gpu-vm cgroup) with cmake -j (MAX_JOBS). This box
-        # is NVIDIA-only -> drop the amd backend and cap the jobs.
+        # NVIDIA-only box: drop triton's amd backend (huge IR TUs, nothing to
+        # do with resources — just scope; keeps builds faster/smaller).
         postPatch = (old.postPatch or "") + ''
           sed -i 's/\["nvidia", "amd"\]/["nvidia"]/' setup.py
-        '';
-        preBuild = (old.preBuild or "") + ''
-          export MAX_JOBS=4
         '';
       });
       onnxruntime = prev.onnxruntime.overridePythonAttrs (old: {doCheck = false;});
