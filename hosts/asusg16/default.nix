@@ -59,4 +59,8 @@
     ../../modules/env/no-internet.nix
     ../../modules/system/sudo-env.nix
   ];
+
+  # nixpkgs added its own `services.comfyui` module (2026-08); the comfyui-nix
+  # flake module declares the same option, so keep only comfyui-nix's.
+  disabledModules = [ "services/misc/comfyui.nix" ];
 }
