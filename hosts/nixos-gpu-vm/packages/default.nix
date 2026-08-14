@@ -25,7 +25,7 @@ in {
   ];
 
   environment.systemPackages = with pkgs; [
-    (cuda23.llama-cpp.override {
+    ((cuda23.llama-cpp.override {
       cudaSupport = true;
       inherit cudaPackages;
     }).overrideAttrs (old: {
@@ -81,7 +81,7 @@ in {
           patchelf --add-rpath ${config.local.nvidiaGridLib} "$f" 2>/dev/null || true
         done
       '';
-    })
+    }))
 
     # gguf model tooling (metadata scans, split computation, ...)
     (python3.withPackages (ps: [ps.numpy]))
