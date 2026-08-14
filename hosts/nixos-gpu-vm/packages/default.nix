@@ -8,7 +8,7 @@
   # builds against cudaPackages_12_9 which supports both.
   # rpcSupport compiles in the RPC backend + rpc-server for future llama RPC
   # work, but no RPC services/clients are configured yet.
-  cudaPackages = pkgs.cudaPackages_12_9.overrideScope (final: prev: {
+  cudaPackages = pkgs.cudaPackages_12_2.overrideScope (final: prev: {
     flags = prev.flags // {
       cmakeCudaArchitecturesString = "61;75;80;86;89;90;100;103;120;121";
     };

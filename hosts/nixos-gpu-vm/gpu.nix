@@ -9,7 +9,7 @@
   hardware.graphics.enable = true;
 
   environment.systemPackages = with pkgs; [
-    cudaPackages_12_9.cudatoolkit
+    cudaPackages_12_2.cudatoolkit
     nvtopPackages.nvidia
   ];
 }
