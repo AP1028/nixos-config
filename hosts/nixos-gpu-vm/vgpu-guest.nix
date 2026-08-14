@@ -69,11 +69,21 @@ in {
   environment.etc."ld.so.conf.d/nvidia-grid.conf".text = "${nvidiaGrid}/lib";
   environment.systemPackages = [nvidiaGrid.bin];
 
-  # NixOS has no automatic ldconfig: regenerate the cache at every
-  # activation/boot so CUDA apps find libcuda.so.1 etc.
-  system.activationScripts.nvidia-grid-ldconfig = lib.stringAfter ["etc"] ''
-    ${pkgs.glibc.bin}/bin/ldconfig
-  '';
+  # NixOS links /etc/ld.so.cache into the store (read-only), so plain ldconfig
+  # fails. Remove the symlink first, then regenerate a real cache at boot so
+  # CUDA apps (llama.cpp, torch, ...) find libcuda.so.1 etc.
+  systemd.services.nvidia-grid-ldconfig = {
+    description = "Regenerate ld.so.cache for NVIDIA grid userspace";
+    wantedBy = ["sysinit.target"];
+    before = ["sysinit.target"];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStart = pkgs.writeShellScript "nvidia-grid-ldconfig" ''
+        rm -f /etc/ld.so.cache
+        ${pkgs.glibc.bin}/bin/ldconfig
+      '';
+    };
+  };
 
   # gridd.conf for the license client: FeatureType=1 = auto (Q profile -> vWS,
   # which FastAPI-DLS serves). FeatureType=4 (vGPU for Compute) is NOT served
