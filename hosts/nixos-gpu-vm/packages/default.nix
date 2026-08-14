@@ -49,7 +49,7 @@ in {
       # only installs it with LLAMA_TOOLS_INSTALL=ON. 23.11's llama-cpp has no
       # rpcSupport arg -> GGML_RPC here; arch list capped at sm_90 (nvcc 12.2).
       # b10331 hard-errors on deprecated LLAMA_CUBLAS which 23.11 passes.
-      cmakeFlags = (builtins.filter (f: !builtins.hasPrefix "-DLLAMA_CUBLAS" f) old.cmakeFlags) ++ [
+      cmakeFlags = (builtins.filter (f: (builtins.match "-DLLAMA_CUBLAS.*" f) == null) old.cmakeFlags) ++ [
         "-DLLAMA_TOOLS_INSTALL=ON"
         "-DGGML_RPC=ON"
         "-DCMAKE_CUDA_ARCHITECTURES=61;75;80;86;89;90"
