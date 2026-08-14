@@ -1,5 +1,6 @@
 {
   pkgs,
+  config,
   ...
 }: let
   # GPUs here are 2x RTX 2080 Ti (Turing, sm_75). The CUDA arch list still
@@ -61,6 +62,14 @@ in {
         ["cp bin/rpc-server $out/bin/llama-rpc-server"]
         ["cp $out/bin/ggml-rpc-server $out/bin/llama-rpc-server"]
         old.postInstall;
+      # vGPU guest driver libs (libcuda.so.1 etc.) are outside nixpkgs'
+      # closure (grid driver from vgpu-guest.nix); NixOS has no working
+      # ld.so.cache, so bake the grid lib dir into the binaries' rpath.
+      postFixup = (old.postFixup or "") + ''
+        for f in $out/bin/*; do
+          patchelf --add-rpath ${config.local.nvidiaGridLib} "$f" 2>/dev/null || true
+        done
+      '';
     }))
 
     # gguf model tooling (metadata scans, split computation, ...)
