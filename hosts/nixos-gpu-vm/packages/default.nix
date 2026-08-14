@@ -70,7 +70,7 @@ in {
               case "''${type#* }" in
                 -A*) echo "concatTo(): ERROR: associative array." >&2; return 1 ;;
                 -a*) targetref+=( "''${nameref[@]}" ) ;;
-                *) targetref+=( "''${nameref-}" ) ;;
+                *) targetref+=( ''${nameref-} ) ;;
               esac
             fi
           done
