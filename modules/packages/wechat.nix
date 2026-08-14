@@ -5,6 +5,7 @@
     buildInputs = [pkgs.makeWrapper];
     postBuild = ''
       wrapProgram $out/bin/wechat \
+        --run 'ulimit -n 65536' \
         --set QT_QPA_PLATFORM xcb \
         --set XMODIFIERS "@im=fcitx" \
         --set QT_IM_MODULE fcitx \
