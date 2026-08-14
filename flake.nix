@@ -98,6 +98,9 @@
             nixpkgs.overlays = [
               (final: prev: {
                 qemu_full = prev.qemu_full.override { cephSupport = false; };
+                # moonlight-qt 6.1.0 does not build against ffmpeg >= 8
+                # (AVCodec.pix_fmts was removed in FFmpeg 8.0); pin ffmpeg_7.
+                moonlight-qt = prev.moonlight-qt.override { ffmpeg = prev.ffmpeg_7; };
               })
             ];
           })
