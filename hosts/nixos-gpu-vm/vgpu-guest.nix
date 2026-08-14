@@ -11,7 +11,9 @@
   #     (soname symlinks, patchelf rpaths, GLVND/EGL/Vulkan wiring, kmod)
   #   - nvidia-gridd: not in nixpkgs' binary list, added via postInstall
   #   - license: gridd fetches a token from FastAPI-DLS (essential-vm)
-  gridRunUrl = "https://alist.homelabproject.cc/d/foxipan/vGPU/16.14/NVIDIA-GRID-Linux-KVM-535.309.01-539.72/Guest_Drivers/NVIDIA-Linux-x86_64-535.309.01-grid.run";
+  # Served from the Proxmox node (LAN mirror, /root/vgpu): the upstream alist
+  # mirror keeps resetting HTTP/2 streams mid-transfer for this 332MB file.
+  gridRunUrl = "http://192.168.3.100:8000/NVIDIA-Linux-x86_64-535.309.01-grid.run";
 
   nvidiaGrid = config.boot.kernelPackages.nvidiaPackages.mkDriver {
     version = "535.309.01";
