@@ -52,63 +52,67 @@
 in {
   imports = [./vgpu-guest-options.nix];
 
-  nixpkgs.config.nvidia.acceptLicense = true;
+  # Explicit config block: assigning `config.local.*` above would trigger
+  # NixOS' strict module mode for top-level `config`/`options` attributes.
+  config = {
+    nixpkgs.config.nvidia.acceptLicense = true;
 
-  # The nixpkgs desktop nvidia driver must NOT be used (see gpu.nix):
-  # it only activates via services.xserver.videoDrivers = ["nvidia"],
-  # which is forced off here.
-  services.xserver.videoDrivers = lib.mkForce [];
+    # The nixpkgs desktop nvidia driver must NOT be used (see gpu.nix):
+    # it only activates via services.xserver.videoDrivers = ["nvidia"],
+    # which is forced off here.
+    services.xserver.videoDrivers = lib.mkForce [];
 
-  # Kernel module for the running kernel, loaded at boot.
-  # nouveau MUST not touch the vGPU: probing it first corrupts the MSI domain
-  # (irq_domain_remove/msi_device_data_release warnings; nv_init_msi then
-  # fails and the driver wedges -> nvidia-smi hangs in D state).
-  boot.blacklistedKernelModules = ["nouveau"];
-  boot.kernelModules = lib.mkAfter ["nvidia" "nvidia-uvm"];
-  boot.extraModulePackages = [nvidiaGrid.mod];
+    # Kernel module for the running kernel, loaded at boot.
+    # nouveau MUST not touch the vGPU: probing it first corrupts the MSI domain
+    # (irq_domain_remove/msi_device_data_release warnings; nv_init_msi then
+    # fails and the driver wedges -> nvidia-smi hangs in D state).
+    boot.blacklistedKernelModules = ["nouveau"];
+    boot.kernelModules = lib.mkAfter ["nvidia" "nvidia-uvm"];
+    boot.extraModulePackages = [nvidiaGrid.mod];
 
-  # Userspace libs (libnvidia-ml, libcuda, ...) for nvidia-smi and CUDA apps.
-  environment.systemPackages = [nvidiaGrid.bin];
+    # Userspace libs (libnvidia-ml, libcuda, ...) for nvidia-smi and CUDA apps.
+    environment.systemPackages = [nvidiaGrid.bin];
 
-  # ld.so.conf.d/ldconfig is a dead end on NixOS: glibc's sysconfdir is
-  # compiled to a store path, so ldconfig can't write a cache and the loader
-  # never reads /etc/ld.so.cache. CUDA binaries instead get the grid lib dir
-  # via rpath (see hosts/nixos-gpu-vm/packages/default.nix). The
-  # local.nvidiaGridLib option is declared in vgpu-guest-options.nix.
-  config.local.nvidiaGridLib = "${nvidiaGrid}/lib";
+    # ld.so.conf.d/ldconfig is a dead end on NixOS: glibc's sysconfdir is
+    # compiled to a store path, so ldconfig can't write a cache and the loader
+    # never reads /etc/ld.so.cache. CUDA binaries instead get the grid lib dir
+    # via rpath (see hosts/nixos-gpu-vm/packages/default.nix). The
+    # local.nvidiaGridLib option is declared in vgpu-guest-options.nix.
+    local.nvidiaGridLib = "${nvidiaGrid}/lib";
 
-  # gridd.conf for the license client: FeatureType=1 = auto (Q profile -> vWS,
-  # which FastAPI-DLS serves). FeatureType=4 (vGPU for Compute) is NOT served
-  # by FastAPI-DLS v1.x and leaves the vGPU unlicensed.
-  environment.etc."nvidia/gridd.conf".text = ''
-    # Generated for FastAPI-DLS licensing
-    FeatureType=1
-  '';
-
-  # nvidia-gridd fetches a client token from FastAPI-DLS on essential-vm
-  # (192.168.3.151:443) and leases a license for the vGPU.
-  systemd.services.nvidia-gridd = {
-    description = "NVIDIA vGPU Guest daemon (license client)";
-    wantedBy = ["multi-user.target"];
-
-    preStart = ''
-      # gridd exits unless it can create its license state dir
-      mkdir -p /var/lib/nvidia/GridLicensing
-      TOKEN_DIR=/etc/nvidia/ClientConfigToken
-      mkdir -p "$TOKEN_DIR"
-      if ! ls "$TOKEN_DIR"/client_configuration_token_*.tok >/dev/null 2>&1; then
-        ${pkgs.curl}/bin/curl -sk --max-time 20 \
-          "https://192.168.3.151/-/client-token" \
-          -o "$TOKEN_DIR/client_configuration_token_$(date +%m-%d-%Y-%H-%M-%S).tok" \
-          || echo "warning: failed to fetch license token from FastAPI-DLS"
-      fi
+    # gridd.conf for the license client: FeatureType=1 = auto (Q profile -> vWS,
+    # which FastAPI-DLS serves). FeatureType=4 (vGPU for Compute) is NOT served
+    # by FastAPI-DLS v1.x and leaves the vGPU unlicensed.
+    environment.etc."nvidia/gridd.conf".text = ''
+      # Generated for FastAPI-DLS licensing
+      FeatureType=1
     '';
 
-    serviceConfig = {
-      Type = "simple";
-      ExecStart = "${nvidiaGrid.bin}/bin/nvidia-gridd";
-      Restart = "on-failure";
-      RestartSec = "5s";
+    # nvidia-gridd fetches a client token from FastAPI-DLS on essential-vm
+    # (192.168.3.151:443) and leases a license for the vGPU.
+    systemd.services.nvidia-gridd = {
+      description = "NVIDIA vGPU Guest daemon (license client)";
+      wantedBy = ["multi-user.target"];
+
+      preStart = ''
+        # gridd exits unless it can create its license state dir
+        mkdir -p /var/lib/nvidia/GridLicensing
+        TOKEN_DIR=/etc/nvidia/ClientConfigToken
+        mkdir -p "$TOKEN_DIR"
+        if ! ls "$TOKEN_DIR"/client_configuration_token_*.tok >/dev/null 2>&1; then
+          ${pkgs.curl}/bin/curl -sk --max-time 20 \
+            "https://192.168.3.151/-/client-token" \
+            -o "$TOKEN_DIR/client_configuration_token_$(date +%m-%d-%Y-%H-%M-%S).tok" \
+            || echo "warning: failed to fetch license token from FastAPI-DLS"
+        fi
+      '';
+
+      serviceConfig = {
+        Type = "simple";
+        ExecStart = "${nvidiaGrid.bin}/bin/nvidia-gridd";
+        Restart = "on-failure";
+        RestartSec = "5s";
+      };
     };
   };
 }
