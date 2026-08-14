@@ -56,7 +56,11 @@ in {
       # only installs it with LLAMA_TOOLS_INSTALL=ON. 23.11's llama-cpp has no
       # rpcSupport arg -> GGML_RPC here; arch list capped at sm_90 (nvcc 12.2).
       # b10331 hard-errors on deprecated LLAMA_CUBLAS which 23.11 passes.
+      # b10331 hard-errors on deprecated LLAMA_CUBLAS which 23.11 passes ->
+      # filter it, but re-enable CUDA via GGML_CUDA (filtering alone would
+      # silently drop the CUDA backend from the build!).
       cmakeFlags = (builtins.filter (f: (builtins.match "-DLLAMA_CUBLAS.*" f) == null) old.cmakeFlags) ++ [
+        "-DGGML_CUDA=ON"
         "-DLLAMA_TOOLS_INSTALL=ON"
         "-DGGML_RPC=ON"
         "-DCMAKE_CUDA_ARCHITECTURES=61;75;80;86;89;90"
@@ -87,9 +91,17 @@ in {
       # (libggml-cuda.so is what actually links libcuda.so.1; the fixup's
       # rpath-shrink keeps entries that resolve a needed library).
       postFixup = (old.postFixup or "") + ''
+        # 23.11 renames libs with a llama-cpp- prefix but SONAMEs stay
+        # unprefixed -> symlink the soname names.
+        for f in $out/bin/llama-cpp-lib*.so*; do
+          b=$(basename "$f" | sed 's/^llama-cpp-//')
+          [ -e "$(dirname "$f")/$b" ] || ln -sf "$(basename "$f")" "$(dirname "$f")/$b"
+        done
+        # 23.11 sets no install rpath -> bake in bin/lib (where the libs
+        # live) plus the vGPU grid libs (libcuda.so.1 etc.).
         for f in $out/bin/* $out/lib/*.so*; do
           [ -e "$f" ] || continue
-          patchelf --add-rpath ${config.local.nvidiaGridLib} "$f" 2>/dev/null || true
+          patchelf --add-rpath $out/bin:$out/lib:${config.local.nvidiaGridLib} "$f" 2>/dev/null || true
         done
       '';
     }))
