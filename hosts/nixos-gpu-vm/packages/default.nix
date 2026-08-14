@@ -20,7 +20,8 @@
     # 23.11's cudaFlags shape differs from modern nixpkgs; the (modern)
     # llama-cpp derivation only reads flags.cmakeCudaArchitecturesString.
     flags = {
-      cmakeCudaArchitecturesString = "61;75;80;86;89;90;100;103;120;121";
+      # nvcc 12.2 ceiling: sm_90 is the newest it knows (no 100/103/120/121)
+      cmakeCudaArchitecturesString = "61;75;80;86;89;90";
     };
   });
 in {
