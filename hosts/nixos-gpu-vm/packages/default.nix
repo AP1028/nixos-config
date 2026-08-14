@@ -52,6 +52,30 @@ in {
       # b10331 moved the rpc-server to tools/rpc (target ggml-rpc-server) and
       # only installs it with LLAMA_TOOLS_INSTALL=ON
       cmakeFlags = old.cmakeFlags ++ [ "-DLLAMA_TOOLS_INSTALL=ON" ];
+      # 26.05's cmake-4.1.6 setup-hook calls concatTo, which its stdenv only
+      # provides when 26.05's own cuda hooks are present (23.11's 12.2 set
+      # lacks it) -> provide the shim (definition from nixpkgs setup.sh).
+      preConfigure = (old.preConfigure or "") + ''
+        concatTo() {
+          local -
+          set -o noglob
+          local -n targetref="$1"; shift
+          local arg default name type
+          for arg in "$@"; do
+            IFS="=" read -r name default <<< "$arg"
+            local -n nameref="$name"
+            if [[ -z "''${nameref[*]}" && -n "$default" ]]; then
+              targetref+=( "$default" )
+            elif type=$(declare -p "$name" 2> /dev/null); then
+              case "''${type#* }" in
+                -A*) echo "concatTo(): ERROR: associative array." >&2; return 1 ;;
+                -a*) targetref+=( "''${nameref[@]}" ) ;;
+                *) targetref+=( "''${nameref-}" ) ;;
+              esac
+            fi
+          done
+        }
+      '';
       npmDeps = fetchNpmDeps {
         name = "llama-cpp-10331-npm-deps";
         src = fetchFromGitHub {
