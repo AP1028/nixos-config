@@ -42,6 +42,9 @@ in {
       };
       # stable split-graph uids so the RPC graph cache (GRAPH_RECOMPUTE) engages
       patches = (old.patches or [ ]) ++ [ ../../../packages/patches/rpc-graph-cache.patch ../../../packages/patches/rpc-dspark-draft-path.patch ../../../packages/patches/rpc-debug-tensor-name.patch ../../../packages/patches/rpc-dsv4-compressed-cpu.patch ../../../packages/patches/rpc-server-repack.patch ];
+      # 23.11's postPatch substitutes ggml-metal.m (macOS-only) which does not
+      # exist in the b10331 source -> drop it (metalSupport is false here).
+      postPatch = "";
       # b10331 moved the rpc-server to tools/rpc (target ggml-rpc-server) and
       # only installs it with LLAMA_TOOLS_INSTALL=ON. 23.11's llama-cpp has no
       # rpcSupport arg -> GGML_RPC here; arch list capped at sm_90 (nvcc 12.2).
