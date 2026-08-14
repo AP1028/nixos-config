@@ -64,6 +64,10 @@ in {
         "-DLLAMA_TOOLS_INSTALL=ON"
         "-DGGML_RPC=ON"
         "-DCMAKE_CUDA_ARCHITECTURES=61;75;80;86;89;90"
+        # 23.11's cuda toolkit ships no libcuda.so.1 (driver-owned); link
+        # against the vGPU guest driver's libcuda at build time.
+        "-DCMAKE_EXE_LINKER_FLAGS=-L${config.local.nvidiaGridLib} -Wl,-rpath-link,${config.local.nvidiaGridLib}"
+        "-DCMAKE_SHARED_LINKER_FLAGS=-L${config.local.nvidiaGridLib} -Wl,-rpath-link,${config.local.nvidiaGridLib}"
       ];
       npmDeps = fetchNpmDeps {
         name = "llama-cpp-10331-npm-deps";
