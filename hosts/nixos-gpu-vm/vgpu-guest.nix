@@ -58,6 +58,10 @@ in {
   services.xserver.videoDrivers = lib.mkForce [];
 
   # Kernel module for the running kernel, loaded at boot.
+  # nouveau MUST not touch the vGPU: probing it first corrupts the MSI domain
+  # (irq_domain_remove/msi_device_data_release warnings; nv_init_msi then
+  # fails and the driver wedges -> nvidia-smi hangs in D state).
+  boot.blacklistedKernelModules = ["nouveau"];
   boot.kernelModules = lib.mkAfter ["nvidia" "nvidia-uvm"];
   boot.extraModulePackages = [nvidiaGrid.mod];
 
@@ -80,6 +84,8 @@ in {
     wantedBy = ["multi-user.target"];
 
     preStart = ''
+      # gridd exits unless it can create its license state dir
+      mkdir -p /var/lib/nvidia/GridLicensing
       TOKEN_DIR=/etc/nvidia/ClientConfigToken
       mkdir -p "$TOKEN_DIR"
       if ! ls "$TOKEN_DIR"/client_configuration_token_*.tok >/dev/null 2>&1; then
