@@ -87,7 +87,15 @@
       einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
       mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
       scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
-      triton = prev.triton.overridePythonAttrs (old: {doCheck = false;});
+      triton = prev.triton.overridePythonAttrs (old: {
+        doCheck = false;
+        # triton's setup.py builds nvidia+amd backends with cmake -j
+        # (MAX_JOBS, default 2*cpu_count). 16 parallel cc1plus of the huge
+        # AMDGPU IR TU OOMs the 32G gpu-vm cgroup -> cap it.
+        preBuild = (old.preBuild or "") + ''
+          export MAX_JOBS=4
+        '';
+      });
       onnxruntime = prev.onnxruntime.overridePythonAttrs (old: {doCheck = false;});
       inline-snapshot = prev."inline-snapshot".overridePythonAttrs (old: {doCheck = false;});
       fastapi = prev.fastapi.overridePythonAttrs (old: {doCheck = false;});
