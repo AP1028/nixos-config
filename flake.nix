@@ -189,6 +189,20 @@
         ];
       };
 
+      # Draft: hardware-configuration.nix intentionally omitted; it will be
+      # generated on the VM ("nixos-generate-config") and added here once the
+      # VM is set up with the HDD pool attached.
+      nixos-file-vm = nixpkgs-stable.lib.nixosSystem {
+        specialArgs = {inherit inputs;};
+        modules = [
+          { nixpkgs.hostPlatform = "x86_64-linux"; }
+          home-manager-stable.nixosModules.home-manager
+          ./hosts/nixos-file-vm/default.nix
+
+          vscode-server.nixosModules.default
+        ];
+      };
+
       macbook = nixpkgs.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
