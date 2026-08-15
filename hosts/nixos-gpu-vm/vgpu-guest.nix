@@ -132,14 +132,16 @@ in {
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = pkgs.writeShellScript "nvidia-devnodes" ''
-          NV_MAJ=$(awk '$2 == "nvidia-frontend" {print $1}' /proc/devices)
-          UVM_MAJ=$(awk '$2 == "nvidia_uvm" {print $1}' /proc/devices)
-          MODESET_MAJ=$(awk '$2 == "nvidia-modeset" {print $1}' /proc/devices)
-          [ -n "$NV_MAJ" ] && mknod -m 666 /dev/nvidiactl c "$NV_MAJ" 255 2>/dev/null || true
-          [ -n "$UVM_MAJ" ] && mknod -m 666 /dev/nvidia-uvm c "$UVM_MAJ" 0 2>/dev/null || true
-          [ -n "$MODESET_MAJ" ] && mknod -m 666 /dev/nvidia-modeset c "$MODESET_MAJ" 0 2>/dev/null || true
-          for minor in $(awk '/Minor/{print $4}' /proc/driver/nvidia/gpus/*/information 2>/dev/null); do
-            [ -n "$NV_MAJ" ] && mknod -m 666 "/dev/nvidia$minor" c "$NV_MAJ" "$minor" 2>/dev/null || true
+          AWK=${pkgs.gawk}/bin/awk
+          MKNOD=${pkgs.coreutils}/bin/mknod
+          NV_MAJ=$($AWK '$2 == "nvidia-frontend" {print $1}' /proc/devices)
+          UVM_MAJ=$($AWK '$2 == "nvidia_uvm" {print $1}' /proc/devices)
+          MODESET_MAJ=$($AWK '$2 == "nvidia-modeset" {print $1}' /proc/devices)
+          [ -n "$NV_MAJ" ] && $MKNOD -m 666 /dev/nvidiactl c "$NV_MAJ" 255 2>/dev/null || true
+          [ -n "$UVM_MAJ" ] && $MKNOD -m 666 /dev/nvidia-uvm c "$UVM_MAJ" 0 2>/dev/null || true
+          [ -n "$MODESET_MAJ" ] && $MKNOD -m 666 /dev/nvidia-modeset c "$MODESET_MAJ" 0 2>/dev/null || true
+          for minor in $($AWK '/Minor/{print $4}' /proc/driver/nvidia/gpus/*/information 2>/dev/null); do
+            [ -n "$NV_MAJ" ] && $MKNOD -m 666 "/dev/nvidia$minor" c "$NV_MAJ" "$minor" 2>/dev/null || true
           done
         '';
       };
