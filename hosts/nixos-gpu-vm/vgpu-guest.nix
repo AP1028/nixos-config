@@ -93,6 +93,7 @@ in {
     systemd.services.nvidia-gridd = {
       description = "NVIDIA vGPU Guest daemon (license client)";
       wantedBy = ["multi-user.target"];
+      after = ["nvidia-devnodes.service"];
 
       preStart = ''
         # gridd exits unless it can create its license state dir
@@ -108,10 +109,38 @@ in {
       '';
 
       serviceConfig = {
-        Type = "simple";
+        # gridd daemonizes itself: with Type=simple systemd would see the
+        # parent exit and report the unit dead (while the daemon keeps
+        # running and holding the lease).
+        Type = "forking";
         ExecStart = "${nvidiaGrid.bin}/bin/nvidia-gridd";
         Restart = "on-failure";
         RestartSec = "5s";
+      };
+    };
+
+    # The proprietary driver registers its char devices without devtmpfs
+    # nodes; CUDA (cuInit) requires /dev/nvidia-uvm. Stock distros get these
+    # from NVIDIA's udev mknod rules, which NixOS doesn't ship -> create the
+    # nodes at boot (majors are dynamic, read from /proc/devices).
+    systemd.services.nvidia-devnodes = {
+      description = "Create NVIDIA vGPU device nodes";
+      wantedBy = ["multi-user.target"];
+      before = ["nvidia-gridd.service"];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = pkgs.writeShellScript "nvidia-devnodes" ''
+          NV_MAJ=$(awk '$2 == "nvidia-frontend" {print $1}' /proc/devices)
+          UVM_MAJ=$(awk '$2 == "nvidia_uvm" {print $1}' /proc/devices)
+          MODESET_MAJ=$(awk '$2 == "nvidia-modeset" {print $1}' /proc/devices)
+          [ -n "$NV_MAJ" ] && mknod -m 666 /dev/nvidiactl c "$NV_MAJ" 255 2>/dev/null || true
+          [ -n "$UVM_MAJ" ] && mknod -m 666 /dev/nvidia-uvm c "$UVM_MAJ" 0 2>/dev/null || true
+          [ -n "$MODESET_MAJ" ] && mknod -m 666 /dev/nvidia-modeset c "$MODESET_MAJ" 0 2>/dev/null || true
+          for minor in $(awk '/Minor/{print $4}' /proc/driver/nvidia/gpus/*/information 2>/dev/null); do
+            [ -n "$NV_MAJ" ] && mknod -m 666 "/dev/nvidia$minor" c "$NV_MAJ" "$minor" 2>/dev/null || true
+          done
+        '';
       };
     };
   };
