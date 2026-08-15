@@ -41,5 +41,10 @@
   fileSystems."/HDD" = {
     device = "HDD";
     fsType = "zfs";
+    # A failed import must not drop the system to emergency: the zfs kernel
+    # module is only loaded at the NEXT boot (kernelModules), so a live
+    # "nixos-switch" activation imports before the module exists and fails.
+    # noFail keeps the switch/boot going; the reboot then mounts /HDD.
+    noFail = true;
   };
 }
