@@ -38,6 +38,13 @@
   # Never force-import a foreign root pool (data-safety; the HDD data pool is
   # imported normally by zfs-import-HDD.service).
   boot.zfs.forceImportRoot = false;
+
+  # tianyixia write access to the NAS data: /hdd/Public & /hdd/Dropbox are
+  # owned by gid 666; uid 1000 (tianyixia) already owns /hdd/Private.
+  users.groups.storage = {
+    gid = 666;
+    members = [config.local.username];
+  };
   fileSystems."/hdd" = {
     device = "HDD";
     fsType = "zfs";
