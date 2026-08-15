@@ -30,4 +30,8 @@
 
     ./packages
   ];
+
+  # ZFS for the HDD pool: kernel module + userspace tools, and auto-import at
+  # boot (the exported "HDD" mirror mounts at /HDD; Samba shares it).
+  boot.zfs.enabled = true;
 }
