@@ -134,8 +134,16 @@ in {
         ExecStart = pkgs.writeShellScript "nvidia-devnodes" ''
           AWK=${pkgs.gawk}/bin/awk
           MKNOD=${pkgs.coreutils}/bin/mknod
+          MODPROBE=${pkgs.kmod}/bin/modprobe
+          # nvidia_uvm loads on demand (first nvidia-smi/CUDA call) - make
+          # sure it is present so its major shows up in /proc/devices.
+          $MODPROBE nvidia_uvm 2>/dev/null || true
+          for i in $(seq 1 20); do
+            UVM_MAJ=$($AWK '$2 == "nvidia_uvm" {print $1}' /proc/devices)
+            [ -n "$UVM_MAJ" ] && break
+            sleep 1
+          done
           NV_MAJ=$($AWK '$2 == "nvidia-frontend" {print $1}' /proc/devices)
-          UVM_MAJ=$($AWK '$2 == "nvidia_uvm" {print $1}' /proc/devices)
           MODESET_MAJ=$($AWK '$2 == "nvidia-modeset" {print $1}' /proc/devices)
           [ -n "$NV_MAJ" ] && $MKNOD -m 666 /dev/nvidiactl c "$NV_MAJ" 255 2>/dev/null || true
           [ -n "$UVM_MAJ" ] && $MKNOD -m 666 /dev/nvidia-uvm c "$UVM_MAJ" 0 2>/dev/null || true
@@ -143,6 +151,7 @@ in {
           for minor in $($AWK '/Minor/{print $4}' /proc/driver/nvidia/gpus/*/information 2>/dev/null); do
             [ -n "$NV_MAJ" ] && $MKNOD -m 666 "/dev/nvidia$minor" c "$NV_MAJ" "$minor" 2>/dev/null || true
           done
+          [ -e /dev/nvidia-uvm ] && [ -e /dev/nvidiactl ] || exit 1
         '';
       };
     };
