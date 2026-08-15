@@ -30,6 +30,19 @@
   pkgs,
   ...
 }: let
+  # Folder sizes cannot be computed without the background indexer, and
+  # indexing a 543G tree at boot is exactly what we avoid. With the
+  # "viewable only" (on-demand listing) mode the app would otherwise show a
+  # meaningless "4.0 KB" for every folder, so the UI hides folder sizes and
+  # the API reports them as 0 (useLogicalSize).
+  fileWebCustomCss = pkgs.writeText "file-web-custom.css" ''
+    /* Folder sizes are disabled: on-demand listing has no recursive size
+       index, and a fake 4 KB per folder is worse than no size at all. */
+    .listing-item[data-dir="true"] > .text > .size {
+      display: none !important;
+    }
+  '';
+
   fileWebConfig = (pkgs.formats.yaml {}).generate "file-web.yaml" {
     server = {
       port = 8081;
@@ -57,6 +70,7 @@
             private = true;
             defaultEnabled = true;
             defaultUserScope = "/";
+            useLogicalSize = true; # folders report 0 instead of fake 4 KB
             rules = [
               {
                 folderPath = "/";
@@ -73,6 +87,7 @@
             private = true;
             defaultEnabled = true;
             defaultUserScope = "/";
+            useLogicalSize = true; # folders report 0 instead of fake 4 KB
             rules = [
               {
                 folderPath = "/";
@@ -107,6 +122,9 @@
       name = "NAS Files";
       description = "Web file browser for the HDD ZFS pool";
       disableDefaultLinks = true;
+      styling = {
+        customCSS = "${fileWebCustomCss}"; # hide folder size captions
+      };
     };
 
     userDefaults = {
