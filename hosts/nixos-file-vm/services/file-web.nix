@@ -229,11 +229,10 @@ in {
           proxy_send_timeout 3600s;
 
           # Trust boundary for quantum's proxy auth (must override inbound).
+          # Host / X-Real-IP / X-Forwarded-* come from
+          # recommendedProxySettings; re-setting Host here would send it to
+          # the backend twice and Go's HTTP parser rejects duplicate Host.
           proxy_set_header X-Remote-User "files";
-          proxy_set_header Host $host;
-          proxy_set_header X-Real-IP $remote_addr;
-          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-          proxy_set_header X-Forwarded-Proto $scheme;
         '';
       };
     };
