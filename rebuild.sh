@@ -18,13 +18,16 @@ CONFIG_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOST=""
 AUTO_REPLACE=0
 AUTO_ABORT=0
+AUTO_PUSH_ONLY=0
 AUTO_LOCAL_NIX=0
 
 usage() {
-  echo "Usage: $0 [--host=HOST | HOST] [--replace-hardware | --abort-hardware]" >&2
+  echo "Usage: $0 [--host=HOST | HOST] [--replace-hardware | --abort-hardware | --replace-push-only]" >&2
   echo "  --host=HOST         Rebuild the given host (no auto-detect / selection prompt)" >&2
   echo "  --replace-hardware  Auto-choose 'replace' when /etc/nixos hardware config differs" >&2
   echo "  --abort-hardware    Auto-choose 'abort' when /etc/nixos hardware config differs" >&2
+  echo "  --replace-push-only Auto-choose 'replace + push only': publish the hardware config" >&2
+  echo "                      to the repo but skip the NixOS rebuild" >&2
   echo "  --auto-local-nix    Auto-create local.nix with the current user (no prompt)" >&2
   echo "  (no flags)          Interactive prompts as before" >&2
 }
@@ -48,6 +51,7 @@ while [ $# -gt 0 ]; do
       ;;
     --replace-hardware) AUTO_REPLACE=1 ;;
     --abort-hardware) AUTO_ABORT=1 ;;
+    --replace-push-only) AUTO_PUSH_ONLY=1 ;;
     --auto-local-nix) AUTO_LOCAL_NIX=1 ;;
     -h|--help) usage; exit 0 ;;
     -*)
@@ -68,6 +72,14 @@ done
 
 if [ "$AUTO_REPLACE" -eq 1 ] && [ "$AUTO_ABORT" -eq 1 ]; then
   echo "Error: --replace-hardware and --abort-hardware are mutually exclusive." >&2
+  exit 1
+fi
+if [ "$AUTO_REPLACE" -eq 1 ] && [ "$AUTO_PUSH_ONLY" -eq 1 ]; then
+  echo "Error: --replace-hardware and --replace-push-only are mutually exclusive." >&2
+  exit 1
+fi
+if [ "$AUTO_ABORT" -eq 1 ] && [ "$AUTO_PUSH_ONLY" -eq 1 ]; then
+  echo "Error: --abort-hardware and --replace-push-only are mutually exclusive." >&2
   exit 1
 fi
 
@@ -123,17 +135,22 @@ if [ -e /etc/nixos/hardware-configuration.nix ] &&
     echo "1) Replace the tracked hardware-configuration.nix with the /etc/nixos one"
     echo "   (git pull first, then commit & push, then rebuild)"
     echo "2) Abort"
+    echo "3) Replace the tracked hardware-configuration.nix, commit & push only"
+    echo "   (publish a fresh host's config; skip the NixOS rebuild)"
     if [ "$AUTO_REPLACE" -eq 1 ]; then
       hw_choice=1
       echo "(auto-selected: 1 — replace hardware configuration)"
     elif [ "$AUTO_ABORT" -eq 1 ]; then
       hw_choice=2
       echo "(auto-selected: 2 — abort)"
+    elif [ "$AUTO_PUSH_ONLY" -eq 1 ]; then
+      hw_choice=3
+      echo "(auto-selected: 3 — replace & push only, no rebuild)"
     else
-      read -rp "Choose (1-2): " hw_choice
+      read -rp "Choose (1-3): " hw_choice
     fi
     case "$hw_choice" in
-      1)
+      1|3)
         # Sync the repo with upstream BEFORE touching the file, so the
         # replacement is committed on top of the latest remote state.
         if command -v git >/dev/null 2>&1; then
@@ -146,21 +163,48 @@ if [ -e /etc/nixos/hardware-configuration.nix ] &&
           echo "warning: git not found — hardware-configuration.nix will be updated locally only"
         fi
 
+        mkdir -p "$(dirname "$REPO_HW")"
         cp /etc/nixos/hardware-configuration.nix "$REPO_HW"
         echo "Replaced: $REPO_HW"
 
         if command -v git >/dev/null 2>&1; then
-          if (cd "$CONFIG_DIR" && git add "hosts/$HOST/hardware-configuration.nix" &&
-              git commit -m "Update hardware-configuration.nix for $HOST from /etc/nixos install") >/dev/null 2>&1; then
-            echo "git commit: OK"
+          # -f: this may be a brand-new host whose hardware-configuration.nix
+          # has never existed in the repo — force-stage it so it is tracked
+          # even if some ignore rule would otherwise skip it.
+          if (cd "$CONFIG_DIR" && git add -f "hosts/$HOST/hardware-configuration.nix"); then
+            if (cd "$CONFIG_DIR" && git diff --cached --quiet); then
+              echo "git: no changes to commit"
+            else
+              # Fresh installs often have no git identity yet; without it the
+              # commit silently fails and the file stays untracked. Set a
+              # repo-local fallback identity only if none exists.
+              if ! (cd "$CONFIG_DIR" && git config user.email >/dev/null 2>&1); then
+                (cd "$CONFIG_DIR" && git config user.name "NixOS ${HOST}" &&
+                  git config user.email "nixos@${HOST}.local") || true
+                echo "git: set repo-local identity (nixos@${HOST}.local)"
+              fi
+              if (cd "$CONFIG_DIR" && git commit -m "Update hardware-configuration.nix for $HOST from /etc/nixos install"); then
+                echo "git commit: OK"
+              else
+                echo "warning: git commit failed — see error above" >&2
+              fi
+            fi
           else
-            echo "warning: git commit skipped (nothing to commit or git error)"
+            echo "warning: git add failed — see error above" >&2
           fi
-          if (cd "$CONFIG_DIR" && timeout 30 git push) >/dev/null 2>&1; then
+          if (cd "$CONFIG_DIR" && timeout 30 git push); then
             echo "git push: OK"
           else
-            echo "warning: git push skipped (unavailable or timed out)"
+            echo "warning: git push skipped (unavailable or timed out)" >&2
           fi
+        else
+          echo "warning: git not found — hardware-configuration.nix will be updated locally only"
+        fi
+
+        if [ "$hw_choice" -eq 3 ]; then
+          echo ""
+          echo "Done — hardware configuration published; NixOS rebuild skipped."
+          exit 0
         fi
         ;;
       2)
