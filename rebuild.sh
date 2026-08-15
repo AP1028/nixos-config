@@ -106,7 +106,9 @@ if [ -z "$HOST" ]; then
       echo "  $((i+1))) ${AVAILABLE_HOSTS[$i]}"
     done
     read -rp "Enter number (1-${#AVAILABLE_HOSTS[@]}): " choice
-    if [[ "$choice" =~ ^[1-${#AVAILABLE_HOSTS[@]}]$ ]]; then
+    # Plain numeric range check: the old regex character class broke once the
+    # host list reached 10 entries (e.g. [1-10] matches only "0"/"1").
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#AVAILABLE_HOSTS[@]}" ]; then
       HOST="${AVAILABLE_HOSTS[$((choice-1))]}"
     else
       echo "Invalid selection."
