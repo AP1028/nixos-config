@@ -201,14 +201,12 @@
         ];
       };
 
-      # Draft: hardware-configuration.nix to be generated on the VM
-      # ("nixos-generate-config") and added here at VM setup, same as
-      # nixos-file-vm.
       nixos-internal-vm = nixpkgs-stable.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
           { nixpkgs.hostPlatform = "x86_64-linux"; }
           home-manager-stable.nixosModules.home-manager
+          ./hosts/nixos-internal-vm/hardware-configuration.nix
           ./hosts/nixos-internal-vm/default.nix
 
           vscode-server.nixosModules.default
