@@ -175,16 +175,38 @@ if [ -e /etc/nixos/hardware-configuration.nix ] &&
             if (cd "$CONFIG_DIR" && git diff --cached --quiet); then
               echo "git: no changes to commit"
             else
-              # Fresh installs often have no git identity yet; without it the
-              # commit silently fails and the file stays untracked. Set a
-              # repo-local fallback identity only if none exists.
-              if ! (cd "$CONFIG_DIR" && git config user.email >/dev/null 2>&1); then
-                (cd "$CONFIG_DIR" && git config user.name "NixOS ${HOST}" &&
-                  git config user.email "nixos@${HOST}.local") || true
-                echo "git: set repo-local identity (nixos@${HOST}.local)"
-              fi
               if (cd "$CONFIG_DIR" && git commit -m "Update hardware-configuration.nix for $HOST from /etc/nixos install"); then
                 echo "git commit: OK"
+              elif ! (cd "$CONFIG_DIR" && git config user.email >/dev/null 2>&1 &&
+                      git config user.name >/dev/null 2>&1); then
+                # The commit failed and no identity is configured for this repo.
+                # Prompt for one (defaults are the auto-set values); if there is
+                # no TTY, auto-set the repo-local identity and continue.
+                DEFAULT_NAME="NixOS ${HOST}"
+                DEFAULT_EMAIL="nixos@${HOST}.local"
+                if [ -t 0 ]; then
+                  echo ""
+                  echo "git commit failed: no identity is configured for this repo."
+                  read -rp "Git name [${DEFAULT_NAME}]: " GIT_NAME
+                  read -rp "Git email [${DEFAULT_EMAIL}]: " GIT_EMAIL
+                  GIT_NAME="${GIT_NAME:-$DEFAULT_NAME}"
+                  GIT_EMAIL="${GIT_EMAIL:-$DEFAULT_EMAIL}"
+                else
+                  GIT_NAME="$DEFAULT_NAME"
+                  GIT_EMAIL="$DEFAULT_EMAIL"
+                  echo "git: no TTY — auto-setting repo-local identity (${GIT_NAME} <${GIT_EMAIL}>)"
+                fi
+                if (cd "$CONFIG_DIR" && git config user.name "$GIT_NAME" &&
+                    git config user.email "$GIT_EMAIL"); then
+                  echo "git: identity set repo-locally to ${GIT_NAME} <${GIT_EMAIL}>"
+                  if (cd "$CONFIG_DIR" && git commit -m "Update hardware-configuration.nix for $HOST from /etc/nixos install"); then
+                    echo "git commit: OK"
+                  else
+                    echo "warning: git commit failed after setting identity — see error above" >&2
+                  fi
+                else
+                  echo "warning: could not set git identity — see error above" >&2
+                fi
               else
                 echo "warning: git commit failed — see error above" >&2
               fi
