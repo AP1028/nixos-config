@@ -35,6 +35,9 @@
   # (boot.supportedFilesystems.zfs -> boot.zfs.enabled) and the auto-import of
   # the exported "HDD" mirror at boot; it mounts at /HDD and Samba shares it.
   networking.hostId = "3c91a2f4"; # required by ZFS; stable per host
+  # Never force-import a foreign root pool (data-safety; the HDD data pool is
+  # imported normally by zfs-import-HDD.service).
+  boot.zfs.forceImportRoot = false;
   fileSystems."/HDD" = {
     device = "HDD";
     fsType = "zfs";
