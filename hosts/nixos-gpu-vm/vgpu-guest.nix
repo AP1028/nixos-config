@@ -139,7 +139,7 @@ in {
           # sure it is present so its major shows up in /proc/devices.
           $MODPROBE nvidia_uvm 2>/dev/null || true
           for i in $(seq 1 20); do
-            UVM_MAJ=$($AWK '$2 == "nvidia_uvm" {print $1}' /proc/devices)
+            UVM_MAJ=$($AWK '$2 == "nvidia-uvm" {print $1}' /proc/devices)
             [ -n "$UVM_MAJ" ] && break
             sleep 1
           done
