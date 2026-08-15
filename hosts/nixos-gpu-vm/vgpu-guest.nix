@@ -113,6 +113,7 @@ in {
         # parent exit and report the unit dead (while the daemon keeps
         # running and holding the lease).
         Type = "forking";
+        PIDFile = "/var/run/nvidia-gridd.pid";
         ExecStart = "${nvidiaGrid.bin}/bin/nvidia-gridd";
         Restart = "on-failure";
         RestartSec = "5s";
