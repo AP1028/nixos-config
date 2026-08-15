@@ -208,6 +208,10 @@ in {
   services.nginx = {
     enable = true;
     recommendedProxySettings = true;
+    # Silence the "could not build optimal proxy_headers_hash" startup warning
+    # (recommendedProxySettings + our X-Remote-User header exceed the default
+    # hash table).
+    appendHttpConfig = "proxy_headers_hash_max_size 512;";
     virtualHosts.file-web = {
       serverName = "_";
       listen = [
