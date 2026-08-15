@@ -9,6 +9,7 @@
     ./hardware-configuration.nix
     ./networking
     ./services/nginx.nix
+    ./services/files.nix
     ./services/uptime-kuma.nix
 
     ../../modules/system/vm-base.nix

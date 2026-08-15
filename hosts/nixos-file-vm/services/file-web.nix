@@ -47,7 +47,9 @@
     server = {
       port = 8081;
       listen = "127.0.0.1"; # only nginx is public; nginx is what injects auth
-      baseURL = "";
+      # The UI is published under /files/ (both directly on this VM and via
+      # the nixos-webapp-vm WAN proxy), so all frontend/api URLs carry it.
+      baseURL = "/files/";
       disableUpdateCheck = true;
       logging = [
         {levels = "info|warning|error";}
@@ -238,24 +240,35 @@ in {
           port = 8080;
         }
       ];
-      locations."/" = {
-        proxyPass = "http://127.0.0.1:8081";
-        proxyWebsockets = true;
-        extraConfig = ''
-          # The pool is a NAS: multi-GB files and long .zip streams are normal.
-          client_max_body_size 0;
-          client_body_timeout 3600s;
-          proxy_request_buffering off;
-          proxy_buffering off;
-          proxy_read_timeout 3600s;
-          proxy_send_timeout 3600s;
+      locations = {
+        # Direct bookmarks to the old root URL keep working.
+        "= /" = {
+          return = "308 /files/";
+        };
+        "= /files" = {
+          return = "308 /files/";
+        };
+        "/files/" = {
+          # No URI in proxyPass: forward /files/... unchanged. Quantum is
+          # configured with baseURL /files/, so it owns that prefix.
+          proxyPass = "http://127.0.0.1:8081";
+          proxyWebsockets = true;
+          extraConfig = ''
+            # The pool is a NAS: multi-GB files and long .zip streams are normal.
+            client_max_body_size 0;
+            client_body_timeout 3600s;
+            proxy_request_buffering off;
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
 
-          # Trust boundary for quantum's proxy auth (must override inbound).
-          # Host / X-Real-IP / X-Forwarded-* come from
-          # recommendedProxySettings; re-setting Host here would send it to
-          # the backend twice and Go's HTTP parser rejects duplicate Host.
-          proxy_set_header X-Remote-User "files";
-        '';
+            # Trust boundary for quantum's proxy auth (must override inbound).
+            # Host / X-Real-IP / X-Forwarded-* come from
+            # recommendedProxySettings; re-setting Host here would send it to
+            # the backend twice and Go's HTTP parser rejects duplicate Host.
+            proxy_set_header X-Remote-User "files";
+          '';
+        };
       };
     };
   };
