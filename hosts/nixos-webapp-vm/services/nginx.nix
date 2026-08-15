@@ -12,6 +12,10 @@
   # nixos-git-vm over plain HTTP; nginx terminates TLS on :18081.
   giteaUpstream = "http://192.168.3.102:3001";
 
+  # Uptime Kuma still listens on localhost only; nginx exposes it at /status
+  # on both the HTTP and HTTPS listeners below.
+  uptimeKumaUpstream = "http://127.0.0.1:3001";
+
   selfSignedCert =
     pkgs.runCommand "nixos-webapp-vm-self-signed-cert" {
       nativeBuildInputs = [pkgs.openssl];
@@ -65,6 +69,16 @@ in {
           # The trailing slash makes nginx strip /gitea/ before forwarding:
           #   /gitea/foo/bar -> http://192.168.3.102:3001/foo/bar
           proxyPass = "${giteaUpstream}/";
+          proxyWebsockets = true;
+        };
+
+        "= /status" = {
+          return = "308 /status/";
+        };
+
+        "/status/" = {
+          # Strip /status/ before forwarding to Uptime Kuma.
+          proxyPass = "${uptimeKumaUpstream}/";
           proxyWebsockets = true;
         };
       };
