@@ -31,7 +31,12 @@
     ./packages
   ];
 
-  # ZFS for the HDD pool: kernel module + userspace tools, and auto-import at
-  # boot (the exported "HDD" mirror mounts at /HDD; Samba shares it).
-  boot.zfs.enabled = true;
+  # ZFS for the HDD pool: declaring the ZFS mountpoint enables ZFS support
+  # (boot.supportedFilesystems.zfs -> boot.zfs.enabled) and the auto-import of
+  # the exported "HDD" mirror at boot; it mounts at /HDD and Samba shares it.
+  networking.hostId = "3c91a2f4"; # required by ZFS; stable per host
+  fileSystems."/HDD" = {
+    device = "HDD";
+    fsType = "zfs";
+  };
 }
