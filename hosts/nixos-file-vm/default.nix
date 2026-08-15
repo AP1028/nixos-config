@@ -13,7 +13,7 @@
     ../../modules/system/substituters.nix
 
     ../../modules/system/local.nix
-    (import ../../modules/system/rebuild-scripts.nix { host = "nixos-file-vm"; })
+    (import ../../modules/system/rebuild-scripts.nix {host = "nixos-file-vm";})
 
     ../../modules/users/main-user.nix
 
@@ -27,6 +27,7 @@
     ../../modules/services/firewall-open.nix
 
     ./services/samba.nix
+    ./services/file-web.nix
 
     ./packages
   ];
