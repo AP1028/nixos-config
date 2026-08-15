@@ -97,6 +97,14 @@ in {
     wants = ["network-online.target"];
     wantedBy = lib.mkForce [];
     path = [ llamaCppDsv4 pkgs.curl ];
+    # DSV4 CUDA race on Turing sm_75 (real prompts hit illegal memory access in
+    # the fused MMQ path). Disabling CUDA graph + op fusion is the measured
+    # workaround: synthetic llama-bench 128p/64g stays at ~2.8 tg / ~16 pp t/s
+    # with the cluster, while real prompts no longer crash.
+    environment = {
+      GGML_CUDA_DISABLE_FUSION = "1";
+      GGML_CUDA_DISABLE_GRAPHS = "1";
+    };
     serviceConfig = {
       User = "tianyixia";
       Group = "users";
@@ -104,7 +112,10 @@ in {
       RestartSec = "5s";
       TimeoutStartSec = "1800";
       LimitNOFILE = 1048576;
-      ExecStart = "${llamaCppDsv4}/bin/llama-server -m /home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf --host 0.0.0.0 --port 8080 --rpc 10.0.0.103:50052 -ngl 99 -sm tensor -ts 3,3,1 -c 4096 -b 2048 -ub 512 --no-webui";
+      # Best measured stable split: 7 layers in pipeline mode, distributed
+      # equally across RPC P40 + 2x 2080 Ti. -sm tensor is NOT implemented
+      # for deepseek4 in llama.cpp b10331; ngl=8+ crashes on real prompts.
+      ExecStart = "${llamaCppDsv4}/bin/llama-server -m /home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf --host 0.0.0.0 --port 8080 --rpc 10.0.0.103:50052 -ngl 7 -sm layer -ts 1,1,1 -c 4096 -b 256 -ub 128 --no-webui";
     };
   };
 }
