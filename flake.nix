@@ -157,6 +157,18 @@
         ];
       };
 
+      nixos-gpu-host = nixpkgs-stable.lib.nixosSystem {
+        specialArgs = {inherit inputs;};
+        modules = [
+          { nixpkgs.hostPlatform = "x86_64-linux"; }
+          home-manager-stable.nixosModules.home-manager
+          ./hosts/nixos-gpu-host/hardware-configuration.nix
+          ./hosts/nixos-gpu-host/default.nix
+
+          vscode-server.nixosModules.default
+        ];
+      };
+
       nixos-webapp-vm = nixpkgs-stable.lib.nixosSystem {
         specialArgs = {inherit inputs;};
         modules = [
@@ -174,18 +186,6 @@
           home-manager-stable.nixosModules.home-manager
           ./hosts/nixos-essential-vm/hardware-configuration.nix
           ./hosts/nixos-essential-vm/default.nix
-        ];
-      };
-
-      nixos-intel-7700k = nixpkgs.lib.nixosSystem {
-        specialArgs = {inherit inputs;};
-        modules = [
-          { nixpkgs.hostPlatform = "x86_64-linux"; }
-          ./hosts/nixos-intel-7700k/hardware-configuration.nix
-          ./hosts/nixos-intel-7700k/default.nix
-
-          vscode-server.nixosModules.default
-          home-manager.nixosModules.home-manager
         ];
       };
 
