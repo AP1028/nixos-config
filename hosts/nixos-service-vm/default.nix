@@ -35,6 +35,5 @@
     ./services/jzmf-vanilla.nix
     ./services/jzmf-construction.nix
     ./services/jzmf-construction-backup.nix
-    ./services/sillytavern.nix
   ];
 }
