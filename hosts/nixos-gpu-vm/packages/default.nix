@@ -128,7 +128,7 @@ in {
     serviceConfig = {
       User = "tianyixia";
       Group = "users";
-      ExecStart = "${llamaCppRpc}/bin/llama-cpp-ggml-rpc-server -H 10.0.0.103 -p 50052 -d 0";
+      ExecStart = "${llamaCppRpc}/bin/llama-cpp-ggml-rpc-server -H 10.0.0.103 -p 50052 -d CUDA0";
       Restart = "on-failure";
       RestartSec = "5s";
       LimitNOFILE = 1048576;
