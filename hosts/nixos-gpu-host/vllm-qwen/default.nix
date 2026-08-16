@@ -26,6 +26,16 @@
     ln -s "${cuda}/lib" "$out/targets/x86_64-linux/lib"
     ln -s "${cuda}/nvvm" "$out/nvvm"
   '';
+  # Triton (a torch dependency) hard-codes `/sbin/ldconfig -p` when it probes
+  # CUDA library dirs.  NixOS has no /sbin and glibc's ldconfig has no cache
+  # file here, so install a shim that answers the exact probe Triton issues.
+  ldconfigShim = pkgs.writeShellScript "ldconfig" ''
+    if [ "$1" = "-p" ]; then
+      echo "libcuda.so.1 (libc6,x86-64) => /run/opengl-driver/lib/libcuda.so.1"
+      exit 0
+    fi
+    exec ${pkgs.glibc.bin}/bin/ldconfig "$@"
+  '';
 in {
   environment.systemPackages = [
     # Toolchain used by ~/vLLM-2080Ti-Definitive/build.sh.
@@ -40,10 +50,8 @@ in {
   #   CUDA_HOME=/etc/vllm-cuda-home
   environment.etc."vllm-cuda-home".source = vllmCudaHome;
 
-  # Triton (a torch dependency) hard-codes `/sbin/ldconfig` when it probes
-  # CUDA library dirs.  NixOS does not create /sbin, so provide it here.
   systemd.tmpfiles.rules = [
     "d /sbin 0755 root root -"
-    "L+ /sbin/ldconfig - - - - ${pkgs.glibc.bin}/bin/ldconfig"
+    "L+ /sbin/ldconfig - - - - ${ldconfigShim}"
   ];
 }
