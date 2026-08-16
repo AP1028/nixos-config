@@ -537,6 +537,7 @@ in {
 
     "/private/main/" = {
       alias = "${privateServicesPage}";
+      index = null; # serve the aliased file itself, not <file>/index.html
       extraConfig = ''
         ${autheliaAuthRequest}
 
