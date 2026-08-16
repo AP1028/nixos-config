@@ -62,6 +62,45 @@
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
   '';
+
+  # Imperative password setter. It takes the plaintext password as argv,
+  # hashes it at runtime, and writes it to the runtime users database. No
+  # password or hash ever enters nixos-config or the nix store.
+  autheliaSetUser = pkgs.writeShellApplication {
+    name = "authelia-set-user";
+    runtimeInputs = [
+      pkgs.authelia
+      pkgs.coreutils
+      pkgs.gnused
+      pkgs.systemd
+    ];
+    text = ''
+            set -euo pipefail
+            if [ "''${1:-}" = "" ]; then
+              echo "usage: sudo authelia-set-user <password>" >&2
+              exit 1
+            fi
+            file=/var/lib/authelia-main/users.yml
+            hash=$(authelia crypto hash generate argon2 --password "$1" --no-confirm | sed -n 's/^Digest: //p')
+            if [ -z "$hash" ]; then
+              echo "failed to generate password hash" >&2
+              exit 1
+            fi
+            cat > "$file" <<EOF
+      users:
+        tianyixia:
+          disabled: false
+          displayname: tianyixia
+          password: "$hash"
+          email: tianyixia@local
+          groups: [admins]
+      EOF
+            chown authelia-main:authelia-main "$file"
+            chmod 600 "$file"
+            systemctl restart authelia-main
+            echo "Authelia user 'tianyixia' updated and authelia-main restarted."
+    '';
+  };
 in {
   services.authelia.instances.main = {
     enable = true;
@@ -153,7 +192,7 @@ in {
         fi
   '';
 
-  environment.systemPackages = [pkgs.authelia];
+  environment.systemPackages = [pkgs.authelia autheliaSetUser];
 
   services.nginx.virtualHosts."_".locations = {
     "= /private" = {
