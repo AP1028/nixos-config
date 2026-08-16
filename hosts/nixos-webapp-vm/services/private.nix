@@ -23,7 +23,13 @@
   ...
 }: let
   autheliaAddress = "tcp://127.0.0.1:9091/private";
-  privateBase = "https://192.168.3.152:18081/private/";
+  # Hostnames the private area is served on. Authelia needs a session-cookie
+  # config and an access-control rule for each one, otherwise the portal's
+  # /api/state call fails with "no configured session cookie domain matches".
+  privateDomains = [
+    "192.168.3.152"
+    "homeserver040322.ddns.net"
+  ];
 
   privateHttpsOnly = ''
     if ($scheme = http) {
@@ -191,13 +197,13 @@ in {
         inactivity = "1M";
         expiration = "3M";
         remember_me = "6M";
-        cookies = [
-          {
-            domain = "192.168.3.152";
-            authelia_url = privateBase;
-            default_redirection_url = "${privateBase}pve1/";
-          }
-        ];
+        cookies =
+          map (domain: {
+            inherit domain;
+            authelia_url = "https://${domain}:18081/private/";
+            default_redirection_url = "https://${domain}:18081/private/pve1/";
+          })
+          privateDomains;
       };
       authentication_backend.file = {
         path = "/var/lib/authelia-main/users.yml";
@@ -205,13 +211,13 @@ in {
       };
       access_control = {
         default_policy = "deny";
-        rules = [
-          {
-            domain = "192.168.3.152";
+        rules =
+          map (domain: {
+            inherit domain;
             policy = "one_factor";
             resources = ["^/private/(pve1|pve2)(/.*)?$"];
-          }
-        ];
+          })
+          privateDomains;
       };
       storage.local.path = "/var/lib/authelia-main/db.sqlite3";
       notifier.filesystem.filename = "/var/lib/authelia-main/notifications.txt";
