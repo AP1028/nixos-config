@@ -72,6 +72,17 @@
           mv "$f.new" "$f"
           rm -f "$plain"
         done
+
+        # The upstream bundle name is content-hashed, but our patch changes
+        # the content without changing the name. Browsers cache the asset for
+        # 24h, so publish the patched bundle under a new name and point the
+        # SPA template at it.
+        if ! grep -q 'index-RkHXvfmg.js' http/embed/public/index.html; then
+          echo "file-web: quantum index template asset pattern not found; update the patch" >&2
+          exit 1
+        fi
+        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-patched.js.gz
+        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-patched.js/g' http/embed/public/index.html
       '';
   });
 
