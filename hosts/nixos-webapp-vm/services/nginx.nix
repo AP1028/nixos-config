@@ -89,7 +89,14 @@ in {
         };
 
         "= /gitea" = {
-          return = "308 /gitea/";
+          # Gitea is HTTPS-only: plain HTTP on 18080 jumps straight to
+          # https://host:18081/gitea/ instead of being proxied.
+          extraConfig = ''
+            if ($scheme = http) {
+              return 301 https://$host:18081/gitea/;
+            }
+            return 308 /gitea/;
+          '';
         };
 
         "/gitea/" = {
@@ -97,6 +104,12 @@ in {
           #   /gitea/foo/bar -> http://192.168.3.102:3001/foo/bar
           proxyPass = "${giteaUpstream}/";
           proxyWebsockets = true;
+          extraConfig = ''
+            # HTTPS-only proxy: plain HTTP never reaches Gitea.
+            if ($scheme = http) {
+              return 301 https://$host:18081$request_uri;
+            }
+          '';
         };
 
         "= /status" = {
