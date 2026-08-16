@@ -39,6 +39,15 @@ in {
     enable = true;
     recommendedProxySettings = true;
 
+    # Used by the 497 handler: plain HTTP on the TLS port redirects to HTTPS
+    # except at the bare root, which is intentionally a 404.
+    appendHttpConfig = ''
+      map $request_uri $plain_http_on_tls_is_root {
+        "~^/$" 0;
+        default 1;
+      }
+    '';
+
     virtualHosts."_" = {
       default = true;
 
@@ -60,14 +69,25 @@ in {
       sslCertificate = "${selfSignedCert}/cert.pem";
       sslCertificateKey = "${selfSignedCert}/key.pem";
 
-      # 18081 is the TLS listener. If a client nevertheless sends plain
-      # HTTP to it, nginx emits its 497 "plain HTTP to HTTPS port" error;
-      # turn that into a clean HTTPS redirect on the same host/port.
+      # 18081 is the TLS listener. Plain HTTP sent to it produces nginx's
+      # 497 error. Non-root paths are redirected to HTTPS on the same
+      # host/port; the bare root stays a 404 like the HTTP port's root.
       extraConfig = ''
-        error_page 497 =301 https://$host:18081$request_uri;
+        error_page 497 = @plain_http_on_tls;
+
+        location @plain_http_on_tls {
+          if ($plain_http_on_tls_is_root = 0) {
+            return 404;
+          }
+          return 301 https://$host:18081$request_uri;
+        }
       '';
 
       locations = {
+        "= /" = {
+          return = "404";
+        };
+
         "= /gitea" = {
           return = "308 /gitea/";
         };
