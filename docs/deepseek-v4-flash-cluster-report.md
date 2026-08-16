@@ -59,22 +59,24 @@ User default was TP=2 on the 2080 Tis. Measured result: **TP is unavailable**.
   RPC P40 + 2x local 2080 Ti**, with `-ngl 7` as the maximum stable GPU-layer
   count found.
 
-## CUDA stability findings (important)
+## Root cause and fix for the ngl>7 long-prompt crash
 
 With b10331 + CUDA 12.9 on Turing sm_75:
-- `-ngl 7 -sm layer -ts 1,1,1` is the maximum split that is stable for long
-  real prompts. Short and long prompts both generate coherent text.
-- `-ngl 8` is stable with short prompts when the layer distribution avoids
-  putting layer 39 on CUDA0 (e.g. `-ts 2,1,1` or `-ts 4,3,1`), but not all
-  distributions were tested with long prompts.
-- `-ngl 15 -sm layer -ts 1,1,1` loads and runs short prompts correctly
-  (~17.9 GB per device), but crashes with `CUDA error: an illegal memory
-  access was encountered` on long prompts (95-word prompt).
-- `GGML_CUDA_DISABLE_FUSION=1 GGML_CUDA_DISABLE_GRAPHS=1` stops the crash
-  and allows `-ngl 15`, but the model then emits garbage/newline tokens.
-  That workaround is NOT used.
-- The `llama-server` unit on `nixos-gpu-host` therefore uses
-  `-ngl 7 -sm layer -ts 1,1,1` with no CUDA env workarounds.
+- The crash is a **CUDA graph capture bug** in the DSV4 path. Long prompts
+  (95 words) hit `CUDA error: an illegal memory access was encountered` on
+  local CUDA0 when CUDA graphs are enabled.
+- `GGML_CUDA_DISABLE_GRAPHS=1` alone avoids the crash and keeps output
+  coherent. `GGML_CUDA_DISABLE_FUSION=1` is NOT needed and, when combined
+  with disabled graphs, produces garbage/newline tokens.
+- `-ngl 15 -sm layer -ts 1,1,1` with graphs disabled is stable for long
+  prompts. Memory fit: P40 5 layers (~17.9 GB), CUDA0 5 layers (~17.9 GB),
+  CUDA1 4 layers + output (~15.4 GB), leaving enough headroom for compute
+  buffers.
+- `-ngl 16` equal-split does **not** fit: P40 would get 6 layers
+  (~20.5 GiB) and the extra 772 MB compute buffer exceeds the ~21.1 GiB
+  usable on this vGPU slice. That one is a real memory-limit error.
+- The `llama-server` unit on `nixos-gpu-host` now uses
+  `-ngl 15 -sm layer -ts 1,1,1` with `GGML_CUDA_DISABLE_GRAPHS=1`.
 
 ## Tuning iterations
 
