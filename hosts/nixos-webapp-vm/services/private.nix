@@ -9,7 +9,7 @@
 # password database is /var/lib/authelia-main/users.yml. To set the first user
 # password run (as root, imperatively):
 #
-#   HASH=$(authelia crypto hash generate argon2 --password 'YOUR_PASSWORD')
+#   HASH=$(authelia crypto hash generate argon2 --password 'YOUR_PASSWORD' --no-confirm)
 #   printf 'users:\n  admin:\n    displayname: Admin\n    password: %s\n    email: admin@local\n    groups: [admins]\n' "$HASH" > /var/lib/authelia-main/users.yml
 #   chown authelia-main:authelia-main /var/lib/authelia-main/users.yml
 #   chmod 600 /var/lib/authelia-main/users.yml
