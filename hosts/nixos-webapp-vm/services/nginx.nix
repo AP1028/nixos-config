@@ -125,6 +125,9 @@ in {
         "= /monitor" = {
           return = "301 /monitor/status/public";
         };
+        "= /monitor/" = {
+          return = "301 /monitor/status/public";
+        };
         "= /monitor/status" = {
           return = "301 /monitor/status/public";
         };
