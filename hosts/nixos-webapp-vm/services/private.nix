@@ -67,11 +67,13 @@
   # inline JSON blob rather than href/src attributes.
   privatePathHook = prefix:
     lib.removeSuffix "\n" ''
-      window.__PRIVATE_BASE__='${prefix}'; (function(){var P=window.__PRIVATE_BASE__; function N(u){if(typeof u!=='string'){return u;} if(/^[a-z][a-z0-9+.-]*:/i.test(u)||/^\/\//.test(u)){return u;} if(u.indexOf(P+'/')===0||u===P){return u;} if(u.charAt(0)==='/'){return P+u;} return u;} if(window.__DSH_BOOT__&&window.__DSH_BOOT__.entries){for(var i=0;i<window.__DSH_BOOT__.entries.length;i++){var e=window.__DSH_BOOT__.entries[i];if(e&&typeof e.url==='string'){e.url=N(e.url);}}} var F=window.fetch; window.fetch=function(){if(arguments.length){arguments[0]=N(arguments[0]);} return F.apply(this,arguments);}; var O=XMLHttpRequest.prototype.open; XMLHttpRequest.prototype.open=function(){if(arguments.length>1){arguments[1]=N(arguments[1]);} return O.apply(this,arguments);}; if(window.WebSocket){var W=window.WebSocket; window.WebSocket=new Proxy(W,{construct:function(t,a){if(a.length){a[0]=N(a[0]);} return Reflect.construct(t,a);}});} if(window.EventSource){var E=window.EventSource; window.EventSource=new Proxy(E,{construct:function(t,a){if(a.length){a[0]=N(a[0]);} return Reflect.construct(t,a);}});}})();
+      window.__PRIVATE_BASE__='${prefix}'; (function(){var P=window.__PRIVATE_BASE__; function N(u){if(typeof u!=='string'){return u;} if(/^[a-z][a-z0-9+.-]*:/i.test(u)||/^\/\//.test(u)){return u;} if(u.indexOf(P+'/')===0||u===P){return u;} if(u.charAt(0)==='/'){return P+u;} return u;} if(window.__DSH_BOOT__&&window.__DSH_BOOT__.entries){for(var i=0;i<window.__DSH_BOOT__.entries.length;i++){var e=window.__DSH_BOOT__.entries[i];if(e&&typeof e.url==='string'){e.url=N(e.url);}}} var F=window.fetch; window.fetch=function(){if(arguments.length){arguments[0]=N(arguments[0]);} return F.apply(this,arguments);}; var O=XMLHttpRequest.prototype.open; XMLHttpRequest.prototype.open=function(){if(arguments.length>1){arguments[1]=N(arguments[1]);} return O.apply(this,arguments);}; if(window.WebSocket){var W=window.WebSocket; window.WebSocket=new Proxy(W,{construct:function(t,a){if(a.length){a[0]=N(a[0]);} return Reflect.construct(t,a);}});} if(window.EventSource){var E=window.EventSource; window.EventSource=new Proxy(E,{construct:function(t,a){if(a.length){a[0]=N(a[0]);} return Reflect.construct(t,a);}});} if(window.URL){var U=window.URL; window.URL=new Proxy(U,{construct:function(t,a){if(a.length>1&&typeof a[0]==='string'&&a[0].charAt(0)==='/'){var b=a[1];var base=b&&typeof b==='object'&&typeof b.href==='string'?b.href:String(b);if(base===window.location.origin||base===window.location.origin+'/'){a[0]=P+a[0];}} return Reflect.construct(t,a);}});}})();
     '';
 
-  # Static HTML/CSS rewrites plus the runtime path hook above. Used for both
-  # SillyTavern and dsh.
+  # Static HTML/CSS rewrites shared by the non-Proxmox apps. The runtime path
+  # hook is injected by each app with a multi-line anchor that only exists in
+  # that app's index.html; a bare "</head>" would also match JS bundles that
+  # embed HTML template strings and corrupt them.
   webSubFilters = prefix: ''
     proxy_set_header Accept-Encoding "";
     sub_filter_once off;
@@ -82,12 +84,12 @@
     sub_filter 'action="/' 'action="${prefix}/';
     sub_filter 'url("/' 'url("${prefix}/';
     sub_filter "url('/" "url('${prefix}/";
-
-    sub_filter '</head>' "<script>${privatePathHook prefix}</script></head>";
   '';
 
   sillytavernSubFilters = prefix: ''
     ${webSubFilters prefix}
+
+    sub_filter '<!-- Scripts are loaded at the end of the body to improve page load speed -->\n</head>' "<script>${privatePathHook prefix}</script><!-- Scripts are loaded at the end of the body to improve page load speed --></head>";
 
     # SillyTavern's relative asset URLs are all resolved through <base href>.
     # Point it at the subpath and let the runtime hook handle absolute /api
@@ -96,7 +98,11 @@
     sub_filter '<base href="/">' '<base href="${prefix}/">';
   '';
 
-  dshSubFilters = webSubFilters;
+  dshSubFilters = prefix: ''
+    ${webSubFilters prefix}
+
+    sub_filter '</head>\n  <body><script>(() => {\n  const preference = "system"' "<script>${privatePathHook prefix}</script></head>\n  <body><script>(() => {\n  const preference = \"system\"";
+  '';
 
   # Proxmox VE's web UI is written for "/" and hardcodes absolute root paths
   # (/pve2/..., /pwt/..., /api2/..., /nodes/...). nginx's sub_filter rewrites
