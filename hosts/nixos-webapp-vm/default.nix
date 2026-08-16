@@ -11,6 +11,7 @@
     ./services/nginx.nix
     ./services/files.nix
     ./services/uptime-kuma.nix
+    ./services/private.nix
 
     ../../modules/system/vm-base.nix
     ../../modules/system/i18n.nix
