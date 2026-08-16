@@ -42,7 +42,7 @@ excluded. "prose" = the fixed English paragraph in `bench_single_stream.py`;
 
 | Preset / config | prefill tok/s | prose decode tok/s | filler decode tok/s | VRAM per GPU |
 |---|---:|---:|---:|---:|
-| `fast` MTP3 PIECEWISE, sync=auto (recommended) | ~1092 | **64.8** | 95.7 | 21.7 GiB |
+| `fast` MTP3 PIECEWISE, sync=auto (recommended) | ~1093 | **64.0** | 95.5 | 21.7 GiB |
 | `balanced` MTP4 PIECEWISE, sync=auto | ~1063 | 63.3 | **109.4** | 20.8 GiB |
 | `peak` MTP12 PIECEWISE, sync=auto | ~881 | 46.5 | **177.7** | 22.0 GiB |
 | shipped normal fp16kv-128K (98K fit) | 1101 | 61.9 | — | 21.7 GiB |

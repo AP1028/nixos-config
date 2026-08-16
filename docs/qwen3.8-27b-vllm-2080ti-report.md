@@ -17,15 +17,15 @@ warmup excluded, median of 3-5):
 
 | Configuration | Real English prose decode | Fork pure-filler PP128/TG128 decode |
 |---|---:|---:|
-| **`fast` preset, MTP3, PIECEWISE, sync=auto (recommended)** | **64.8 tok/s** | 95.7 tok/s |
+| **`fast` preset, MTP3, PIECEWISE, sync=auto (recommended)** | **64.0 tok/s** | 95.5 tok/s |
 | `balanced` preset, MTP4, PIECEWISE, sync=auto | 63.3 tok/s | 109.4 tok/s |
 | **`peak` preset, MTP12, PIECEWISE, sync=auto** | 46.5 tok/s | **177.7 tok/s** |
 
 The highest single-stream decode reached is **177.7 tok/s** (pure-filler
 synthetic PP128/TG128). On natural text, MTP3 is the best stable preset;
 MTP4 is the synthetic/real compromise; high-K MTP only wins on highly
-compressible filler. This is consistent with the fork's own MTP sensitivity
-notes.
+compressible filler. The final deployed launcher server measured 64.0 tok/s
+prose / 95.5 tok/s filler (the direct-run matrix once hit 64.8).
 
 Bottleneck: Turing FP8 is weight-only Marlin (sm_75 has no native FP8 matmul),
 and decode is bounded by GPU memory bandwidth / MTP acceptance. MTP3/4 yields a
@@ -209,7 +209,7 @@ All files live under `~/nixos-config/hosts/nixos-gpu-host/vllm-qwen/`
 # on nixos-gpu-host, as tianyixia
 cd ~/nixos-config/hosts/nixos-gpu-host/vllm-qwen
 
-./run-vllm-qwen.sh fast      # recommended daily: MTP3, 64.8 real / 95.7 filler tok/s
+./run-vllm-qwen.sh fast      # recommended daily: MTP3, 64.0 real / 95.5 filler tok/s
 ./run-vllm-qwen.sh balanced  # MTP4: 63.3 real / 109.4 filler tok/s
 ./run-vllm-qwen.sh peak      # MTP12: 46.5 real / 177.7 filler tok/s (benchmark preset)
 ./stop-vllm-qwen.sh
