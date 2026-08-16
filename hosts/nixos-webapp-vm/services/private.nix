@@ -39,6 +39,67 @@
     error_page 401 =302 $redirection_url;
   '';
 
+  # Proxmox VE's web UI is written for "/" and hardcodes absolute root paths
+  # (/pve2/..., /pwt/..., /api2/..., /nodes/...). nginx's sub_filter rewrites
+  # those into /private/pve1 or /private/pve2 so the UI stays on its own
+  # subpath and both PVE nodes can coexist on the same HTTPS port.
+  pveSubFilters = prefix: let
+    rel = lib.removePrefix "/" prefix;
+    dq = "\"";
+    sq = "'";
+    bt = "`";
+    roots = [
+      "/api2"
+      "/api2/"
+      "/nodes/"
+      "/cluster/"
+      "/access/"
+      "/vms/"
+      "/storage/"
+      "/pool/"
+      "/sdn/"
+      "/mapping/"
+      "/dc/"
+      "/version"
+      "/status"
+      "/novnc/"
+      "/xtermjs/"
+      "/pve-doc/"
+      "/proxmoxlib.js"
+      "/qrcode.min.js"
+      "/pve2/"
+      "/pwt/"
+      "/favicon.ico"
+    ];
+  in ''
+    # Proxmox gzips its assets; sub_filter needs the plain stream.
+    proxy_set_header Accept-Encoding "";
+    sub_filter_once off;
+    sub_filter_types *;
+
+    # Proxmox lib builds /api2/extjs/<path> from bare /nodes/... URLs. Teach
+    # it about the /private/pveN prefix so it neither duplicates nor drops it.
+    sub_filter 'match(/^\/api2/)' 'match(/^(\/${rel}\/)?api2/)';
+    sub_filter "newopts.url = '/api2/extjs' + newopts.url;" "newopts.url = '${prefix}/api2/extjs' + newopts.url.replace(/^\/${rel}\//, ''');";
+
+    # HTML element URLs.
+    sub_filter 'href="/' 'href="${prefix}/';
+    sub_filter 'src="/' 'src="${prefix}/';
+    sub_filter 'action="/' 'action="${prefix}/';
+    sub_filter 'url("/' 'url("${prefix}/';
+    sub_filter "url('/" "url('${prefix}/";
+
+    # JS string literals (", ' and `) that start with a root path. Quote the
+    # nginx match/replacement so the JS quote character stays inside the arg:
+    # JS "..." literals go in nginx '...', JS '...' literals in nginx "...".
+    ${lib.concatMapStringsSep "\n" (root: ''
+        sub_filter '${dq}${root}' '${dq}${prefix}${root}';
+        sub_filter "${sq}${root}" "${sq}${prefix}${root}";
+        sub_filter '${bt}${root}' '${bt}${prefix}${root}';
+      '')
+      roots}
+  '';
+
   pveProxyConfig = ''
     ${autheliaAuthRequest}
 
@@ -49,6 +110,7 @@
     client_max_body_size 0;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
+    ${pveSubFilters "/private/pve1"}
   '';
 
   pve2ProxyConfig = ''
@@ -61,6 +123,7 @@
     client_max_body_size 0;
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
+    ${pveSubFilters "/private/pve2"}
   '';
 
   # Imperative password setter. It takes the plaintext password as argv,
