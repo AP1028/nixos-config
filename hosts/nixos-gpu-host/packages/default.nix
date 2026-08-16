@@ -97,11 +97,14 @@ in {
     wants = ["network-online.target"];
     wantedBy = lib.mkForce [];
     path = [ llamaCppDsv4 pkgs.curl ];
-    # ngl=7 is the maximum layer split that is stable for long real prompts
-    # with b10331 on this GPU mix. Higher ngl (e.g. 15) loads and runs short
-    # prompts, but long prompts still hit a CUDA illegal memory access in the
-    # fused DSV4 path. Disabling CUDA graph/fusion makes the crash go away but
-    # produces garbage output, so we do NOT use that workaround.
+    # ngl=15 is the largest stable split with the b10331 CUDA graph bug
+    # workaround below. With graphs enabled, long prompts hit a CUDA illegal
+    # memory access in the DSV4 path; disabling only CUDA graphs avoids the
+    # crash and keeps output correct. (Disabling fusion as well produced
+    # garbage tokens, so fusion stays enabled.)
+    environment = {
+      GGML_CUDA_DISABLE_GRAPHS = "1";
+    };
     serviceConfig = {
       User = "tianyixia";
       Group = "users";
@@ -109,10 +112,10 @@ in {
       RestartSec = "5s";
       TimeoutStartSec = "1800";
       LimitNOFILE = 1048576;
-      # Best measured stable split: 7 layers in pipeline mode, distributed
-      # equally across RPC P40 + 2x 2080 Ti. -sm tensor is NOT implemented
-      # for deepseek4 in llama.cpp b10331; ngl=8+ crashes on real prompts.
-      ExecStart = "${llamaCppDsv4}/bin/llama-server -m /home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf --host 0.0.0.0 --port 8080 --rpc 10.0.0.103:50052 -ngl 7 -sm layer -ts 1,1,1 -c 4096 -b 256 -ub 128 --no-webui";
+      # 15 pipeline layers: P40 5 layers, each 2080 Ti 5 layers; CPU/RAM keeps
+      # the remaining 28 layers. -sm tensor is NOT implemented for deepseek4
+      # in llama.cpp b10331.
+      ExecStart = "${llamaCppDsv4}/bin/llama-server -m /home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-00001-of-00002.gguf --host 0.0.0.0 --port 8080 --rpc 10.0.0.103:50052 -ngl 15 -sm layer -ts 1,1,1 -c 4096 -b 256 -ub 128 --no-webui";
     };
   };
 }
