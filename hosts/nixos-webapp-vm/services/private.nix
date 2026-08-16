@@ -93,6 +93,10 @@
     # object, before proxmoxlib.js runs.
     sub_filter "ConsentText: '''\n    };" "ConsentText: '''\n    }; ${ajaxHook}";
 
+    # PVE opens console windows with window.open('?console=...'), which some
+    # browsers resolve against the origin root. Make the subpath explicit.
+    sub_filter "'?' + url," "window.__PVE_SUBPATH__ + '/?' + url,";
+
     # noVNC/xtermjs console pages do not use Ext.Ajax; fix their raw
     # XMLHttpRequest and websocket path builders directly.
     sub_filter 'xhr.open(reqOpts.method, "/api2/json"' 'xhr.open(reqOpts.method, "${prefix}/api2/json"';
