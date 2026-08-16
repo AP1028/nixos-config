@@ -17,9 +17,9 @@ CUDA 12.9 host toolkit + torch 2.11.0+cu128, driver 595.71.05.
 # on nixos-gpu-host, as tianyixia
 cd ~/nixos-config/hosts/nixos-gpu-host/vllm-qwen
 
-./run-vllm-qwen.sh fast      # recommended daily: MTP3 + PIECEWISE CUDAGraph
-./run-vllm-qwen.sh balanced  # MTP4: same real decode, higher synthetic
-./run-vllm-qwen.sh peak      # MTP8 synthetic peak, lower real-text acceptance
+./run-vllm-qwen.sh fast      # recommended daily: MTP4 + PIECEWISE CUDAGraph
+./run-vllm-qwen.sh balanced  # MTP3 (highest natural-text acceptance)
+./run-vllm-qwen.sh peak      # MTP12 synthetic peak, benchmark-only
 ./stop-vllm-qwen.sh
 ```
 
@@ -42,9 +42,9 @@ excluded. "prose" = the fixed English paragraph in `bench_single_stream.py`;
 
 | Preset / config | prefill tok/s | prose decode tok/s | filler decode tok/s | VRAM per GPU |
 |---|---:|---:|---:|---:|
-| `fast` MTP3 PIECEWISE (recommended) | ~1100 | **64.7** | 91.0 | 20.7 GiB |
-| `balanced` MTP4 PIECEWISE | ~1070 | 64.3 | **104.5** | 20.8 GiB |
-| `peak` MTP8 PIECEWISE | ~960 | 53.5 | **141.0** | 21.8 GiB |
+| `fast` MTP4 PIECEWISE, sync=auto (recommended) | ~1073 | **67.2** | **109.4** | 20.8 GiB |
+| `balanced` MTP3 PIECEWISE, sync=auto | ~1082 | 64.7 | 95.7 | 21.7 GiB |
+| `peak` MTP12 PIECEWISE, sync=auto | ~881 | 46.5 | **177.7** | 22.0 GiB |
 | shipped normal fp16kv-128K (98K fit) | 1101 | 61.9 | — | 21.7 GiB |
 | shipped fast full-graph MTP3 | 1097 | 44.7 | — | 20.3 GiB |
 | MTP0 (no MTP), full graph | 1212 | 33.1 | — | 20.0 GiB |
@@ -57,10 +57,11 @@ Host RAM used at idle after load: ~10 GiB. Full tuning history and commands:
 [`../../../docs/qwen3.8-27b-vllm-2080ti-report.md`](../../../docs/qwen3.8-27b-vllm-2080ti-report.md).
 
 Interpretation: PIECEWISE CUDA graphs + MTP are the two big levers (both
-roughly double decode). FP16 KV beats INT8/TurboQuant for short single-stream
-decode. On natural text MTP3 is the acceptance sweet spot; high-K MTP only wins
-on highly compressible filler, so `peak` is a benchmark preset, not the daily
-preset.
+roughly double decode). `VLLM_SM75_SPEC_SYNC_MODE=auto` is measurably faster
+than the launcher's mode-default `safe` (+4 tok/s prose). FP16 KV beats
+INT8/TurboQuant for short single-stream decode. MTP4 is the best all-round
+preset; high-K MTP only wins on highly compressible filler, so `peak` is a
+benchmark preset, not the daily preset.
 
 ## NixOS build / toolchain notes
 
@@ -104,5 +105,5 @@ Known NixOS build gotchas:
 `PROFILE_FILE=... ./launcher.sh --non-interactive`. They intentionally force
 `COMPILATION_CONFIG_JSON` to PIECEWISE because `MODE=fast`'s
 FULL_AND_PIECEWISE default is slower on this Turing/hybrid-attention model,
-and `run-vllm-qwen.sh` pins `VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=0` for the
-same reason.
+and `run-vllm-qwen.sh` pins `VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=0` plus
+`VLLM_SM75_SPEC_SYNC_MODE=auto` for the same reason.

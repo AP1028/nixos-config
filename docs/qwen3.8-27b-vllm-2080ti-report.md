@@ -17,18 +17,17 @@ warmup excluded, median of 3):
 
 | Configuration | Real English prose decode | Fork pure-filler PP128/TG128 decode |
 |---|---:|---:|
-| **`fast` preset, MTP3, PIECEWISE (recommended)** | **64.7 tok/s** | 91.0 tok/s |
-| `balanced` preset, MTP4, PIECEWISE | 64.3 tok/s | 104.5 tok/s |
-| **`peak` preset, MTP8, PIECEWISE** | 53.5 tok/s | **141.0 tok/s** |
+| **`fast` preset, MTP4, PIECEWISE, sync=auto (recommended)** | **67.2 tok/s** | 109.4 tok/s |
+| `balanced` preset, MTP3, PIECEWISE, sync=auto | 64.7 tok/s | 95.7 tok/s |
+| **`peak` preset, MTP12, PIECEWISE, sync=auto** | 46.5 tok/s | **177.7 tok/s** |
 
-The highest single-stream decode reached is **141.0 tok/s** (pure-filler
-synthetic PP128/TG128). On natural text, MTP3 is the acceptance sweet spot and
-is the recommended production preset; high-K MTP only wins on highly
-compressible filler. This is consistent with the fork's own MTP sensitivity
-notes.
+The highest single-stream decode reached is **177.7 tok/s** (pure-filler
+synthetic PP128/TG128). On natural text, MTP4 is the best measured preset;
+high-K MTP only wins on highly compressible filler. This is consistent with the
+fork's own MTP sensitivity notes.
 
 Bottleneck: Turing FP8 is weight-only Marlin (sm_75 has no native FP8 matmul),
-and decode is bounded by GPU memory bandwidth / MTP acceptance. MTP3 yields a
+and decode is bounded by GPU memory bandwidth / MTP acceptance. MTP3/4 yields a
 ~2x decode gain over no-MTP; PIECEWISE CUDA graphs add another ~2x. NVLink +
 custom allreduce is not the limiter at single-stream (disabling custom
 allreduce drops decode to 57.9 tok/s).
@@ -139,19 +138,23 @@ the launcher.
 
 | Tag | Graph | MTP | Other | prefill tok/s | decode tok/s |
 |---|---:|---:|---|---:|---:|
-| normal-mtp3-pw (launcher) | PIECEWISE | 3 | launcher normal | 1101 | 61.9 |
+| normal-mtp3-pw (launcher) | PIECEWISE | 3 | launcher normal (`sync=safe`) | 1101 | 61.9 |
 | fast-mtp3-full | FULL_AND_PIECEWISE | 3 | launcher-fast equivalent | 1070 | 47.5 |
-| normal-mtp3-pw (direct) | PIECEWISE | 3 | baseline | 1099 | **64.7** |
-| normal-mtp3-pw-nosync | PIECEWISE | 3 | `VLLM_SM75_SPEC_SYNC_MODE=nosync` | 1090 | 63.4 |
-| mtp3-pw-mamba-full | PIECEWISE | 3 | `VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=1` | 1090 | 60.3 |
+| normal-mtp3-pw (direct) | PIECEWISE | 3 | `sync=auto` (fork default) | 1099 | 64.7 |
+| mtp3-pw-auto | PIECEWISE | 3 | explicit `sync=auto` | 1094 | **64.7** |
+| mtp4-pw-auto | PIECEWISE | 4 | explicit `sync=auto` | 1073 | **67.2** |
+| normal-mtp3-pw-nosync | PIECEWISE | 3 | `sync=nosync` | 1090 | 63.4 |
+| mtp3-pw-mamba-full | PIECEWISE | 3 | mamba full graph 1 | 1090 | 60.3 |
 | mtp3-full-nomamba-full | FULL_AND_PIECEWISE | 3 | mamba full 0 | 1090 | 60.5 |
 | mtp3-eager | none (eager) | 3 | no CUDA graphs | 1050 | 30.7 |
 | nomtp-full | FULL_AND_PIECEWISE | 0 | no MTP | 1212 | 33.1 |
-| mtp2-pw | PIECEWISE | 2 | | 1118 | 57.0 |
-| mtp4-pw | PIECEWISE | 4 | | 1071 | 64.3 |
-| mtp5-pw | PIECEWISE | 5 | | 1036 | 61.5 |
-| mtp6-pw-realtext | PIECEWISE | 6 | | 1014 | 59.4 |
-| mtp8-pw-realtext | PIECEWISE | 8 | | 961 | 53.5 |
+| mtp2-pw | PIECEWISE | 2 | sync=safe | 1118 | 57.0 |
+| mtp4-pw | PIECEWISE | 4 | sync=safe | 1071 | 64.3 |
+| mtp5-pw | PIECEWISE | 5 | sync=safe | 1036 | 61.5 |
+| mtp6-pw-realtext | PIECEWISE | 6 | sync=safe | 1014 | 59.4 |
+| mtp8-pw-realtext | PIECEWISE | 8 | sync=safe | 961 | 53.5 |
+| mtp8-pw-auto | PIECEWISE | 8 | sync=auto | 965 | 54.0 |
+| mtp12-pw-auto-realtext | PIECEWISE | 12 | sync=auto, util 0.95 | 881 | 46.5 |
 | mtp3-pw-int8kv | PIECEWISE | 3 | `--kv-cache-dtype int8_per_token_head` | 1079 | 58.1 |
 | mtp3-pw-tqk8v4 | PIECEWISE | 3 | `turboquant_k8v4`, batch 2560 | 1093 | 59.3 |
 | mtp3-pw-nocustomar | PIECEWISE | 3 | `--disable-custom-all-reduce` | 1066 | 57.9 |
@@ -161,11 +164,12 @@ the launcher.
 Conclusions:
 
 - PIECEWISE beats FULL_AND_PIECEWISE on this hybrid-linear-attention model.
-- `VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=1` and
-  `VLLM_SM75_SPEC_SYNC_MODE=nosync` both lose here; keep 0 / `safe`.
-- MTP is worth ~2x (33.1 → 64.7). MTP3 is the natural-text optimum; MTP4 is
-  tied and is a good synthetic-peak compromise.
-- CUDA graphs are worth ~2x (30.7 eager → 64.7 piecewise).
+- `VLLM_SM75_SPEC_SYNC_MODE=auto` (the fork default) is faster than the
+  launcher's mode-default `safe`; `nosync` is also slower here.
+- `VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=1` loses; keep 0.
+- MTP is worth ~2x (33.1 → 64.7/67.2). MTP4 is the natural-text optimum
+  measured; MTP3 is the conservative high-acceptance choice.
+- CUDA graphs are worth ~2x (30.7 eager → 67.2 piecewise).
 - FP16 KV beats INT8 and TurboQuant for short single-stream decode.
 - Custom NVLink allreduce helps (57.9 → 64.7).
 - `MAX_BATCHED_TOKENS=2048` beats 4096 for single-stream.
@@ -173,34 +177,39 @@ Conclusions:
 ### 6.1 Synthetic (pure-filler) MTP sweep
 
 Using the fork's own `tools/profile_request.py --pure-filler`, PP128/TG128,
-two measured runs after one warmup:
+two measured runs after one warmup, PIECEWISE graphs:
 
-| MTP_K | decode tok/s |
-|---:|---:|
-| 3 | 91.0 |
-| 4 | 104.5 |
-| 5 | 115.4 |
-| 6 | 126.9 |
-| 7 | 141.0 |
-| 8 | 141.1 |
+| MTP_K | sync=safe decode tok/s | sync=auto decode tok/s |
+|---:|---:|---:|
+| 3 | 91.0 | 95.7 |
+| 4 | 104.5 | 109.4 |
+| 5 | 115.4 | — |
+| 6 | 126.9 | — |
+| 7 | 141.0 | — |
+| 8 | 141.1 | 146.0 |
+| 9 | — | 159.8 |
+| 10 | — | 163.4 |
+| 11 | — | 170.1 |
+| 12 | — | **177.7** |
 
-MTP10 did not fit at `MAX_MODEL_LEN=98304` (KV estimate 4.18 GiB vs 4.17 GiB
-available) and is not pursued further.
+MTP13 did not start cleanly at `MAX_MODEL_LEN=98304` / util 0.95 and was not
+pursued further; MTP10 required util 0.95 at this context length.
 
 ## 7. Final shipped presets and handoff
 
 All files live under `~/nixos-config/hosts/nixos-gpu-host/vllm-qwen/`
 (tracked in the nixos-config repo). Profiles force PIECEWISE
 `COMPILATION_CONFIG_JSON`; `run-vllm-qwen.sh` pins
-`VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=0` and `VLLM_SM75_SPEC_SYNC_MODE=safe`.
+`VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=0` and
+`VLLM_SM75_SPEC_SYNC_MODE=auto`.
 
 ```sh
 # on nixos-gpu-host, as tianyixia
 cd ~/nixos-config/hosts/nixos-gpu-host/vllm-qwen
 
-./run-vllm-qwen.sh fast      # recommended daily: MTP3, 64.7 real / 91 filler tok/s
-./run-vllm-qwen.sh balanced  # MTP4: 64.3 real / 104.5 filler tok/s
-./run-vllm-qwen.sh peak      # MTP8: 53.5 real / 141.0 filler tok/s
+./run-vllm-qwen.sh fast      # recommended daily: MTP4, 67.2 real / 109.4 filler tok/s
+./run-vllm-qwen.sh balanced  # MTP3: 64.7 real / 95.7 filler tok/s
+./run-vllm-qwen.sh peak      # MTP12: 46.5 real / 177.7 filler tok/s (benchmark preset)
 ./stop-vllm-qwen.sh
 ```
 
@@ -213,8 +222,8 @@ The llama.cpp DeepSeek unit remains stopped; DeepSeek GGUFs are untouched.
 - The 2080 Ti has no native FP8 tensor cores; the fork logs that FP8 runs as
   weight-only Marlin. Decode is memory-bandwidth-bound (~1.2 TB/s combined
   HBM) plus MTP acceptance.
-- Natural-text decode tops out around 64-65 tok/s with MTP3/4; filler peaks at
-  141 tok/s with MTP7/8 because almost every draft token is accepted.
+- Natural-text decode tops out around 67 tok/s with MTP4; filler peaks at
+  177.7 tok/s with MTP12 because almost every draft token is accepted.
 - Further real-workload gains would come from better acceptance-aware MTP
   (e.g. 2-tier draft selection), TurboQuant kernels for the hybrid linear
   attention path, or a shorter-context tuned graph; on this silicon there is
