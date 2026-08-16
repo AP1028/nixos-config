@@ -2,8 +2,8 @@
 # Start vLLM Qwen3.8-27B-FP8 on gpu-host (2x RTX 2080 Ti, TP=2).
 #
 # Usage: run-vllm-qwen.sh [fast|balanced|peak]
-#   fast     recommended daily profile: MTP4 + PIECEWISE graphs
-#   balanced MTP3 (highest acceptance, slightly lower filler decode)
+#   fast     recommended daily profile: MTP3 + PIECEWISE graphs (best prose decode)
+#   balanced MTP4 (higher synthetic/filler decode, slight prose regression)
 #   peak     MTP12 synthetic peak (~178 tok/s PP128/TG128 pure filler)
 #
 # The server keeps running after this script exits. Logs are under
@@ -16,10 +16,10 @@ MODE="${1:-fast}"
 
 case "$MODE" in
   fast)
-    PROFILE_FILE="$HERE/profiles/qwen38-27b-fp8-fast-mtp4.env"
+    PROFILE_FILE="$HERE/profiles/qwen38-27b-fp8-fast-mtp3.env"
     ;;
   balanced)
-    PROFILE_FILE="$HERE/profiles/qwen38-27b-fp8-fast-mtp3.env"
+    PROFILE_FILE="$HERE/profiles/qwen38-27b-fp8-fast-mtp4.env"
     ;;
   peak)
     PROFILE_FILE="$HERE/profiles/qwen38-27b-fp8-peak-mtp12.env"

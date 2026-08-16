@@ -13,18 +13,19 @@ fork (branch `vllm-2080ti-deifinitive`, fork release v0.1.15) with
 active, MTP and PIECEWISE CUDA graphs enabled.
 
 Measured single-request decode (117 prompt tokens / 128 generated tokens,
-warmup excluded, median of 3):
+warmup excluded, median of 3-5):
 
 | Configuration | Real English prose decode | Fork pure-filler PP128/TG128 decode |
 |---|---:|---:|
-| **`fast` preset, MTP4, PIECEWISE, sync=auto (recommended)** | **67.2 tok/s** | 109.4 tok/s |
-| `balanced` preset, MTP3, PIECEWISE, sync=auto | 64.7 tok/s | 95.7 tok/s |
+| **`fast` preset, MTP3, PIECEWISE, sync=auto (recommended)** | **64.8 tok/s** | 95.7 tok/s |
+| `balanced` preset, MTP4, PIECEWISE, sync=auto | 63.3 tok/s | 109.4 tok/s |
 | **`peak` preset, MTP12, PIECEWISE, sync=auto** | 46.5 tok/s | **177.7 tok/s** |
 
 The highest single-stream decode reached is **177.7 tok/s** (pure-filler
-synthetic PP128/TG128). On natural text, MTP4 is the best measured preset;
-high-K MTP only wins on highly compressible filler. This is consistent with the
-fork's own MTP sensitivity notes.
+synthetic PP128/TG128). On natural text, MTP3 is the best stable preset;
+MTP4 is the synthetic/real compromise; high-K MTP only wins on highly
+compressible filler. This is consistent with the fork's own MTP sensitivity
+notes.
 
 Bottleneck: Turing FP8 is weight-only Marlin (sm_75 has no native FP8 matmul),
 and decode is bounded by GPU memory bandwidth / MTP acceptance. MTP3/4 yields a
@@ -141,8 +142,8 @@ the launcher.
 | normal-mtp3-pw (launcher) | PIECEWISE | 3 | launcher normal (`sync=safe`) | 1101 | 61.9 |
 | fast-mtp3-full | FULL_AND_PIECEWISE | 3 | launcher-fast equivalent | 1070 | 47.5 |
 | normal-mtp3-pw (direct) | PIECEWISE | 3 | `sync=auto` (fork default) | 1099 | 64.7 |
-| mtp3-pw-auto | PIECEWISE | 3 | explicit `sync=auto` | 1094 | **64.7** |
-| mtp4-pw-auto | PIECEWISE | 4 | explicit `sync=auto` | 1073 | **67.2** |
+| mtp3-pw-auto | PIECEWISE | 3 | explicit `sync=auto` | 1092 | **64.8** |
+| mtp4-pw-auto | PIECEWISE | 4 | explicit `sync=auto` | 1063 | 63.3 |
 | normal-mtp3-pw-nosync | PIECEWISE | 3 | `sync=nosync` | 1090 | 63.4 |
 | mtp3-pw-mamba-full | PIECEWISE | 3 | mamba full graph 1 | 1090 | 60.3 |
 | mtp3-full-nomamba-full | FULL_AND_PIECEWISE | 3 | mamba full 0 | 1090 | 60.5 |
@@ -167,8 +168,9 @@ Conclusions:
 - `VLLM_SM75_SPEC_SYNC_MODE=auto` (the fork default) is faster than the
   launcher's mode-default `safe`; `nosync` is also slower here.
 - `VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=1` loses; keep 0.
-- MTP is worth ~2x (33.1 → 64.7/67.2). MTP4 is the natural-text optimum
-  measured; MTP3 is the conservative high-acceptance choice.
+- MTP is worth ~2x (33.1 → 64.8). MTP3 is the best stable natural-text
+  setting; MTP4 trades about 1.5 prose tok/s for +14 filler tok/s. One early
+  MTP4 window hit 67.2 tok/s but did not reproduce on re-runs.
 - CUDA graphs are worth ~2x (30.7 eager → 67.2 piecewise).
 - FP16 KV beats INT8 and TurboQuant for short single-stream decode.
 - Custom NVLink allreduce helps (57.9 → 64.7).
@@ -207,8 +209,8 @@ All files live under `~/nixos-config/hosts/nixos-gpu-host/vllm-qwen/`
 # on nixos-gpu-host, as tianyixia
 cd ~/nixos-config/hosts/nixos-gpu-host/vllm-qwen
 
-./run-vllm-qwen.sh fast      # recommended daily: MTP4, 67.2 real / 109.4 filler tok/s
-./run-vllm-qwen.sh balanced  # MTP3: 64.7 real / 95.7 filler tok/s
+./run-vllm-qwen.sh fast      # recommended daily: MTP3, 64.8 real / 95.7 filler tok/s
+./run-vllm-qwen.sh balanced  # MTP4: 63.3 real / 109.4 filler tok/s
 ./run-vllm-qwen.sh peak      # MTP12: 46.5 real / 177.7 filler tok/s (benchmark preset)
 ./stop-vllm-qwen.sh
 ```
@@ -222,7 +224,7 @@ The llama.cpp DeepSeek unit remains stopped; DeepSeek GGUFs are untouched.
 - The 2080 Ti has no native FP8 tensor cores; the fork logs that FP8 runs as
   weight-only Marlin. Decode is memory-bandwidth-bound (~1.2 TB/s combined
   HBM) plus MTP acceptance.
-- Natural-text decode tops out around 67 tok/s with MTP4; filler peaks at
+- Natural-text decode tops out around 64-65 tok/s with MTP3; filler peaks at
   177.7 tok/s with MTP12 because almost every draft token is accepted.
 - Further real-workload gains would come from better acceptance-aware MTP
   (e.g. 2-tier draft selection), TurboQuant kernels for the hybrid linear

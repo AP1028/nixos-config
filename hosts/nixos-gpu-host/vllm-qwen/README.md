@@ -17,8 +17,8 @@ CUDA 12.9 host toolkit + torch 2.11.0+cu128, driver 595.71.05.
 # on nixos-gpu-host, as tianyixia
 cd ~/nixos-config/hosts/nixos-gpu-host/vllm-qwen
 
-./run-vllm-qwen.sh fast      # recommended daily: MTP4 + PIECEWISE CUDAGraph
-./run-vllm-qwen.sh balanced  # MTP3 (highest natural-text acceptance)
+./run-vllm-qwen.sh fast      # recommended daily: MTP3 + PIECEWISE CUDAGraph
+./run-vllm-qwen.sh balanced  # MTP4: higher synthetic/filler decode
 ./run-vllm-qwen.sh peak      # MTP12 synthetic peak, benchmark-only
 ./stop-vllm-qwen.sh
 ```
@@ -42,8 +42,8 @@ excluded. "prose" = the fixed English paragraph in `bench_single_stream.py`;
 
 | Preset / config | prefill tok/s | prose decode tok/s | filler decode tok/s | VRAM per GPU |
 |---|---:|---:|---:|---:|
-| `fast` MTP4 PIECEWISE, sync=auto (recommended) | ~1073 | **67.2** | **109.4** | 20.8 GiB |
-| `balanced` MTP3 PIECEWISE, sync=auto | ~1082 | 64.7 | 95.7 | 21.7 GiB |
+| `fast` MTP3 PIECEWISE, sync=auto (recommended) | ~1092 | **64.8** | 95.7 | 21.7 GiB |
+| `balanced` MTP4 PIECEWISE, sync=auto | ~1063 | 63.3 | **109.4** | 20.8 GiB |
 | `peak` MTP12 PIECEWISE, sync=auto | ~881 | 46.5 | **177.7** | 22.0 GiB |
 | shipped normal fp16kv-128K (98K fit) | 1101 | 61.9 | — | 21.7 GiB |
 | shipped fast full-graph MTP3 | 1097 | 44.7 | — | 20.3 GiB |
@@ -59,9 +59,9 @@ Host RAM used at idle after load: ~10 GiB. Full tuning history and commands:
 Interpretation: PIECEWISE CUDA graphs + MTP are the two big levers (both
 roughly double decode). `VLLM_SM75_SPEC_SYNC_MODE=auto` is measurably faster
 than the launcher's mode-default `safe` (+4 tok/s prose). FP16 KV beats
-INT8/TurboQuant for short single-stream decode. MTP4 is the best all-round
-preset; high-K MTP only wins on highly compressible filler, so `peak` is a
-benchmark preset, not the daily preset.
+INT8/TurboQuant for short single-stream decode. MTP3 is the best natural-text
+preset; MTP4 trades ~1.5 tok/s of prose for +14 filler tok/s; high-K MTP only
+wins on highly compressible filler, so `peak` is a benchmark preset.
 
 ## NixOS build / toolchain notes
 
