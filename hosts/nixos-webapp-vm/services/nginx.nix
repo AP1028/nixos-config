@@ -12,7 +12,7 @@
   # nixos-git-vm over plain HTTP; nginx terminates TLS on :18081.
   giteaUpstream = "http://192.168.3.102:3001";
 
-  # Uptime Kuma still listens on localhost only; nginx exposes it at /status
+  # Uptime Kuma still listens on localhost only; nginx exposes it at /monitor
   # on both the HTTP and HTTPS listeners below.
   uptimeKumaUpstream = "http://127.0.0.1:3001";
 
@@ -118,25 +118,39 @@ in {
           '';
         };
 
-        "= /status" = {
-          return = "308 /status/";
+        # Uptime Kuma admin UI lives under /monitor/. Its public status page
+        # (slug "public") is /monitor/status/public; the dashboard remains
+        # login-gated at /monitor/dashboard.
+        "= /monitor" = {
+          return = "308 /monitor/";
         };
 
-        "/status/" = {
-          # Strip /status/ before forwarding to Uptime Kuma and rewrite its
+        "/monitor/" = {
+          # Strip /monitor/ before forwarding to Uptime Kuma and rewrite its
           # root-absolute redirects (e.g. Location: /dashboard) so the UI
-          # stays under /status/.
+          # stays under /monitor/.
           proxyPass = "${uptimeKumaUpstream}/";
           proxyWebsockets = true;
           extraConfig = ''
-            proxy_redirect / /status/;
+            proxy_redirect / /monitor/;
             ${uptimeKumaHostHeader}
           '';
         };
 
+        # Compatibility redirects for the previous /status/ prefix.
+        "= /status" = {
+          return = "308 /monitor/";
+        };
+        "= /status/" = {
+          return = "308 /monitor/";
+        };
+        "= /status/status/public" = {
+          return = "301 /monitor/status/public";
+        };
+
         # Uptime Kuma's frontend is built with absolute root paths: assets,
         # API calls and socket.io all go to "/...". Proxy those root prefixes
-        # to Kuma so the dashboard reached at /status/dashboard works; the
+        # to Kuma so the dashboard reached at /monitor/dashboard works; the
         # bare root itself remains 404 above.
         "/assets/" = {
           proxyPass = "${uptimeKumaUpstream}";
