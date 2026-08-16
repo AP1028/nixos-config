@@ -5,10 +5,8 @@
   lib,
   ...
 }: let
-  # llama.cpp b10331 = the DeepSeek V4 / DSpark / MXFP4 cluster revision
-  # (PR #25784). nixpkgs-stable 26.05 still packages b9190, which has no
-  # deepseek4/dflash/DSV4 model support and no draft-dspark speculative
-  # decoding, so b10331 is pinned explicitly on both GPU hosts.
+  # llama.cpp b10442 = newer DSV4/DSpark tree, retried after fixing the RPC
+  # graph-cache patch to stop poisoning CUDA graph uids.
   #
   # This build is independent from the gpu-vm build: gpu-host uses the
   # current nixpkgs-stable CUDA toolkit (driver 595.x, sm_75 for Turing).
@@ -19,27 +17,20 @@
     rpcSupport = true;
     cudaPackages = pkgs.cudaPackages;
   }).overrideAttrs (old: let
-    b10331-src = pkgs.fetchFromGitHub {
+    b10442-src = pkgs.fetchFromGitHub {
       owner = "ggml-org";
       repo = "llama.cpp";
-      tag = "b10331";
-      hash = "sha256-0uquzGXrLbuFFUauNl0R9tjfxLt5UBEC4cqNHnmdux4=";
-      leaveDotGit = true;
-      postFetch = old.src.postFetch or null;
+      tag = "b10442";
+      hash = "sha256-R47+47474rmh6pbatI0ucZXoqeMfGHL/geFklEUx/1E=";
     };
     oldCmakeFlagsWithoutCudaArch = builtins.filter
       (f: (builtins.match "-DCMAKE_CUDA_ARCHITECTURES.*" f) == null)
       old.cmakeFlags;
   in {
-    version = "10331";
-    src = b10331-src;
+    version = "10442";
+    src = b10442-src;
 
-    # Stable split-graph uids so RPC graph cache engages (kills per-token
-    # graph re-serialization over the 40G link); DSpark draft path fix;
-    # DSV4 compressed-KV stays client-side so RPC KV offload does not
-    # reference remote buffers; server-side MXFP4 repack so the remote CPU
-    # backend runs the fast GEMV path. All five patches apply to pristine
-    # b10331 and are shared with the gpu-vm build.
+    # Same five RPC/DSV4 patches, all verified to apply to b10442.
     patches = (old.patches or [ ]) ++ [
       ../../../packages/patches/rpc-graph-cache.patch
       ../../../packages/patches/rpc-dspark-draft-path.patch
@@ -48,8 +39,17 @@
       ../../../packages/patches/rpc-server-repack.patch
     ];
 
+    # Our fetchFromGitHub source has no .git/COMMIT file, so write the build
+    # commit string directly instead of the package default $(cat COMMIT).
+    preConfigure = ''
+      prependToVar cmakeFlags "-DLLAMA_BUILD_COMMIT:STRING=b10442"
+      pushd tools/ui
+      npm run build
+      popd
+    '';
+
     cmakeFlags = oldCmakeFlagsWithoutCudaArch ++ [
-      # b10331 installs ggml-rpc-server only with LLAMA_TOOLS_INSTALL.
+      # b10442 installs ggml-rpc-server only with LLAMA_TOOLS_INSTALL.
       "-DLLAMA_TOOLS_INSTALL=ON"
       # Bare-metal only has 2x 2080 Ti (Turing sm_75). Building only the
       # arch that can run here keeps CUDA compile time and closure smaller.
@@ -57,16 +57,16 @@
     ];
 
     npmDeps = pkgs.fetchNpmDeps {
-      name = "llama-cpp-10331-npm-deps";
-      src = b10331-src;
+      name = "llama-cpp-10442-npm-deps";
+      src = b10442-src;
       patches = [ ../../../packages/patches/rpc-graph-cache.patch ];
       preBuild = ''
         pushd tools/ui
       '';
-      hash = "sha256-FHvd2bMvBc9EXrJEzu8EN78oUVSLcOKYCc0232V+L4A=";
+      hash = "sha256-2Q7XhaLAArmviOLdQsNbYTfdyDE5pW9lR26cRHEVl9k=";
     };
 
-    # b10331 installs ggml-rpc-server (not bin/rpc-server like b9190).
+    # b10442 installs ggml-rpc-server (not bin/rpc-server like b9190).
     postInstall = ''
       mkdir -p $out/include
       cp $src/include/llama.h $out/include/
