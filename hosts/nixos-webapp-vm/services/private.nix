@@ -207,20 +207,15 @@
             <div class="desc">Git server.</div>
             <span class="badge public">public · own login</span>
           </a>
-          <a class="card" href="/monitor/status/public">
-            <div class="name">Status</div>
-            <div class="desc">Public Uptime Kuma status page.</div>
-            <span class="badge public">public</span>
-          </a>
-          <a class="card" href="/monitor/">
-            <div class="name">Uptime Kuma</div>
-            <div class="desc">Monitoring dashboard.</div>
-            <span class="badge public">admin login</span>
-          </a>
         </div>
 
         <h2>Private</h2>
         <div class="grid">
+          <a class="card" href="/monitor/dashboard">
+            <div class="name">Uptime Kuma</div>
+            <div class="desc">Monitoring dashboard.</div>
+            <span class="badge private">own login</span>
+          </a>
           <a class="card" href="/private/pve1/">
             <div class="name">Proxmox VE 1</div>
             <div class="desc">Virtualization host 1.</div>
@@ -422,7 +417,7 @@ in {
           map (domain: {
             inherit domain;
             authelia_url = "https://${domain}:18081/private/";
-            default_redirection_url = "https://${domain}:18081/private/pve1/";
+            default_redirection_url = "https://${domain}:18081/private/main/";
           })
           privateDomains;
       };
