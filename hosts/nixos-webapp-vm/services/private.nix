@@ -103,6 +103,7 @@
     sub_filter "'/api2/json' + url + '/vncwebsocket" "'${prefix}/api2/json' + url + '/vncwebsocket";
     sub_filter 'await l10n.setup(LINGUAS, "/novnc/app/locale/")' 'await l10n.setup(LINGUAS, "${prefix}/novnc/app/locale/")';
     sub_filter 'await fetch("/novnc/package.json")' 'await fetch("${prefix}/novnc/package.json")';
+    sub_filter 'import UI from "/novnc/' 'import UI from "${prefix}/novnc/';
 
     # Spice download links are plain anchors, not Ext.Ajax requests.
     sub_filter "let url = '/nodes/' + nodename + '/spiceshell';" "let url = '${prefix}/nodes/' + nodename + '/spiceshell';";
@@ -266,6 +267,16 @@ in {
   '';
 
   environment.systemPackages = [pkgs.authelia autheliaSetUser];
+
+  # Safety net for console windows that still resolve to the bare root
+  # (e.g. tabs with pre-fix JS cached). Map the PVE node name from the
+  # query string back to its /private/pveN prefix.
+  services.nginx.appendHttpConfig = ''
+    map $arg_node $private_pve_console_prefix {
+      default /private/pve1;
+      pve /private/pve2;
+    }
+  '';
 
   services.nginx.virtualHosts."_".locations = {
     "= /private" = {

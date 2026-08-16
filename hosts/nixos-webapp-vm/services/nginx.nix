@@ -91,7 +91,14 @@ in {
 
       locations = {
         "= /" = {
-          return = "404";
+          # Bare-root console URLs come from stale PVE UI caches. Route them
+          # back to the right /private/pveN prefix (mapped by node name).
+          extraConfig = ''
+            if ($arg_console) {
+              return 302 $private_pve_console_prefix$request_uri;
+            }
+            return 404;
+          '';
         };
 
         "= /gitea" = {
