@@ -60,6 +60,44 @@
     error_page 401 =302 $redirection_url;
   '';
 
+  # Generic same-origin path normalizer for the non-Proxmox private apps.
+  # SillyTavern and dsh both call absolute /api/... paths from JavaScript;
+  # this hook prefixes fetch/XHR/WebSocket/EventSource URLs at runtime. It
+  # also repoints dsh's __DSH_BOOT__ plugin entries, whose URLs come from an
+  # inline JSON blob rather than href/src attributes.
+  privatePathHook = prefix:
+    lib.removeSuffix "\n" ''
+      window.__PRIVATE_BASE__='${prefix}'; (function(){var P=window.__PRIVATE_BASE__; function N(u){if(typeof u!=='string'){return u;} if(/^[a-z][a-z0-9+.-]*:/i.test(u)||/^\/\//.test(u)){return u;} if(u.indexOf(P+'/')===0||u===P){return u;} if(u.charAt(0)==='/'){return P+u;} return u;} if(window.__DSH_BOOT__&&window.__DSH_BOOT__.entries){for(var i=0;i<window.__DSH_BOOT__.entries.length;i++){var e=window.__DSH_BOOT__.entries[i];if(e&&typeof e.url==='string'){e.url=N(e.url);}}} var F=window.fetch; window.fetch=function(){if(arguments.length){arguments[0]=N(arguments[0]);} return F.apply(this,arguments);}; var O=XMLHttpRequest.prototype.open; XMLHttpRequest.prototype.open=function(){if(arguments.length>1){arguments[1]=N(arguments[1]);} return O.apply(this,arguments);}; if(window.WebSocket){var W=window.WebSocket; window.WebSocket=new Proxy(W,{construct:function(t,a){if(a.length){a[0]=N(a[0]);} return Reflect.construct(t,a);}});} if(window.EventSource){var E=window.EventSource; window.EventSource=new Proxy(E,{construct:function(t,a){if(a.length){a[0]=N(a[0]);} return Reflect.construct(t,a);}});}})();
+    '';
+
+  # Static HTML/CSS rewrites plus the runtime path hook above. Used for both
+  # SillyTavern and dsh.
+  webSubFilters = prefix: ''
+    proxy_set_header Accept-Encoding "";
+    sub_filter_once off;
+    sub_filter_types *;
+
+    sub_filter 'href="/' 'href="${prefix}/';
+    sub_filter 'src="/' 'src="${prefix}/';
+    sub_filter 'action="/' 'action="${prefix}/';
+    sub_filter 'url("/' 'url("${prefix}/';
+    sub_filter "url('/" "url('${prefix}/";
+
+    sub_filter '</head>' "<script>${privatePathHook prefix}</script></head>";
+  '';
+
+  sillytavernSubFilters = prefix: ''
+    ${webSubFilters prefix}
+
+    # SillyTavern's relative asset URLs are all resolved through <base href>.
+    # Point it at the subpath and let the runtime hook handle absolute /api
+    # calls. This rule must come after the generic href="/" rewrite above so
+    # the freshly inserted prefix is not prefixed a second time.
+    sub_filter '<base href="/">' '<base href="${prefix}/">';
+  '';
+
+  dshSubFilters = webSubFilters;
+
   # Proxmox VE's web UI is written for "/" and hardcodes absolute root paths
   # (/pve2/..., /pwt/..., /api2/..., /nodes/...). nginx's sub_filter rewrites
   # those into /private/pve1 or /private/pve2 so the UI stays on its own
@@ -140,6 +178,32 @@
     proxy_read_timeout 3600s;
     proxy_send_timeout 3600s;
     ${pveSubFilters "/private/pve2"}
+  '';
+
+  sillytavernProxyConfig = ''
+    ${autheliaAuthRequest}
+
+    proxy_ssl_verify off;
+    proxy_redirect / /private/sillytavern/;
+    proxy_redirect https://192.168.3.105:8000/ /private/sillytavern/;
+    proxy_set_header Host $proxy_host;
+    client_max_body_size 0;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    ${sillytavernSubFilters "/private/sillytavern"}
+  '';
+
+  dshProxyConfig = ''
+    ${autheliaAuthRequest}
+
+    proxy_ssl_verify off;
+    proxy_redirect / /private/dsh/;
+    proxy_redirect https://192.168.3.105:8080/ /private/dsh/;
+    proxy_set_header Host $proxy_host;
+    client_max_body_size 0;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    ${dshSubFilters "/private/dsh"}
   '';
 
   # Imperative password setter. It takes the plaintext password as argv,
@@ -225,7 +289,7 @@ in {
           map (domain: {
             inherit domain;
             policy = "one_factor";
-            resources = ["^/private/(pve1|pve2)(/.*)?$"];
+            resources = ["^/private/(pve1|pve2|sillytavern|dsh)(/.*)?$"];
           })
           privateDomains;
       };
@@ -319,6 +383,16 @@ in {
       '';
     };
 
+    "= /private/sillytavern" = {
+      return = "308 /private/sillytavern/";
+      extraConfig = privateHttpsOnly;
+    };
+
+    "= /private/dsh" = {
+      return = "308 /private/dsh/";
+      extraConfig = privateHttpsOnly;
+    };
+
     "/private/pve1/" = {
       proxyPass = "https://192.168.3.10:8006/";
       proxyWebsockets = true;
@@ -329,6 +403,22 @@ in {
       proxyPass = "https://192.168.3.100:8006/";
       proxyWebsockets = true;
       extraConfig = pve2ProxyConfig;
+    };
+
+    "/private/sillytavern/" = {
+      proxyPass = "https://192.168.3.105:8000/";
+      proxyWebsockets = true;
+      # Disable the global recommended proxy headers so our explicit
+      # proxy_set_header Host $proxy_host below is not overridden.
+      recommendedProxySettings = false;
+      extraConfig = sillytavernProxyConfig;
+    };
+
+    "/private/dsh/" = {
+      proxyPass = "https://192.168.3.105:8080/";
+      proxyWebsockets = true;
+      recommendedProxySettings = false;
+      extraConfig = dshProxyConfig;
     };
   };
 }
