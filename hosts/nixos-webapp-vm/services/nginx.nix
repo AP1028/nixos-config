@@ -117,9 +117,51 @@ in {
         };
 
         "/status/" = {
-          # Strip /status/ before forwarding to Uptime Kuma.
+          # Strip /status/ before forwarding to Uptime Kuma and rewrite its
+          # root-absolute redirects (e.g. Location: /dashboard) so the UI
+          # stays under /status/.
           proxyPass = "${uptimeKumaUpstream}/";
           proxyWebsockets = true;
+          extraConfig = ''
+            proxy_redirect / /status/;
+          '';
+        };
+
+        # Uptime Kuma's frontend is built with absolute root paths: assets,
+        # API calls and socket.io all go to "/...". Proxy those root prefixes
+        # to Kuma so the dashboard reached at /status/dashboard works; the
+        # bare root itself remains 404 above.
+        "/assets/" = {
+          proxyPass = "${uptimeKumaUpstream}";
+        };
+        "/api/" = {
+          proxyPass = "${uptimeKumaUpstream}";
+        };
+        "/socket.io/" = {
+          proxyPass = "${uptimeKumaUpstream}";
+          proxyWebsockets = true;
+        };
+        "/upload/" = {
+          proxyPass = "${uptimeKumaUpstream}";
+        };
+        "/screenshots/" = {
+          proxyPass = "${uptimeKumaUpstream}";
+        };
+
+        "= /icon.svg" = {
+          proxyPass = "${uptimeKumaUpstream}";
+        };
+        "= /manifest.json" = {
+          proxyPass = "${uptimeKumaUpstream}";
+        };
+        "= /apple-touch-icon.png" = {
+          proxyPass = "${uptimeKumaUpstream}";
+        };
+        "= /favicon.ico" = {
+          proxyPass = "${uptimeKumaUpstream}";
+        };
+        "= /robots.txt" = {
+          proxyPass = "${uptimeKumaUpstream}";
         };
       };
     };
