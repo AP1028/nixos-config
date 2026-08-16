@@ -71,7 +71,7 @@
     # XMLHttpRequest calls. That avoids double-prefixing paths PVE composes
     # at runtime (e.g. "/api2/json" + baseUrl), which broke the realm list.
     ajaxHook = lib.removeSuffix "\n" ''
-      window.__PVE_SUBPATH__='${prefix}'; (function(){var P=window.__PVE_SUBPATH__; function N(u){if(typeof u!=='string'){return u;} if(/^[a-z][a-z0-9+.-]*:/i.test(u)||/^\/\//.test(u)){return u;} if(u.indexOf(P+'/')===0||u===P){return u;} if(u.charAt(0)==='/'){return P+u;} return u;} var R=Ext.Ajax.request; Ext.Ajax.request=function(o){if(o&&typeof o.url==='string'){o.url=N(o.url);} return R.apply(this,arguments);}; var O=XMLHttpRequest.prototype.open; XMLHttpRequest.prototype.open=function(m,u){arguments[1]=N(u); return O.apply(this,arguments);};})();
+      window.__PVE_SUBPATH__='${prefix}'; (function(){var P=window.__PVE_SUBPATH__; function N(u){if(typeof u!=='string'){return u;} if(/^[a-z][a-z0-9+.-]*:/i.test(u)||/^\/\//.test(u)){return u;} if(u.indexOf(P+'/')===0||u===P){return u;} if(u.charAt(0)==='/'){return P+u;} return u;} var R=Ext.Ajax.request; Ext.Ajax.request=function(o){if(o&&typeof o.url==='string'){o.url=N(o.url);} return R.apply(this,arguments);}; var O=XMLHttpRequest.prototype.open; XMLHttpRequest.prototype.open=function(m,u){arguments[1]=N(u); return O.apply(this,arguments);}; var W=window.open; window.open=function(u){if(typeof u==='string'&&u.charAt(0)==='?'){arguments[0]=P+'/'+u;} return W.apply(this,arguments);};})();
     '';
   in ''
     # Proxmox gzips its assets; sub_filter needs the plain stream.
@@ -85,6 +85,9 @@
     sub_filter 'action="/' 'action="${prefix}/';
     sub_filter 'url("/' 'url("${prefix}/';
     sub_filter "url('/" "url('${prefix}/";
+
+    # The header logo is built in JS as "/pve2" + "/images/proxmox_logo.png".
+    sub_filter "let prefix = me.prefix !== undefined ? me.prefix : '/pve2';" "let prefix = me.prefix !== undefined ? me.prefix : '${prefix}/pve2';";
 
     # Inject the request normalizer right after the inline Proxmox setup
     # object, before proxmoxlib.js runs.
