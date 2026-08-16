@@ -170,7 +170,9 @@ in {
         ${privateHttpsOnly}
         proxy_redirect http:// https://;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
+        # Include the port: Authelia uses this header to build absolute URLs
+        # for its portal (https://host:18081/private/...).
+        proxy_set_header X-Forwarded-Host $host:$server_port;
         proxy_set_header X-Forwarded-Port $server_port;
       '';
     };
@@ -182,7 +184,7 @@ in {
         proxy_pass http://127.0.0.1:9091/api/authz/auth-request;
         proxy_pass_request_body off;
         proxy_set_header X-Original-Method $request_method;
-        proxy_set_header X-Original-URL $scheme://$host$request_uri;
+        proxy_set_header X-Original-URL $scheme://$host:$server_port$request_uri;
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header Content-Length "";
         proxy_http_version 1.1;
