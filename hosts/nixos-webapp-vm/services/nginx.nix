@@ -16,6 +16,12 @@
   # on both the HTTP and HTTPS listeners below.
   uptimeKumaUpstream = "http://127.0.0.1:3001";
 
+  # Preserve the original host:port when proxying to Kuma. Its websocket
+  # origin check compares the Host header against the browser Origin, and
+  # nginx's $host drops the port. ($host:$server_port keeps the gixy
+  # host-spoofing check happy, unlike $http_host.)
+  uptimeKumaHostHeader = "proxy_set_header Host $host:$server_port;";
+
   selfSignedCert =
     pkgs.runCommand "nixos-webapp-vm-self-signed-cert" {
       nativeBuildInputs = [pkgs.openssl];
@@ -124,6 +130,7 @@ in {
           proxyWebsockets = true;
           extraConfig = ''
             proxy_redirect / /status/;
+            ${uptimeKumaHostHeader}
           '';
         };
 
@@ -133,35 +140,45 @@ in {
         # bare root itself remains 404 above.
         "/assets/" = {
           proxyPass = "${uptimeKumaUpstream}";
+          extraConfig = uptimeKumaHostHeader;
         };
         "/api/" = {
           proxyPass = "${uptimeKumaUpstream}";
+          extraConfig = uptimeKumaHostHeader;
         };
         "/socket.io/" = {
           proxyPass = "${uptimeKumaUpstream}";
           proxyWebsockets = true;
+          extraConfig = uptimeKumaHostHeader;
         };
         "/upload/" = {
           proxyPass = "${uptimeKumaUpstream}";
+          extraConfig = uptimeKumaHostHeader;
         };
         "/screenshots/" = {
           proxyPass = "${uptimeKumaUpstream}";
+          extraConfig = uptimeKumaHostHeader;
         };
 
         "= /icon.svg" = {
           proxyPass = "${uptimeKumaUpstream}";
+          extraConfig = uptimeKumaHostHeader;
         };
         "= /manifest.json" = {
           proxyPass = "${uptimeKumaUpstream}";
+          extraConfig = uptimeKumaHostHeader;
         };
         "= /apple-touch-icon.png" = {
           proxyPass = "${uptimeKumaUpstream}";
+          extraConfig = uptimeKumaHostHeader;
         };
         "= /favicon.ico" = {
           proxyPass = "${uptimeKumaUpstream}";
+          extraConfig = uptimeKumaHostHeader;
         };
         "= /robots.txt" = {
           proxyPass = "${uptimeKumaUpstream}";
+          extraConfig = uptimeKumaHostHeader;
         };
       };
     };
