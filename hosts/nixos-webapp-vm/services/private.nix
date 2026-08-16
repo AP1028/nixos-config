@@ -137,8 +137,8 @@ in {
           /var/lib/authelia-main/jwt_secret \
           /var/lib/authelia-main/storage_encryption_key \
           /var/lib/authelia-main/session_secret
-        if [ ! -e /var/lib/authelia-main/users.yml ] || grep -q '^users: {}$' /var/lib/authelia-main/users.yml; then
-          placeholder_hash="$(${pkgs.authelia}/bin/authelia crypto hash generate argon2 --password 'disabled-placeholder' --no-confirm)"
+        if [ ! -e /var/lib/authelia-main/users.yml ] || grep -q '^users: {}$' /var/lib/authelia-main/users.yml || grep -q 'password: "Digest:' /var/lib/authelia-main/users.yml; then
+          placeholder_hash="$(${pkgs.authelia}/bin/authelia crypto hash generate argon2 --password 'disabled-placeholder' --no-confirm | sed -n 's/^Digest: //p')"
           cat > /var/lib/authelia-main/users.yml <<EOF
     users:
       __placeholder__:
