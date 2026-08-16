@@ -39,4 +39,11 @@ in {
   # Stable path for launcher/build wrappers:
   #   CUDA_HOME=/etc/vllm-cuda-home
   environment.etc."vllm-cuda-home".source = vllmCudaHome;
+
+  # Triton (a torch dependency) hard-codes `/sbin/ldconfig` when it probes
+  # CUDA library dirs.  NixOS does not create /sbin, so provide it here.
+  systemd.tmpfiles.rules = [
+    "d /sbin 0755 root root -"
+    "L+ /sbin/ldconfig - - - - ${pkgs.glibc.bin}/bin/ldconfig"
+  ];
 }
