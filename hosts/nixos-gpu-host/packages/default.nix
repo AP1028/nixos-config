@@ -97,14 +97,11 @@ in {
     wants = ["network-online.target"];
     wantedBy = lib.mkForce [];
     path = [ llamaCppDsv4 pkgs.curl ];
-    # DSV4 CUDA race on Turing sm_75 (real prompts hit illegal memory access in
-    # the fused MMQ path). Disabling CUDA graph + op fusion is the measured
-    # workaround: synthetic llama-bench 128p/64g stays at ~2.8 tg / ~16 pp t/s
-    # with the cluster, while real prompts no longer crash.
-    environment = {
-      GGML_CUDA_DISABLE_FUSION = "1";
-      GGML_CUDA_DISABLE_GRAPHS = "1";
-    };
+    # ngl=7 is the maximum layer split that is stable for long real prompts
+    # with b10331 on this GPU mix. Higher ngl (e.g. 15) loads and runs short
+    # prompts, but long prompts still hit a CUDA illegal memory access in the
+    # fused DSV4 path. Disabling CUDA graph/fusion makes the crash go away but
+    # produces garbage output, so we do NOT use that workaround.
     serviceConfig = {
       User = "tianyixia";
       Group = "users";
