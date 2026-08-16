@@ -30,6 +30,32 @@
   pkgs,
   ...
 }: let
+  # Quantum's vue-router normally uses `baseURL` for BOTH history and API
+  # paths. With baseURL=/files/ that produces /files/files/... URLs (the
+  # router route is already "/files/:path"). Patch the built frontend bundle
+  # so history uses "/" while the API keeps using /files/: one /files/ in
+  # browser URLs, and all api/static traffic stays under /files/.
+  filebrowserQuantum = pkgs.filebrowser-quantum.overrideAttrs (old: {
+    nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.gzip];
+    preBuild =
+      (old.preBuild or "")
+      + ''
+        chmod -R u+w http/embed
+        for f in http/embed/assets/index-*.js.gz; do
+          plain="''${f%.gz}"
+          zcat "$f" > "$plain"
+          if ! grep -q 'history:RK(Nt.baseURL)' "$plain"; then
+            echo "file-web: quantum frontend router pattern not found; update the patch" >&2
+            exit 1
+          fi
+          sed -i 's/history:RK(Nt.baseURL)/history:RK("\/")/' "$plain"
+          gzip -9 -n -c "$plain" > "$f.new"
+          mv "$f.new" "$f"
+          rm -f "$plain"
+        done
+      '';
+  });
+
   # Folder sizes cannot be computed without the background indexer, and
   # indexing a 543G tree at boot is exactly what we avoid. With the
   # "viewable only" (on-demand listing) mode the app would otherwise show a
@@ -41,6 +67,23 @@
     .listing-item[data-dir="true"] > .text > .size {
       display: none !important;
     }
+  '';
+
+  # Shared proxy settings for every /files/... nginx location on this VM.
+  fileWebProxyExtraConfig = ''
+    # The pool is a NAS: multi-GB files and long .zip streams are normal.
+    client_max_body_size 0;
+    client_body_timeout 3600s;
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+
+    # Trust boundary for quantum's proxy auth (must override inbound).
+    # Host / X-Real-IP / X-Forwarded-* come from recommendedProxySettings;
+    # re-setting Host here would send it to the backend twice and Go's HTTP
+    # parser rejects duplicate Host.
+    proxy_set_header X-Remote-User "files";
   '';
 
   fileWebConfig = (pkgs.formats.yaml {}).generate "file-web.yaml" {
@@ -181,7 +224,7 @@ in {
     serviceConfig = {
       User = "fileweb";
       Group = "storage";
-      ExecStart = "${lib.getExe pkgs.filebrowser-quantum} -c ${fileWebConfig}";
+      ExecStart = "${lib.getExe filebrowserQuantum} -c ${fileWebConfig}";
       WorkingDirectory = "/var/lib/fileweb"; # bolt DB + sqlite index live here
       StateDirectory = "fileweb";
       StateDirectoryMode = "0750";
@@ -248,26 +291,35 @@ in {
         "= /files" = {
           return = "308 /files/";
         };
-        "/files/" = {
-          # No URI in proxyPass: forward /files/... unchanged. Quantum is
-          # configured with baseURL /files/, so it owns that prefix.
+
+        # API / static traffic stays on its Quantum baseURL (/files/...).
+        "/files/api/" = {
           proxyPass = "http://127.0.0.1:8081";
           proxyWebsockets = true;
-          extraConfig = ''
-            # The pool is a NAS: multi-GB files and long .zip streams are normal.
-            client_max_body_size 0;
-            client_body_timeout 3600s;
-            proxy_request_buffering off;
-            proxy_buffering off;
-            proxy_read_timeout 3600s;
-            proxy_send_timeout 3600s;
+          extraConfig = fileWebProxyExtraConfig;
+        };
+        "/files/public/" = {
+          proxyPass = "http://127.0.0.1:8081";
+          proxyWebsockets = true;
+          extraConfig = fileWebProxyExtraConfig;
+        };
+        "= /files/health" = {
+          proxyPass = "http://127.0.0.1:8081";
+          extraConfig = fileWebProxyExtraConfig;
+        };
 
-            # Trust boundary for quantum's proxy auth (must override inbound).
-            # Host / X-Real-IP / X-Forwarded-* come from
-            # recommendedProxySettings; re-setting Host here would send it to
-            # the backend twice and Go's HTTP parser rejects duplicate Host.
-            proxy_set_header X-Remote-User "files";
-          '';
+        # Everything else under /files/ is a vue-router deep link
+        # (/files/Public/...); serve the SPA index for it. The patched
+        # router uses history base "/", so browser URLs never become
+        # /files/files/...
+        "/files/" = {
+          proxyPass = "http://127.0.0.1:8081";
+          proxyWebsockets = true;
+          extraConfig =
+            ''
+              rewrite ^/files/.*$ /files/ break;
+            ''
+            + fileWebProxyExtraConfig;
         };
       };
     };
