@@ -58,6 +58,10 @@
 
   uptimeKuma = pkgs.runCommand "uptime-kuma-status-path" {} ''
     cp -a ${pkgs.uptime-kuma}/. "$out/"
+    # The copied wrapper script still hardcodes the original store path; point
+    # it at this patched copy so the patched dist/ is the one that runs.
+    chmod -R u+w "$out/bin"
+    sed -i "s#${pkgs.uptime-kuma}#$out#g" "$out/bin/uptime-kuma-server"
     chmod -R u+w "$out/lib/node_modules/uptime-kuma"
     rm -rf "$out/lib/node_modules/uptime-kuma/dist"
     cp -r ${uptimeKumaDist} "$out/lib/node_modules/uptime-kuma/dist"
