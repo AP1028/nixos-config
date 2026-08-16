@@ -1,13 +1,15 @@
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
-@@ -1011,6 +1011,27 @@
+@@ -1052,6 +1052,29 @@
  }
  
  // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
 +// FNV-1a hash of the graph structure (node/leaf pointers + counts). Stable
-+// across computes when the same tensor objects form the same topology, so
-+// backends that cache graphs by uid (CUDA, RPC) can reuse them instead of
-+// re-validating or re-serializing the full graph on every token.
++// across computes when the same tensor objects form the same topology, so the
++// RPC backend can reuse its serialized graph instead of re-sending the full
++// graph on every token. CUDA/CPU splits keep the default unique uid because
++// their graph caches also validate shape/data properties and a structure-only
++// hash could alias different shapes.
 +static uint64_t ggml_graph_structure_hash(const struct ggml_cgraph * graph) {
 +    uint64_t h = 14695981039346656037ULL;
 +    auto mix = [&h](uint64_t v) {
@@ -28,19 +30,25 @@
  void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
      // reset splits
      sched->n_splits = 0;
-@@ -1480,9 +1501,13 @@
+@@ -1533,9 +1556,19 @@
          graph_copy->leafs[graph_copy->n_leafs++] = leaf;
      }
  
 -    // set ids for all splits
-+    // set ids for all splits: derive the uid from the graph structure so that
-+    // backends (RPC, CUDA) can cache the split graph across identical computes
-+    // (e.g. the per-token decode loop) instead of re-serializing or
-+    // re-validating the full graph every time. A changed structure yields a
-+    // different uid, so stale caches can never be reused.
++    // set ids for all splits. RPC splits get a stable structure-derived uid so
++    // the RPC server can cache the serialized graph across identical computes.
++    // Other backends keep the default unique uid; their caches (e.g. CUDA
++    // graphs) must re-validate shape/data changes and cannot rely on a
++    // structure-only hash.
      for (int i = 0; i < sched->n_splits; ++i) {
 -        sched->splits[i].graph.uid = ggml_graph_next_uid();
-+        sched->splits[i].graph.uid = ggml_graph_structure_hash(&sched->splits[i].graph);
++        ggml_backend_t split_backend = sched->backends[sched->splits[i].backend_id];
++        ggml_backend_reg_t split_reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(split_backend));
++        if (strcmp(ggml_backend_reg_name(split_reg), "RPC") == 0) {
++            sched->splits[i].graph.uid = ggml_graph_structure_hash(&sched->splits[i].graph);
++        } else {
++            sched->splits[i].graph.uid = ggml_graph_next_uid();
++        }
      }
  }
  
