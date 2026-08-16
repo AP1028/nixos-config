@@ -28,7 +28,8 @@
         'location.href="/page-not-found"' \
         'location.href="/manage-status-page"' \
         'location.href="/status/"' \
-        'location.href="/setup"'; do
+        'location.href="/setup"' \
+        'location.pathname==="/setup-database"'; do
         if ! grep -q "$pattern" "$js"; then
           echo "uptime-kuma-status-path: pattern not found in bundle: $pattern" >&2
           exit 1
@@ -42,6 +43,22 @@
       # under our reverse-proxy prefix that is /status/status/<slug>.
       sed -i 's#location.href="/status/"#location.href="/status/status/"#g' "$js"
       sed -i 's#location.href="/setup"#location.href="/status/setup"#' "$js"
+
+      # Kuma disables socket.io on /^\/status/ because upstream that path is
+      # only its public status page. Under our proxy that same regex would
+      # disable socket.io for the admin UI itself (/status/dashboard and
+      # /status/setup), leaving the header-only page. Narrow the no-socket
+      # regexes to the proxied public status path /status/status.
+      if ! grep -qF '/^\/status/,/^\/$/]' "$js"; then
+        echo "uptime-kuma-status-path: no-socket regex pattern not found in bundle" >&2
+        exit 1
+      fi
+      sed -i 's#,/^\\/status/,/^\\/$/]#,/^\\/status\\/status/,/^\\/$/]#' "$js"
+      if ! grep -qF '/^\/status\/status/,/^\/$/]' "$js"; then
+        echo "uptime-kuma-status-path: narrowed no-socket regex was not applied" >&2
+        exit 1
+      fi
+      sed -i 's#location.pathname==="/setup-database"#location.pathname==="/status/setup-database"#' "$js"
 
       # Publish the patched bundle under a new name so clients that cached
       # the old bundle are forced to refetch it.
