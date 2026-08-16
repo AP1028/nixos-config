@@ -146,8 +146,6 @@
     sub_filter 'href="/' 'href="${prefix}/';
     sub_filter 'src="/' 'src="${prefix}/';
     sub_filter 'action="/' 'action="${prefix}/';
-    sub_filter 'url("/' 'url("${prefix}/';
-    sub_filter "url('/" "url('${prefix}/";
 
     # The header logo is built in JS as "/pve2" + "/images/proxmox_logo.png".
     sub_filter "let prefix = me.prefix !== undefined ? me.prefix : '/pve2';" "let prefix = me.prefix !== undefined ? me.prefix : '${prefix}/pve2';";
