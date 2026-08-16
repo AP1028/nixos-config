@@ -26,10 +26,25 @@
   # Hostnames the private area is served on. Authelia needs a session-cookie
   # config and an access-control rule for each one, otherwise the portal's
   # /api/state call fails with "no configured session cookie domain matches".
-  privateDomains = [
-    "192.168.3.152"
-    "homeserver040322.ddns.net"
-  ];
+  #
+  # The LAN IP is the only domain in the public repo. Additional public
+  # domains are supplied imperatively, one per line, in the runtime file
+  # below (created with sudo-env on the VM, never committed):
+  #
+  #   echo your.domain.tld > /var/lib/authelia-main/public-domains
+  #
+  # Rebuild with --impure after changing it so the new domain is baked into
+  # the generated Authelia config.
+  privateDomainsFile = "/var/lib/authelia-main/public-domains";
+  privateDomains =
+    [
+      "192.168.3.152"
+    ]
+    ++ lib.optionals (builtins.pathExists privateDomainsFile) (
+      lib.filter (domain: domain != "") (
+        lib.splitString "\n" (builtins.readFile privateDomainsFile)
+      )
+    );
 
   privateHttpsOnly = ''
     if ($scheme = http) {
