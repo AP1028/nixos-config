@@ -119,29 +119,38 @@ in {
   # Generate local secrets on first start; never bake secrets into the repo.
   # mkBefore makes this run before Authelia's own validate-config preStart.
   systemd.services.authelia-main.preStart = lib.mkBefore ''
-    umask 077
-    if [ ! -s /var/lib/authelia-main/jwt_secret ]; then
-      ${pkgs.openssl}/bin/openssl rand -base64 48 > /var/lib/authelia-main/jwt_secret
-    fi
-    if [ ! -s /var/lib/authelia-main/storage_encryption_key ]; then
-      ${pkgs.openssl}/bin/openssl rand -base64 48 > /var/lib/authelia-main/storage_encryption_key
-    fi
-    if [ ! -s /var/lib/authelia-main/session_secret ]; then
-      ${pkgs.openssl}/bin/openssl rand -base64 48 > /var/lib/authelia-main/session_secret
-    fi
-    chown authelia-main:authelia-main \
-      /var/lib/authelia-main/jwt_secret \
-      /var/lib/authelia-main/storage_encryption_key \
-      /var/lib/authelia-main/session_secret 2>/dev/null || true
-    chmod 600 \
-      /var/lib/authelia-main/jwt_secret \
-      /var/lib/authelia-main/storage_encryption_key \
-      /var/lib/authelia-main/session_secret
-    if [ ! -e /var/lib/authelia-main/users.yml ]; then
-      printf 'users: {}\n' > /var/lib/authelia-main/users.yml
-      chown authelia-main:authelia-main /var/lib/authelia-main/users.yml
-      chmod 600 /var/lib/authelia-main/users.yml
-    fi
+        umask 077
+        if [ ! -s /var/lib/authelia-main/jwt_secret ]; then
+          ${pkgs.openssl}/bin/openssl rand -base64 48 > /var/lib/authelia-main/jwt_secret
+        fi
+        if [ ! -s /var/lib/authelia-main/storage_encryption_key ]; then
+          ${pkgs.openssl}/bin/openssl rand -base64 48 > /var/lib/authelia-main/storage_encryption_key
+        fi
+        if [ ! -s /var/lib/authelia-main/session_secret ]; then
+          ${pkgs.openssl}/bin/openssl rand -base64 48 > /var/lib/authelia-main/session_secret
+        fi
+        chown authelia-main:authelia-main \
+          /var/lib/authelia-main/jwt_secret \
+          /var/lib/authelia-main/storage_encryption_key \
+          /var/lib/authelia-main/session_secret 2>/dev/null || true
+        chmod 600 \
+          /var/lib/authelia-main/jwt_secret \
+          /var/lib/authelia-main/storage_encryption_key \
+          /var/lib/authelia-main/session_secret
+        if [ ! -e /var/lib/authelia-main/users.yml ] || grep -q '^users: {}$' /var/lib/authelia-main/users.yml; then
+          placeholder_hash="$(${pkgs.authelia}/bin/authelia crypto hash generate argon2 --password 'disabled-placeholder' --no-confirm)"
+          cat > /var/lib/authelia-main/users.yml <<EOF
+    users:
+      __placeholder__:
+        disabled: true
+        displayname: "Placeholder - replace with a real user"
+        password: "$placeholder_hash"
+        email: placeholder@invalid.local
+        groups: []
+    EOF
+          chown authelia-main:authelia-main /var/lib/authelia-main/users.yml 2>/dev/null || true
+          chmod 600 /var/lib/authelia-main/users.yml
+        fi
   '';
 
   environment.systemPackages = [pkgs.authelia];
