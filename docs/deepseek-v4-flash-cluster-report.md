@@ -5,8 +5,12 @@ Repo: `nixos-config` (branch `main`)
 Hardware:
 - `nixos-gpu-host` (bare metal, 192.168.3.200 / 10.0.0.200, MTU 9000):
   2x RTX 2080 Ti 22GB (Turing sm_75), AMD EPYC 7F72 24C/48T, 125GB RAM, NVMe.
-  `nvidia-smi topo -m` reports GPU0<->GPU1 = NODE, and `nvidia-smi nvlink --status`
-  says all links inactive. There is no active NVLink bridge on this system.
+  Both GPUs expose NVLink 2.2 hardware, but the driver currently reports all
+  NVLink links inactive: `nvidia-smi topo -m` shows GPU0<->GPU1 = NODE,
+  `nvidia-smi nvlink --status` says "all links are inActive", and
+  `nvidia-smi topo -p2p r` shows "CNS" (chipset not supported). The bridge is
+  physically installed, so treat this as a seating/bridge/driver issue to
+  verify; all benchmarks here were measured with the link reported inactive.
 - `nixos-gpu-vm` (Proxmox VM, 192.168.3.103 / 10.0.0.103, MTU 9000):
   Tesla P40 via NVIDIA vGPU (mdev `nvidia-53`, GRID P40-24Q, driver 535.309.01),
   16GB RAM. It cannot load the full 155GB model locally; its job is to expose the
