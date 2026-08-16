@@ -1,48 +1,88 @@
 # vLLM Qwen3.8-27B-FP8 on gpu-host (2x RTX 2080 Ti 22GB)
 
-This directory holds the operational notes, launcher wrappers, tuned profile,
-and benchmark tooling for serving **Qwen/Qwen3.8-27B-FP8** on `nixos-gpu-host`
-with the
+Serves **Qwen/Qwen3.8-27B-FP8** on `nixos-gpu-host` with the
 [weicj/vLLM-2080Ti-Definitive](https://github.com/weicj/vLLM-2080Ti-Definitive)
-fork (branch `vllm-2080ti-deifinitive`, fork release v0.1.15).
+fork (branch `vllm-2080ti-deifinitive`, fork release v0.1.15), TP=2, NVLink,
+CUDA 12.9 host toolkit + torch 2.11.0+cu128, driver 595.71.05.
 
-- Runtime: vLLM 0.21.0 fork, torch 2.11.0+cu128, NVIDIA driver 595.71.05
-- Hardware: 2x RTX 2080 Ti 22GB, NVLink NV2 (P2P OK), TP=2, sm_75
 - Model dir: `/home/tianyixia/models/Qwen3.8-27B-FP8` (full FP8 repo, 81 files,
-  ~28.77 GiB, including `mtp.safetensors` and `outside.safetensors`)
+  28.77 GiB, including `mtp.safetensors` and `outside.safetensors`)
+- Runtime tree: `~/vLLM-2080Ti-Definitive` (built with `./build.sh` in `.venv`)
+- Previous llama.cpp DeepSeek work stays parked: `llama-server` is stopped and
+  `/home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-*.gguf` is untouched.
 
-> The previous llama.cpp DeepSeek service (`llama-server`) stays stopped and is
-> not touched. Do not delete
-> `/home/tianyixia/DeepSeek-V4-Flash-0731-MXFP4-*.gguf`.
-
-## Checkout / build on NixOS
-
-The fork's `build.sh` expects a Debian/Ubuntu-style CUDA layout
-(`$CUDA_HOME/targets/x86_64-linux/lib`). On gpu-host the Nix CUDA toolkit
-(cuda-merged 12.9) uses a flat `lib/`, so a compatibility tree is used:
+## Handoff commands
 
 ```sh
-# switch gateway for international downloads first (root op, on the host):
-#   sudo-env -c '/home/tianyixia/nixos-config/route-gateway.sh 192.168.3.2'
+# on nixos-gpu-host, as tianyixia
+cd ~/nixos-config/hosts/nixos-gpu-host/vllm-qwen
 
-M=/nix/store/3lpf2hl979sfmyb9f573xq1bz3xkds0v-cuda-merged-12.9
-mkdir -p ~/cuda-12.9/targets/x86_64-linux
-ln -sfn "$M/bin"        ~/cuda-12.9/bin
-ln -sfn "$M/include"    ~/cuda-12.9/include
-ln -sfn "$M/lib"        ~/cuda-12.9/lib
-ln -sfn "$M/lib"        ~/cuda-12.9/lib64
-ln -sfn "$M/lib"        ~/cuda-12.9/targets/x86_64-linux/lib
-ln -sfn "$M/nvvm"       ~/cuda-12.9/nvvm
+./run-vllm-qwen.sh fast      # recommended daily: MTP3 + PIECEWISE CUDAGraph
+./run-vllm-qwen.sh balanced  # MTP4: same real decode, higher synthetic
+./run-vllm-qwen.sh peak      # MTP8 synthetic peak, lower real-text acceptance
+./stop-vllm-qwen.sh
+```
 
-git clone --depth 1 --branch vllm-2080ti-deifinitive \
-  https://github.com/weicj/vLLM-2080Ti-Definitive.git ~/vLLM-2080Ti-Definitive
+Each start prints the vLLM PID/log path and exits when the health check passes.
+The OpenAI-compatible endpoint is `http://192.168.3.200:8000/v1` and
+`http://127.0.0.1:8000/v1` on the host.
+
+Smoke / benchmark:
+
+```sh
+python3 bench_single_stream.py --url http://127.0.0.1:8000 \
+  --model qwen38-27b-fp8-fast-mtp3 --runs 3 --max-tokens 128
+```
+
+## Final measured numbers (2026-08-16, Qwen3.8-27B-FP8, TP=2)
+
+Single request, 117 prompt tokens, 128 generated tokens, one warmup request
+excluded. "prose" = the fixed English paragraph in `bench_single_stream.py`;
+"filler" = fork's `tools/profile_request.py --pure-filler` (PP128/TG128).
+
+| Preset / config | prefill tok/s | prose decode tok/s | filler decode tok/s | VRAM per GPU |
+|---|---:|---:|---:|---:|
+| `fast` MTP3 PIECEWISE (recommended) | ~1100 | **64.7** | 91.0 | 20.7 GiB |
+| `balanced` MTP4 PIECEWISE | ~1070 | 64.3 | **104.5** | 20.8 GiB |
+| `peak` MTP8 PIECEWISE | ~960 | 53.5 | **141.0** | 21.8 GiB |
+| shipped normal fp16kv-128K (98K fit) | 1101 | 61.9 | — | 21.7 GiB |
+| shipped fast full-graph MTP3 | 1097 | 44.7 | — | 20.3 GiB |
+| MTP0 (no MTP), full graph | 1212 | 33.1 | — | 20.0 GiB |
+| MTP3 eager (no CUDAGraph) | 1050 | 30.7 | — | 21.7 GiB |
+| MTP3 + int8 KV | 1079 | 58.1 | — | 20.3 GiB |
+| MTP3 + turboquant_k8v4 KV | 1093 | 59.3 | — | 19.8 GiB |
+| MTP3, custom allreduce disabled | 1066 | 57.9 | — | 21.7 GiB |
+
+Host RAM used at idle after load: ~10 GiB. Full tuning history and commands:
+[`../../../docs/qwen3.8-27b-vllm-2080ti-report.md`](../../../docs/qwen3.8-27b-vllm-2080ti-report.md).
+
+Interpretation: PIECEWISE CUDA graphs + MTP are the two big levers (both
+roughly double decode). FP16 KV beats INT8/TurboQuant for short single-stream
+decode. On natural text MTP3 is the acceptance sweet spot; high-K MTP only wins
+on highly compressible filler, so `peak` is a benchmark preset, not the daily
+preset.
+
+## NixOS build / toolchain notes
+
+This directory is imported by `hosts/nixos-gpu-host/default.nix` as a NixOS
+module. The module:
+
+- installs `uv`, `gcc14`, `cmake`, `ninja`;
+- builds a Debian/Ubuntu-style CUDA compatibility tree exposed at
+  `/etc/vllm-cuda-home` (`targets/x86_64-linux/lib`, `lib64`, ...) from
+  `pkgs.cudaPackages.cudatoolkit`; and
+- installs a `/sbin/ldconfig` shim because Triton hard-codes that path on
+  Linux (NixOS ships ldconfig only under `/run/current-system/sw/bin`).
+
+Fork build (already done on the host; repeat only after NixOS rebuild pulls
+the module):
+
+```sh
 cd ~/vLLM-2080Ti-Definitive
-
-# GCC 15 (system) is too new for CUDA 12.9 nvcc; use the Nix gcc-14 wrapper.
-G=/nix/store/kz3gj6nscr77c6k5jxpjdyj2f81c0g6h-gcc-wrapper-14.4.0
-CUDA_HOME=$HOME/cuda-12.9 \
-CC=$G/bin/gcc CXX=$G/bin/g++ CUDAHOSTCXX=$G/bin/g++ \
-NVCC_PREPEND_FLAGS="-I$HOME/cuda-12.9/include" \
+CUDA_HOME=/etc/vllm-cuda-home \
+CC=$(command -v gcc) CXX=$(command -v g++) CUDAHOSTCXX=$(command -v g++) \
+NVCC_PREPEND_FLAGS="-I/etc/vllm-cuda-home/include" \
+LD_LIBRARY_PATH=/run/opengl-driver/lib:/etc/vllm-cuda-home/lib \
 ASSUME_YES=1 MAX_JOBS=16 BUILD_MAX_JOBS=16 BUILD_AUTO_MAX_JOBS_CAP=16 \
 BUILD_TORCH_PRIMARY_TIMEOUT_SECONDS=3600 \
 BUILD_PYPI_PRIMARY_TIMEOUT_SECONDS=1800 \
@@ -50,62 +90,19 @@ BUILD_GIT_PRIMARY_TIMEOUT_SECONDS=900 \
 ./build.sh
 ```
 
-NixOS-specific lesson: the PyTorch wheel index is slow for the 658 MB cudnn
-wheel and `build.sh`'s default 90 s torch timeout is too short. Pre-installing
-the exact torch stack makes the build resume safely:
+Known NixOS build gotchas:
 
-```sh
-# inside ~/vLLM-2080Ti-Definitive, after `build.sh` created .venv once:
-.venv/bin/python -m pip install --no-deps \
-  --index-url https://download.pytorch.org/whl/cu128 \
-  torch==2.11.0+cu128 torchaudio==2.11.0+cu128 torchvision==0.26.0+cu128
-.venv/bin/python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
-  'cuda-toolkit[cublas,cudart,cufft,cufile,cupti,curand,cusolver,cusparse,nvjitlink,nvrtc,nvtx]==12.8.1' \
-  'cuda-bindings<13,>=12.9.4' nvidia-cudnn-cu12==9.19.0.56 \
-  nvidia-cusparselt-cu12==0.7.1 nvidia-nccl-cu12==2.28.9 nvidia-nvshmem-cu12==3.4.5 \
-  filelock fsspec jinja2 'networkx>=2.5.1' 'sympy>=1.13.3' \
-  'typing-extensions>=4.10.0' triton==3.6.0
-```
+- the PyTorch wheel index is slow for the 658 MB cudnn wheel; if the build
+  script's torch step stalls, pre-install the exact wheels (see commit history
+  of this README for the command list), then rerun `build.sh`;
+- GCC 15 is too new for CUDA 12.9 `nvcc`; the module's `gcc14` is required;
+- `/sbin/ldconfig` and the CUDA layout shim above are required at runtime too.
 
-## Start / stop
+## Profile changes
 
-Use the wrappers (from this directory):
-
-```sh
-./run-vllm-qwen.sh fast      # fastest tuned profile (see tune section)
-./run-vllm-qwen.sh normal    # shipped normal fp16kv-128K profile
-./stop-vllm-qwen.sh
-```
-
-Or directly:
-
-```sh
-cd ~/vLLM-2080Ti-Definitive
-MODEL_DIR=/home/tianyixia/models/Qwen3.8-27B-FP8 \
-PROFILE=qwen27b/normal/fp8/fp16kv-128K-mtp3-text-only.env \
-MODE=normal PORT=8000 SERVICE_SCOPE=lan GPU_DEVICES=0,1 TP_SIZE=2 \
-CUDA_HOME=$HOME/cuda-12.9 \
-LD_LIBRARY_PATH=/run/opengl-driver/lib \
-CC=$G/bin/gcc CXX=$G/bin/g++ CUDAHOSTCXX=$G/bin/g++ \
-./launcher.sh --non-interactive
-```
-
-`./launcher.sh --stop`-equivalent: run `./launcher.sh --non-interactive` with
-the same `PORT`/`SERVICE_SCOPE` and `--set` stop? The wrapper uses the
-launcher's saved state file:
-`run-logs/start-manager.state` / `LAST_PID_FILE`.
-
-## Benchmark
-
-```sh
-python3 bench_single_stream.py --url http://127.0.0.1:8000 --runs 3 --max-tokens 128
-```
-
-The script sends one warmup request, then N timed streaming `/v1/completions`
-requests and reports TTFT, prefill tok/s, decode tok/s, per-GPU VRAM and host
-RAM, and writes `bench_single_stream.json`.
-
-## Measured results
-
-See the tuning history and final table in
-[../../docs/qwen3.8-27b-vllm-2080ti-report.md](../../docs/qwen3.8-27b-vllm-2080ti-report.md).
+`profiles/*.env` here are route profiles consumed via
+`PROFILE_FILE=... ./launcher.sh --non-interactive`. They intentionally force
+`COMPILATION_CONFIG_JSON` to PIECEWISE because `MODE=fast`'s
+FULL_AND_PIECEWISE default is slower on this Turing/hybrid-attention model,
+and `run-vllm-qwen.sh` pins `VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH=0` for the
+same reason.
