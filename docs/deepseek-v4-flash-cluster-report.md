@@ -5,12 +5,9 @@ Repo: `nixos-config` (branch `main`)
 Hardware:
 - `nixos-gpu-host` (bare metal, 192.168.3.200 / 10.0.0.200, MTU 9000):
   2x RTX 2080 Ti 22GB (Turing sm_75), AMD EPYC 7F72 24C/48T, 125GB RAM, NVMe.
-  Both GPUs expose NVLink 2.2 hardware, but the driver currently reports all
-  NVLink links inactive: `nvidia-smi topo -m` shows GPU0<->GPU1 = NODE,
-  `nvidia-smi nvlink --status` says "all links are inActive", and
-  `nvidia-smi topo -p2p r` shows "CNS" (chipset not supported). The bridge is
-  physically installed, so treat this as a seating/bridge/driver issue to
-  verify; all benchmarks here were measured with the link reported inactive.
+  NVLink is active after re-seating: `nvidia-smi topo -m` shows GPU0<->GPU1 =
+  NV2, `nvidia-smi nvlink --status` reports both links at 25.781 GB/s, and
+  `nvidia-smi topo -p2p r` shows OK.
 - `nixos-gpu-vm` (Proxmox VM, 192.168.3.103 / 10.0.0.103, MTU 9000):
   Tesla P40 via NVIDIA vGPU (mdev `nvidia-53`, GRID P40-24Q, driver 535.309.01),
   16GB RAM. It cannot load the full 155GB model locally; its job is to expose the
@@ -62,16 +59,22 @@ User default was TP=2 on the 2080 Tis. Measured result: **TP is unavailable**.
   RPC P40 + 2x local 2080 Ti**, with `-ngl 7` as the maximum stable GPU-layer
   count found.
 
-## CUDA stability workaround (important)
+## CUDA stability findings (important)
 
 With b10331 + CUDA 12.9 on Turing sm_75:
-- Synthetic `llama-bench` works with `-sm layer` up to `-ngl 7`.
-- `-ngl 8` and above crash on the first decoded token with
-  `CUDA error: an illegal memory access was encountered` on local CUDA0.
-- Real prompts crash even at `-ngl 7` unless both of the following are set:
-  `GGML_CUDA_DISABLE_FUSION=1` and `GGML_CUDA_DISABLE_GRAPHS=1`.
-  `GGML_CUDA_DISABLE_FUSION=1` alone is not enough for real prompts.
-- The `llama-server` unit on `nixos-gpu-host` ships with both env vars.
+- `-ngl 7 -sm layer -ts 1,1,1` is the maximum split that is stable for long
+  real prompts. Short and long prompts both generate coherent text.
+- `-ngl 8` is stable with short prompts when the layer distribution avoids
+  putting layer 39 on CUDA0 (e.g. `-ts 2,1,1` or `-ts 4,3,1`), but not all
+  distributions were tested with long prompts.
+- `-ngl 15 -sm layer -ts 1,1,1` loads and runs short prompts correctly
+  (~17.9 GB per device), but crashes with `CUDA error: an illegal memory
+  access was encountered` on long prompts (95-word prompt).
+- `GGML_CUDA_DISABLE_FUSION=1 GGML_CUDA_DISABLE_GRAPHS=1` stops the crash
+  and allows `-ngl 15`, but the model then emits garbage/newline tokens.
+  That workaround is NOT used.
+- The `llama-server` unit on `nixos-gpu-host` therefore uses
+  `-ngl 7 -sm layer -ts 1,1,1` with no CUDA env workarounds.
 
 ## Tuning iterations
 
@@ -80,8 +83,8 @@ All cluster runs use `--rpc 10.0.0.103:50052`. `llama-bench` model load is
 
 | Config | pp128 t/s | tg64 t/s | Result |
 |---|---:|---:|---|
-| `-ngl 7 -sm layer -ts 1,1,1 -b 256 -ub 128` (fusion/graphs on) | 17.28 | 2.91 | synthetic OK; real prompts crash |
-| `-ngl 7 -sm layer -ts 1,1,1 -b 256 -ub 128` (fusion+graphs OFF) | 16.14 | 2.84 | **recommended stable** |
+| `-ngl 7 -sm layer -ts 1,1,1 -b 256 -ub 128` (fusion+graphs OFF) | 16.14 | 2.84 | stable but garbage output -> rejected |
+| `-ngl 7 -sm layer -ts 1,1,1 -b 256 -ub 128` (fusion/graphs on, no env) | 17.28 | 2.91 | **recommended stable** |
 | `-ngl 7 -sm layer -ts 2,1,1 -b 256 -ub 128` | 2.18 | 1.67 | P40 got 4 layers -> much worse |
 | `-ngl 7 -sm layer -ts 1,1,1 -b 512 -ub 256` | 4.61 | 0.97 | too-large ubatch hurts |
 | `-ngl 8 -sm layer -ts 1,1,1` | - | - | CUDA illegal memory access |
