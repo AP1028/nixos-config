@@ -60,6 +60,13 @@ in {
       sslCertificate = "${selfSignedCert}/cert.pem";
       sslCertificateKey = "${selfSignedCert}/key.pem";
 
+      # 18081 is the TLS listener. If a client nevertheless sends plain
+      # HTTP to it, nginx emits its 497 "plain HTTP to HTTPS port" error;
+      # turn that into a clean HTTPS redirect on the same host/port.
+      extraConfig = ''
+        error_page 497 =301 https://$host:18081$request_uri;
+      '';
+
       locations = {
         "= /gitea" = {
           return = "308 /gitea/";
