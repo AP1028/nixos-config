@@ -117,6 +117,10 @@
     sub_filter "'/img/" "'${prefix}/img/";
     sub_filter '"/img/' '"${prefix}/img/';
     sub_filter '`/img/' '`${prefix}/img/';
+
+    # Character/persona avatars are requested as
+    # `/thumbnail?type=avatar&file=...`, built in a JS template literal.
+    sub_filter '`/thumbnail?' '`${prefix}/thumbnail?';
   '';
 
   dshSubFilters = prefix: ''
