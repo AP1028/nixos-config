@@ -133,6 +133,120 @@
     sub_filter '</head>\n  <body><script>(() => {\n  const preference = "system"' "<script>${privatePathHook prefix}</script></head>\n  <body><script>(() => {\n  const preference = \"system\"";
   '';
 
+  # Authenticated landing page served at /private/main/. Relative links keep
+  # whichever hostname/port the user came in on.
+  privateServicesPage = pkgs.writeText "private-main.html" ''
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Services</title>
+      <style>
+        :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
+        body {
+          margin: 0;
+          min-height: 100vh;
+          background: #16171b;
+          color: #e8e8ea;
+          font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        }
+        main { max-width: 980px; margin: 0 auto; padding: 48px 20px 64px; }
+        h1 { margin: 0 0 8px; font-size: 26px; }
+        .subtitle { color: #9aa0aa; margin: 0 0 28px; }
+        h2 {
+          margin: 32px 0 12px;
+          font-size: 13px;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+          color: #8b93a3;
+        }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+        a.card {
+          display: block;
+          padding: 14px 16px;
+          color: inherit;
+          text-decoration: none;
+          border: 1px solid #2a2d36;
+          border-radius: 10px;
+          background: #1d1f26;
+          transition: border-color .15s, background .15s, transform .15s;
+        }
+        a.card:hover { border-color: #4c7df0; background: #22252e; transform: translateY(-1px); }
+        .card .name { font-weight: 650; }
+        .card .desc { margin-top: 4px; color: #9aa0aa; font-size: 13px; }
+        .badge {
+          display: inline-block;
+          margin-top: 8px;
+          padding: 2px 8px;
+          border-radius: 999px;
+          font-size: 11px;
+          letter-spacing: .04em;
+          color: #b8c2d8;
+          background: #2b3040;
+        }
+        .badge.public { color: #a9d5b2; background: #1f3327; }
+        .badge.private { color: #f0c08b; background: #3a2e1c; }
+      </style>
+    </head>
+    <body>
+      <main>
+        <h1>Services</h1>
+        <p class="subtitle">Everything reachable through this webapp host.</p>
+
+        <h2>Public</h2>
+        <div class="grid">
+          <a class="card" href="/files/">
+            <div class="name">Files</div>
+            <div class="desc">File browser for the NAS.</div>
+            <span class="badge public">public</span>
+          </a>
+          <a class="card" href="/gitea/">
+            <div class="name">Gitea</div>
+            <div class="desc">Git server.</div>
+            <span class="badge public">public · own login</span>
+          </a>
+          <a class="card" href="/monitor/status/public">
+            <div class="name">Status</div>
+            <div class="desc">Public Uptime Kuma status page.</div>
+            <span class="badge public">public</span>
+          </a>
+          <a class="card" href="/monitor/">
+            <div class="name">Uptime Kuma</div>
+            <div class="desc">Monitoring dashboard.</div>
+            <span class="badge public">admin login</span>
+          </a>
+        </div>
+
+        <h2>Private</h2>
+        <div class="grid">
+          <a class="card" href="/private/pve1/">
+            <div class="name">Proxmox VE 1</div>
+            <div class="desc">Virtualization host 1.</div>
+            <span class="badge private">Authelia + Proxmox login</span>
+          </a>
+          <a class="card" href="/private/pve2/">
+            <div class="name">Proxmox VE 2</div>
+            <div class="desc">Virtualization host 2.</div>
+            <span class="badge private">Authelia + Proxmox login</span>
+          </a>
+          <a class="card" href="/private/sillytavern/">
+            <div class="name">SillyTavern</div>
+            <div class="desc">AI chat frontend.</div>
+            <span class="badge private">Authelia + basic auth</span>
+          </a>
+          <a class="card" href="/private/dsh/">
+            <div class="name">DSH</div>
+            <div class="desc">DeepSeek Harness.</div>
+            <span class="badge private">Authelia + basic auth</span>
+          </a>
+        </div>
+      </main>
+    </body>
+    </html>
+  '';
+
   # Proxmox VE's web UI is written for "/" and hardcodes absolute root paths
   # (/pve2/..., /pwt/..., /api2/..., /nodes/...). nginx's sub_filter rewrites
   # those into /private/pve1 or /private/pve2 so the UI stays on its own
@@ -322,7 +436,7 @@ in {
           map (domain: {
             inherit domain;
             policy = "one_factor";
-            resources = ["^/private/(pve1|pve2|sillytavern|dsh)(/.*)?$"];
+            resources = ["^/private/(pve1|pve2|sillytavern|dsh|main)(/.*)?$"];
           })
           privateDomains;
       };
@@ -413,6 +527,20 @@ in {
         proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header Content-Length "";
         proxy_http_version 1.1;
+      '';
+    };
+
+    "= /private/main" = {
+      return = "308 /private/main/";
+      extraConfig = privateHttpsOnly;
+    };
+
+    "/private/main/" = {
+      alias = "${privateServicesPage}";
+      extraConfig = ''
+        ${autheliaAuthRequest}
+
+        add_header Cache-Control "no-store";
       '';
     };
 
