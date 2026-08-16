@@ -31,6 +31,11 @@
     ./packages
   ];
 
+  # mstflint_access = the mst kernel module (provides /dev/mst, needed for
+  # NVIDIA/Mellanox firmware updates via mstflint). nixpkgs-built for this
+  # host's exact kernel; no manual install required.
+  boot.extraModulePackages = [config.boot.kernelPackages.mstflint_access];
+
   # nixpkgs added its own `services.comfyui` module (2026-08); the comfyui-nix
   # flake module declares the same option, so keep only comfyui-nix's.
   disabledModules = ["services/misc/comfyui.nix"];
