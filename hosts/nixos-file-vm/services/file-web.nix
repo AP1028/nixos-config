@@ -44,11 +44,30 @@
         for f in http/embed/assets/index-*.js.gz; do
           plain="''${f%.gz}"
           zcat "$f" > "$plain"
+
           if ! grep -q 'history:RK(Nt.baseURL)' "$plain"; then
-            echo "file-web: quantum frontend router pattern not found; update the patch" >&2
+            echo "file-web: quantum router history pattern not found; update the patch" >&2
             exit 1
           fi
+          if ! grep -q '`''${Nt.baseURL}files/' "$plain"; then
+            echo "file-web: quantum item-href pattern not found; update the patch" >&2
+            exit 1
+          fi
+          if ! grep -q '`''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}`' "$plain"; then
+            echo "file-web: quantum new-tab pattern not found; update the patch" >&2
+            exit 1
+          fi
+
+          # vue-router history base: browser URLs are /files/Public, not
+          # /files/files/Public. API/static keep using Nt.baseURL (/files/).
           sed -i 's/history:RK(Nt.baseURL)/history:RK("\/")/' "$plain"
+
+          # Folder item hrefs: one /files/ prefix.
+          sed -i 's#`''${Nt.baseURL}files/#`/files/#g' "$plain"
+
+          # "Open in new tab": fullPath already carries /files/.
+          sed -i 's#`''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}`#`''${window.location.origin}''${o}`#g' "$plain"
+
           gzip -9 -n -c "$plain" > "$f.new"
           mv "$f.new" "$f"
           rm -f "$plain"
