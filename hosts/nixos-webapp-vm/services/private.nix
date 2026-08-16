@@ -82,12 +82,17 @@
     sub_filter 'href="/' 'href="${prefix}/';
     sub_filter 'src="/' 'src="${prefix}/';
     sub_filter 'action="/' 'action="${prefix}/';
-    sub_filter 'url("/' 'url("${prefix}/';
-    sub_filter "url('/" "url('${prefix}/";
   '';
 
   sillytavernSubFilters = prefix: ''
     ${webSubFilters prefix}
+
+    # Only these CSS files reference root-absolute url(...) paths. Keep the
+    # rewrites exact: nginx sub_filter matching is case-insensitive, so a
+    # broad url('/ filter also corrupts `new URL('/...')` in JS modules.
+    sub_filter "url('/favicon.ico')" "url('${prefix}/favicon.ico')";
+    sub_filter "url('/img/down-arrow.svg')" "url('${prefix}/img/down-arrow.svg')";
+    sub_filter "url('/img/times-circle.svg')" "url('${prefix}/img/times-circle.svg')";
 
     sub_filter '<!-- Scripts are loaded at the end of the body to improve page load speed -->\n</head>' "<script>${privatePathHook prefix}</script><!-- Scripts are loaded at the end of the body to improve page load speed --></head>";
 
@@ -96,10 +101,24 @@
     # calls. This rule must come after the generic href="/" rewrite above so
     # the freshly inserted prefix is not prefixed a second time.
     sub_filter '<base href="/">' '<base href="${prefix}/">';
+
+    # script.js top-level-awaits the window load event before it registers its
+    # jQuery ready handler. Behind sub_filter some browsers never fire load
+    # (the page stays on the preloader), so resolve that promise immediately.
+    sub_filter "window.addEventListener('load', resolve);" "resolve();";
+
+    # A few SillyTavern modules use root-absolute static imports
+    # (`from '/script.js'`, `from '/scripts/utils.js'`, ...). Point them back
+    # under the subpath so the module graph finishes evaluating.
+    sub_filter "from '/" "from '${prefix}/";
   '';
 
   dshSubFilters = prefix: ''
     ${webSubFilters prefix}
+
+    # dsh's Vite CSS uses unquoted url(/assets/fonts/...); exact rewrite so it
+    # cannot touch JS `new URL(...)` (sub_filter matching is case-insensitive).
+    sub_filter 'url(/assets/' 'url(${prefix}/assets/';
 
     sub_filter '</head>\n  <body><script>(() => {\n  const preference = "system"' "<script>${privatePathHook prefix}</script></head>\n  <body><script>(() => {\n  const preference = \"system\"";
   '';
