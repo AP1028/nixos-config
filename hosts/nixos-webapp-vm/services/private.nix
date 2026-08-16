@@ -66,6 +66,9 @@
   # subpath and both PVE nodes can coexist on the same HTTPS port.
   pveSubFilters = prefix: let
     rel = lib.removePrefix "/" prefix;
+    # Slash-escaped form of the prefix for use inside JS regex literals:
+    # /private/pve1 becomes private\/pve1, so the inserted regex stays valid.
+    relRegex = lib.replaceStrings ["/"] ["\\/"] rel;
     dq = "\"";
     sq = "'";
     bt = "`";
@@ -100,8 +103,8 @@
 
     # Proxmox lib builds /api2/extjs/<path> from bare /nodes/... URLs. Teach
     # it about the /private/pveN prefix so it neither duplicates nor drops it.
-    sub_filter 'match(/^\/api2/)' 'match(/^(\/${rel}\/)?api2/)';
-    sub_filter "newopts.url = '/api2/extjs' + newopts.url;" "newopts.url = '${prefix}/api2/extjs' + newopts.url.replace(/^\/${rel}\//, ''');";
+    sub_filter 'match(/^\/api2/)' 'match(/^(\/${relRegex}\/)?api2/)';
+    sub_filter "newopts.url = '/api2/extjs' + newopts.url;" "newopts.url = '${prefix}/api2/extjs' + newopts.url.replace(/^\/${relRegex}\//, ''');";
 
     # HTML element URLs.
     sub_filter 'href="/' 'href="${prefix}/';
