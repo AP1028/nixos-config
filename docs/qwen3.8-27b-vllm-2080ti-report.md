@@ -55,6 +55,9 @@ allreduce drops decode to 57.9 tok/s).
 - 81/81 HF repo files present; all sizes match the HF API tree
   (30,890,036,483 bytes remote). Includes `mtp.safetensors` (477,202,224 B)
   and `outside.safetensors` (6,007,102,112 B). No BF16 repo was used.
+  `huggingface-cli download` was spot-checked for `config.json` /
+  `generation_config.json` (byte-identical to the local copy); a full
+  re-download was not run because the files are already complete on NVMe.
 
 ## 4. NixOS build route
 
