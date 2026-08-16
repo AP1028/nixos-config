@@ -171,7 +171,7 @@ in {
         proxy_redirect http:// https://;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header Host $host:$server_port;
+        proxy_set_header X-Forwarded-Port $server_port;
       '';
     };
 
