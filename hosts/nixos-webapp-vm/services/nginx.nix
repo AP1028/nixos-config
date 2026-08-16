@@ -135,6 +135,21 @@ in {
           return = "301 /monitor/status/public";
         };
 
+        # Admin dashboard is HTTPS-only: plain HTTP on 18080 bounces to the
+        # same path on https://host:18081. Public /monitor/status/... stays
+        # available over plain HTTP.
+        "/monitor/dashboard" = {
+          proxyPass = "${uptimeKumaUpstream}/dashboard";
+          proxyWebsockets = true;
+          extraConfig = ''
+            if ($scheme = http) {
+              return 301 https://$host:18081$request_uri;
+            }
+            proxy_redirect / /monitor/;
+            ${uptimeKumaHostHeader}
+          '';
+        };
+
         "/monitor/" = {
           # Strip /monitor/ before forwarding to Uptime Kuma and rewrite its
           # root-absolute redirects (e.g. Location: /dashboard) so the UI
