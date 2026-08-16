@@ -65,63 +65,42 @@
   # those into /private/pve1 or /private/pve2 so the UI stays on its own
   # subpath and both PVE nodes can coexist on the same HTTPS port.
   pveSubFilters = prefix: let
-    rel = lib.removePrefix "/" prefix;
-    # Slash-escaped form of the prefix for use inside JS regex literals:
-    # /private/pve1 becomes private\/pve1, so the inserted regex stays valid.
-    relRegex = lib.replaceStrings ["/"] ["\\/"] rel;
-    dq = "\"";
-    sq = "'";
-    bt = "`";
-    roots = [
-      "/api2"
-      "/api2/"
-      "/nodes/"
-      "/cluster/"
-      "/access/"
-      "/vms/"
-      "/storage/"
-      "/pool/"
-      "/sdn/"
-      "/mapping/"
-      "/dc/"
-      "/version"
-      "/status"
-      "/novnc/"
-      "/xtermjs/"
-      "/pve-doc/"
-      "/proxmoxlib.js"
-      "/qrcode.min.js"
-      "/pve2/"
-      "/pwt/"
-      "/favicon.ico"
-    ];
+    # Runtime URL normalizer injected into the PVE index page. PVE builds API
+    # URLs out of bare fragments like "/nodes/..." or "/api2/json..."; the
+    # hook prefixes same-origin absolute paths in Ext.Ajax and raw
+    # XMLHttpRequest calls. That avoids double-prefixing paths PVE composes
+    # at runtime (e.g. "/api2/json" + baseUrl), which broke the realm list.
+    ajaxHook = lib.removeSuffix "\n" ''
+      window.__PVE_SUBPATH__='${prefix}'; (function(){var P=window.__PVE_SUBPATH__; function N(u){if(typeof u!=='string'){return u;} if(/^[a-z][a-z0-9+.-]*:/i.test(u)||/^\/\//.test(u)){return u;} if(u.indexOf(P+'/')===0||u===P){return u;} if(u.charAt(0)==='/'){return P+u;} return u;} var R=Ext.Ajax.request; Ext.Ajax.request=function(o){if(o&&typeof o.url==='string'){o.url=N(o.url);} return R.apply(this,arguments);}; var O=XMLHttpRequest.prototype.open; XMLHttpRequest.prototype.open=function(m,u){arguments[1]=N(u); return O.apply(this,arguments);};})();
+    '';
   in ''
     # Proxmox gzips its assets; sub_filter needs the plain stream.
     proxy_set_header Accept-Encoding "";
     sub_filter_once off;
     sub_filter_types *;
 
-    # Proxmox lib builds /api2/extjs/<path> from bare /nodes/... URLs. Teach
-    # it about the /private/pveN prefix so it neither duplicates nor drops it.
-    sub_filter 'match(/^\/api2/)' 'match(/^(\/${relRegex}\/)?api2/)';
-    sub_filter "newopts.url = '/api2/extjs' + newopts.url;" "newopts.url = '${prefix}/api2/extjs' + newopts.url.replace(/^\/${relRegex}\//, ''');";
-
-    # HTML element URLs.
+    # HTML/CSS asset URLs.
     sub_filter 'href="/' 'href="${prefix}/';
     sub_filter 'src="/' 'src="${prefix}/';
     sub_filter 'action="/' 'action="${prefix}/';
     sub_filter 'url("/' 'url("${prefix}/';
     sub_filter "url('/" "url('${prefix}/";
 
-    # JS string literals (", ' and `) that start with a root path. Quote the
-    # nginx match/replacement so the JS quote character stays inside the arg:
-    # JS "..." literals go in nginx '...', JS '...' literals in nginx "...".
-    ${lib.concatMapStringsSep "\n" (root: ''
-        sub_filter '${dq}${root}' '${dq}${prefix}${root}';
-        sub_filter "${sq}${root}" "${sq}${prefix}${root}";
-        sub_filter '${bt}${root}' '${bt}${prefix}${root}';
-      '')
-      roots}
+    # Inject the request normalizer right after the inline Proxmox setup
+    # object, before proxmoxlib.js runs.
+    sub_filter "ConsentText: '''\n    };" "ConsentText: '''\n    }; ${ajaxHook}";
+
+    # noVNC/xtermjs console pages do not use Ext.Ajax; fix their raw
+    # XMLHttpRequest and websocket path builders directly.
+    sub_filter 'xhr.open(reqOpts.method, "/api2/json"' 'xhr.open(reqOpts.method, "${prefix}/api2/json"';
+    sub_filter "'/api2/json' + url + '/vncwebsocket" "'${prefix}/api2/json' + url + '/vncwebsocket";
+    sub_filter 'await l10n.setup(LINGUAS, "/novnc/app/locale/")' 'await l10n.setup(LINGUAS, "${prefix}/novnc/app/locale/")';
+    sub_filter 'await fetch("/novnc/package.json")' 'await fetch("${prefix}/novnc/package.json")';
+
+    # Spice download links are plain anchors, not Ext.Ajax requests.
+    sub_filter "let url = '/nodes/' + nodename + '/spiceshell';" "let url = '${prefix}/nodes/' + nodename + '/spiceshell';";
+    sub_filter "url = '/nodes/' + nodename + '/qemu/' + vmid.toString() + '/spiceproxy';" "url = '${prefix}/nodes/' + nodename + '/qemu/' + vmid.toString() + '/spiceproxy';";
+    sub_filter "url = '/nodes/' + nodename + '/lxc/' + vmid.toString() + '/spiceproxy';" "url = '${prefix}/nodes/' + nodename + '/lxc/' + vmid.toString() + '/spiceproxy';";
   '';
 
   pveProxyConfig = ''
