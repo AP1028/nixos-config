@@ -27,6 +27,7 @@
 
     ./gpu.nix
     ./comfyui.nix
+    ./vllm-qwen
 
     ./packages
   ];
