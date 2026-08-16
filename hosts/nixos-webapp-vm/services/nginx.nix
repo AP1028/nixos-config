@@ -119,10 +119,17 @@ in {
         };
 
         # Uptime Kuma admin UI lives under /monitor/. Its public status page
-        # (slug "public") is /monitor/status/public; the dashboard remains
+        # (slug "public") is /monitor/status/public; /monitor and
+        # /monitor/status point there, while the dashboard remains
         # login-gated at /monitor/dashboard.
         "= /monitor" = {
-          return = "308 /monitor/";
+          return = "301 /monitor/status/public";
+        };
+        "= /monitor/status" = {
+          return = "301 /monitor/status/public";
+        };
+        "= /monitor/status/" = {
+          return = "301 /monitor/status/public";
         };
 
         "/monitor/" = {
