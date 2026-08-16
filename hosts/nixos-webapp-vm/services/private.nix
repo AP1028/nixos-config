@@ -535,9 +535,9 @@ in {
       extraConfig = privateHttpsOnly;
     };
 
-    "/private/main/" = {
-      alias = "${privateServicesPage}";
-      index = null; # serve the aliased file itself, not <file>/index.html
+    "= /private/main/" = {
+      root = builtins.dirOf privateServicesPage;
+      tryFiles = "/${builtins.baseNameOf privateServicesPage} =404";
       extraConfig = ''
         ${autheliaAuthRequest}
 
