@@ -105,6 +105,11 @@
     sub_filter 'await fetch("/novnc/package.json")' 'await fetch("${prefix}/novnc/package.json")';
     sub_filter 'import UI from "/novnc/' 'import UI from "${prefix}/novnc/';
 
+    # noVNC builds wss://hostname:port + "api2/json..." when the host setting
+    # is populated, which drops the /private/pveN path. Leave host empty so it
+    # resolves the websocket URL against the console page URL instead.
+    sub_filter 'UI.initSetting("host", window.location.hostname);' 'UI.initSetting("host", "");';
+
     # Spice download links are plain anchors, not Ext.Ajax requests.
     sub_filter "let url = '/nodes/' + nodename + '/spiceshell';" "let url = '${prefix}/nodes/' + nodename + '/spiceshell';";
     sub_filter "url = '/nodes/' + nodename + '/qemu/' + vmid.toString() + '/spiceproxy';" "url = '${prefix}/nodes/' + nodename + '/qemu/' + vmid.toString() + '/spiceproxy';";
