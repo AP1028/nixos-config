@@ -111,6 +111,12 @@
     # (`from '/script.js'`, `from '/scripts/utils.js'`, ...). Point them back
     # under the subpath so the module graph finishes evaluating.
     sub_filter "from '/" "from '${prefix}/";
+
+    # Image paths set from JS (`splashLogo.src = '/img/logo.png'`, template
+    # literals like `/img/<api>.svg`, etc.) bypass href/src attributes.
+    sub_filter "'/img/" "'${prefix}/img/";
+    sub_filter '"/img/' '"${prefix}/img/';
+    sub_filter '`/img/' '`${prefix}/img/';
   '';
 
   dshSubFilters = prefix: ''
