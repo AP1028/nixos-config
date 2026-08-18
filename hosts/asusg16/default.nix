@@ -34,7 +34,7 @@
     ../../modules/hardware/flydigi.nix
 
     ../../modules/desktop
-    ../../modules/system/i18n.nix
+    (import ../../modules/system/i18n.nix { timezone = null; })
     ../../modules/system/substituters.nix
 
     ../../modules/services/audio.nix

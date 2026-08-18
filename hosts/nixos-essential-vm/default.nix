@@ -13,7 +13,7 @@
     ./packages
 
     ../../modules/system/vm-base.nix
-    ../../modules/system/i18n.nix
+    (import ../../modules/system/i18n.nix {})
     ../../modules/system/substituters.nix
 
     ../../modules/system/local.nix
