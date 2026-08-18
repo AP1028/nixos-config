@@ -37,14 +37,29 @@
   networking.networkmanager.dispatcherScripts = [
     {
       source = pkgs.writeShellScript "nm-strongswan-split-tunnel" ''
-        if [ "$2" = "vpn-up" ] && [ "$CONNECTION_ID" = "SJTU_splittunnel" ]; then
+        if [ "$CONNECTION_ID" = "SJTU_splittunnel" ] && { [ "$2" = "vpn-up" ] || [ "$2" = "up" ]; }; then
           iface="''${VPN_IP_IFACE:-}"
           if [ -z "$iface" ]; then
             iface=$(ip -o link show type xfrm 2>/dev/null | head -1 | sed -E 's/^[0-9]+: ([^:@]+).*/\1/')
           fi
-          if [ -n "$iface" ]; then
-            ip route del default dev "$iface" table 210 2>/dev/null || true
-          fi
+          [ -n "$iface" ] || exit 0
+          # charon-nm puts a full-tunnel default in table 210 at connect time
+          # and re-adds it once while its setup settles; keep removing it
+          # until it has stayed away (~20 s), capped at 3 minutes.
+          stable=0
+          end=$((SECONDS + 180))
+          while [ "$SECONDS" -lt "$end" ]; do
+            if ip route show table 210 2>/dev/null | grep -q '^default'; then
+              ip route del default dev "$iface" table 210 2>/dev/null || ip route del default table 210 2>/dev/null || true
+              stable=0
+            else
+              stable=$((stable + 1))
+              if [ "$stable" -ge 10 ]; then
+                break
+              fi
+            fi
+            sleep 2
+          done
         fi
       '';
       type = "basic";
