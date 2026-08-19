@@ -80,12 +80,13 @@ CONTEXT_MODES = {
     # (fork: "estimated maximum model length is 116000"); fp16 avoids the
     # turboquant workspace-lock crash on long chunked prefill.
     "116k": {"max_model_len": 116000, "text_only": True, "kv_cache_dtype": None, "eager": False, "gpu_util": 0.94},
-    # Native 256k: 4-bit KV (469,237-token capacity) needs >=3120-token
-    # prefill chunks, which overflow the post-capture workspace lock in the
-    # turboquant attention backend, so this tier runs eager (no CUDA graphs).
-    # Eager's dynamic workspace growth needs more headroom than 0.94 leaves
-    # (a 104 MiB prefill allocation OOM'd with 103 MiB free), hence 0.935.
-    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.935},
+    # 200k: 4-bit KV, eager (no CUDA graphs - the turboquant continuation
+    # workspace overflows the post-capture lock) at gpu_util 0.92 so eager's
+    # dynamic prefill buffers have ~450 MiB/GPU of working headroom.
+    "200k": {"max_model_len": 200000, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.92},
+    # Native 256k: same eager + 4-bit KV recipe; loads and advertises the full
+    # window, but the fork's eager prefill can OOM on very long prompts.
+    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.92},
 }
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
