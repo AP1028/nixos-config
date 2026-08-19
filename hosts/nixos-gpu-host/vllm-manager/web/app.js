@@ -89,6 +89,18 @@ function renderModels(models, backend) {
       "<span>vision input" + (servingVision ? " · 👁 serving" : "") + "</span>" +
       "</label>";
 
+    const effortValue = m.thinking_effort || "max";
+    const servingEffort = isCurrent && (backend.thinking_effort || null) === effortValue;
+    const effortOptions = ["off", "low", "medium", "high", "max"].map((eff) =>
+      '<option value="' + eff + '"' + (effortValue === eff ? " selected" : "") + ">" + eff + "</option>"
+    ).join("");
+    const effortRow =
+      '<label class="vision-row" title="thinking token budget; restarts the backend when changed on the running model">' +
+      "<span>effort</span>" +
+      '<select data-act="effort" data-model="' + escapeHtml(m.id) + '">' + effortOptions + "</select>" +
+      (servingEffort ? '<span class="serving-tag">serving</span>' : "") +
+      "</label>";
+
     let actions;
     if (isCurrent && (phase === "running" || phase === "ready" || phase === "starting")) {
       actions = '<button class="danger" data-act="stop" data-model="' + escapeHtml(m.id) + '" ' + (phase === "starting" ? "disabled" : "") + ">Stop</button>" +
@@ -110,7 +122,7 @@ function renderModels(models, backend) {
 
     return '<div class="card' + (isCurrent ? " active" : "") + '">' +
       "<h3>" + escapeHtml(m.display_name) + " " + badge + "</h3>" +
-      dir + served + note + visionRow +
+      dir + served + note + visionRow + effortRow +
       '<div class="actions">' + actions + "</div>" + failure +
       "</div>";
   }).join("");
@@ -207,6 +219,32 @@ async function runAction(act, modelId) {
 }
 
 document.addEventListener("change", async (ev) => {
+  const sel = ev.target.closest("select[data-act='effort']");
+  if (sel && !busy) {
+    const modelId = sel.dataset.model;
+    const effort = sel.value;
+    const status = lastStatus || {};
+    const backend = status.backend || {};
+    const isCurrent = backend.model && backend.model.id === modelId;
+    const running = isCurrent && (backend.phase === "ready" || backend.phase === "starting");
+    const msg = running
+      ? "Set thinking effort to '" + effort + "' for the running model? The backend will restart (~2-3 min)."
+      : "Set thinking effort to '" + effort + "' for " + modelId + "? Applies the next time it starts.";
+    if (!window.confirm(msg)) { await refresh(); return; }
+    busy = true;
+    document.querySelectorAll("button[data-act], input[data-act], select[data-act]").forEach((el) => (el.disabled = true));
+    try {
+      await postJSON("api/thinking", { model: modelId, effort });
+      await refresh();
+    } catch (err) {
+      window.alert("effort change failed: " + err.message);
+      await refresh();
+    } finally {
+      busy = false;
+      document.querySelectorAll("button[data-act], input[data-act], select[data-act]").forEach((el) => (el.disabled = false));
+    }
+    return;
+  }
   const cb = ev.target.closest("input[data-act='vision']");
   if (!cb || busy) return;
   const modelId = cb.dataset.model;

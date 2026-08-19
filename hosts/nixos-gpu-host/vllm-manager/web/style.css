@@ -102,6 +102,11 @@ h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: v
 }
 .vision-row input { accent-color: var(--accent); cursor: pointer; }
 .vision-row span { font-family: var(--mono); }
+.vision-row select {
+  background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 2px 6px; font-family: var(--mono); font-size: 12px; cursor: pointer;
+}
+.vision-row .serving-tag { color: var(--green); font-size: 11px; }
 
 .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 

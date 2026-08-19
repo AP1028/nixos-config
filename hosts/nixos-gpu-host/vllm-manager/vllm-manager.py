@@ -69,6 +69,13 @@ HOP_BY_HOP = {
 MAX_MODEL_LEN = 98304
 GPU_UTIL = 0.94
 
+# Thinking-effort tiers. "off" disables thinking at the template; low/medium/
+# high set VLLM_DEFAULT_THINKING_TOKEN_BUDGET (the fork applies it when a
+# request carries no thinking_token_budget of its own); "max" leaves the
+# template default (unlimited thinking).
+EFFORTS = ["off", "low", "medium", "high", "max"]
+EFFORT_BUDGETS = {"low": 1024, "medium": 4096, "high": 16384}
+
 
 class Config:
     def __init__(self, raw: dict):
@@ -126,8 +133,10 @@ def new_state() -> dict:
         "failure": None,
         "manual_stop": False,
         "vision": None,
+        "thinking_effort": None,
         "last_logs": {},
         "vision_modes": {},
+        "thinking_efforts": {},
     }
 
 
@@ -246,7 +255,7 @@ def backend_python() -> Path:
     return CFG.runtime_root / ".venv" / "bin" / "python"
 
 
-def build_env(model: dict) -> dict:
+def build_env(model: dict, effort: str = "max") -> dict:
     root = str(CFG.runtime_root)
     fl = f"{root}/.deps/FlashQLA-SM70-SM75"
     env = os.environ.copy()
@@ -273,10 +282,14 @@ def build_env(model: dict) -> dict:
         "VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH": "0",
         "VLLM_SM75_SPEC_SYNC_MODE": str(model.get("spec_sync_mode", "safe")),
     })
+    if effort in EFFORT_BUDGETS:
+        env["VLLM_DEFAULT_THINKING_TOKEN_BUDGET"] = str(EFFORT_BUDGETS[effort])
+    else:
+        env.pop("VLLM_DEFAULT_THINKING_TOKEN_BUDGET", None)
     return env
 
 
-def build_args(model: dict, vision: bool = False) -> list[str]:
+def build_args(model: dict, vision: bool = False, effort: str = "max") -> list[str]:
     args = [
         "--host", CFG.backend_host,
         "--port", str(CFG.backend_port),
@@ -296,6 +309,10 @@ def build_args(model: dict, vision: bool = False) -> list[str]:
     if not vision:
         # Text-only serving: skip the vision encoder and its profiling.
         args += ["--language-model-only", "--skip-mm-profiling"]
+    if effort == "off":
+        # Server-side default: disable the Qwen3 thinking block. Requests can
+        # still re-enable it with chat_template_kwargs / thinking_token_budget.
+        args += ["--default-chat-template-kwargs", '{"enable_thinking": false}']
     args += [
         "--disable-log-stats",
         "--reasoning-parser", "qwen3",
@@ -316,6 +333,14 @@ def vision_preference(st: dict, model: dict) -> bool:
     if model["id"] in modes:
         return bool(modes[model["id"]])
     return bool(model.get("vision", False))
+
+
+def thinking_effort_preference(st: dict, model: dict) -> str:
+    """Per-model thinking effort: runtime state override, else models.json."""
+    modes = st.get("thinking_efforts", {})
+    if model["id"] in modes:
+        return modes[model["id"]]
+    return str(model.get("thinking_effort", "max"))
 
 
 class ManagerError(Exception):
@@ -360,8 +385,9 @@ def start_model(model_id: str) -> dict:
         logf = open(log_path, "ab")  # noqa: SIM115 (kept open for the child)
 
         vision = vision_preference(st, model)
-        args = build_args(model, vision)
-        env = build_env(model)
+        effort = thinking_effort_preference(st, model)
+        args = build_args(model, vision, effort)
+        env = build_env(model, effort)
         try:
             proc = subprocess.Popen(
                 [str(py), "-m", "vllm.entrypoints.openai.api_server", *args],
@@ -386,6 +412,7 @@ def start_model(model_id: str) -> dict:
             "failure": None,
             "manual_stop": False,
             "vision": vision,
+            "thinking_effort": effort,
         })
         st.setdefault("last_logs", {})[model_id] = str(log_path)
         save_state(st)
@@ -395,6 +422,7 @@ def start_model(model_id: str) -> dict:
             "pid": proc.pid,
             "phase": "starting",
             "vision": vision,
+            "thinking_effort": effort,
             "log": str(log_path),
             "note": "backend is loading (CUDA graph capture); /health turns 200 "
                     "when ready (usually 1.5-3 min)",
@@ -463,6 +491,7 @@ def stop_model() -> dict:
             "failure": None,
             "manual_stop": True,
             "vision": None,
+            "thinking_effort": None,
         })
         save_state(st)
         return {"ok": True, "stopped": stopped_pid, "phase": "stopped"}
@@ -473,6 +502,34 @@ def switch_model(model_id: str) -> dict:
         stop_result = stop_model()
         start_result = start_model(model_id)
         return {"ok": True, "stopped": stop_result, "started": start_result}
+
+
+def set_thinking_effort(model_id: str, effort: str) -> dict:
+    """Persist the per-model thinking-effort preference; restart the backend
+    when the running model's effort changes so the flag takes effect now."""
+    if effort not in EFFORTS:
+        raise ManagerError(f"unknown effort: {effort} (use off/low/medium/high/max)", 400)
+    with OP_LOCK:
+        try:
+            CFG.model(model_id)
+        except KeyError as exc:
+            raise ManagerError(f"unknown model id: {model_id}", 400) from exc
+        st = load_state()
+        st.setdefault("thinking_efforts", {})[model_id] = effort
+        save_state(st)
+        restarted = None
+        if st.get("current_model") == model_id and st.get("phase") in ("starting", "ready"):
+            stop_model()
+            restarted = start_model(model_id)
+        return {
+            "ok": True,
+            "model": model_id,
+            "effort": effort,
+            "restarted": restarted is not None,
+            "note": ("backend restarted with the new effort; load takes 1.5-3 min"
+                     if restarted is not None else
+                     "preference saved; applies the next time this model starts"),
+        }
 
 
 def set_vision(model_id: str, enabled: bool) -> dict:
@@ -528,6 +585,7 @@ def build_status() -> dict:
             "note": m.get("note", ""),
             "state": "stopped",
             "vision": vision_preference(st, m),
+            "thinking_effort": thinking_effort_preference(st, m),
         }
         if current == m["id"]:
             entry["state"] = st.get("phase", "stopped")
@@ -560,6 +618,7 @@ def build_status() -> dict:
             "uptime_s": uptime,
             "failure": st.get("failure"),
             "vision": st.get("vision"),
+            "thinking_effort": st.get("thinking_effort"),
             "log": st.get("log"),
         },
         "models": models,
@@ -627,6 +686,9 @@ def bootstrap() -> None:
                         # Pre-vision-toggle state: an adopted backend was
                         # launched text-only under the old manager.
                         st["vision"] = False
+                    if st.get("thinking_effort") is None:
+                        # Pre-effort-toggle state: no budget default was set.
+                        st["thinking_effort"] = "max"
                     save_state(st)
                 return  # adopt the running backend
 
@@ -777,6 +839,11 @@ class ControlHandler(http.server.BaseHTTPRequestHandler):
                 if not model_id:
                     raise ManagerError("missing 'model' in JSON body", 400)
                 self._send_json(set_vision(model_id, bool(body.get("enabled", False))), 202)
+            elif path == "/api/thinking":
+                model_id = body.get("model")
+                if not model_id:
+                    raise ManagerError("missing 'model' in JSON body", 400)
+                self._send_json(set_thinking_effort(model_id, str(body.get("effort", "max"))), 202)
             else:
                 self._send_error_json(f"not found: {path}", 404)
         except ManagerError as exc:

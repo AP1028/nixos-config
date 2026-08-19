@@ -55,6 +55,7 @@ in VRAM at a time (2x 22 GiB GPUs, ~21.7 GiB used per GPU when serving).
 | POST /api/stop | stop the running model (idempotent) |
 | POST /api/switch {"model":"official"} | stop + start (one operation) |
 | POST /api/vision {"model":"official","enabled":true} | toggle vision input per model; restarts the backend when the running model changes mode |
+| POST /api/thinking {"model":"official","effort":"low"} | thinking-effort tier per model (off/low/medium/high/max); restarts the backend when the running model changes |
 | GET /health | manager liveness |
 | GET /ca.crt | public certificate (install to trust) |
 
@@ -64,6 +65,25 @@ curl examples:
     curl -k -X POST https://192.168.3.200:8000/api/switch       -H 'Content-Type: application/json' -d '{"model":"uncensored"}'
     curl -k https://192.168.3.200:8001/v1/models
     curl -k https://192.168.3.200:8001/v1/chat/completions       -H 'Content-Type: application/json'       -d '{"model":"qwen38-27b-fp8-fast-mtp3","messages":[{"role":"user","content":"hi"}],"max_tokens":128}'
+
+## Thinking effort switch
+
+The fork honors `thinking_token_budget` per request, with a server default
+from `VLLM_DEFAULT_THINKING_TOKEN_BUDGET` applied when a request carries
+none. The panel's per-model effort selector maps to that default:
+
+| effort | server default | effect |
+|---|---|---|
+| off | `--default-chat-template-kwargs {"enable_thinking": false}` | no thinking block (fast, direct answers) |
+| low | budget 1024 | short thinking |
+| medium | budget 4096 | moderate thinking |
+| high | budget 16384 | long thinking |
+| max (default) | none | template default, unlimited thinking |
+
+Requests can still override per call: `thinking_token_budget` (number) or
+`chat_template_kwargs: {"enable_thinking": ...}`. Changing the effort of the
+running model restarts the backend (1.5-3 min). DSH sessions inherit the
+panel's default since DSH sends no budget of its own.
 
 ## Vision input toggle
 
