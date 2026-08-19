@@ -55,6 +55,7 @@ if os.path.isdir(_NIX_SW_BIN) and _NIX_SW_BIN not in os.environ.get("PATH", ""):
 APP_DIR = Path(os.environ.get("VLLM_MANAGER_APP_DIR", Path(__file__).resolve().parent))
 STATE_DIR = Path(os.environ.get("VLLM_MANAGER_STATE_DIR", os.getcwd()))
 CONFIG_PATH = Path(os.environ.get("VLLM_MANAGER_CONFIG", APP_DIR / "models.json"))
+CA_CERT_PATH = os.environ.get("VLLM_MANAGER_CA_CERT", "")
 
 STATE_PATH = STATE_DIR / "state.json"
 LOG_DIR = STATE_DIR / "logs"
@@ -77,7 +78,10 @@ class Config:
         self.api_host = str(raw.get("api_host", "0.0.0.0"))
         self.api_port = int(raw.get("api_port", 8000))
         self.backend_host = str(raw.get("backend_host", "127.0.0.1"))
-        self.backend_port = int(raw.get("backend_port", 8001))
+        self.backend_port = int(raw.get("backend_port", 9001))
+        self.public_scheme = str(raw.get("public_scheme", "https"))
+        self.public_control_port = int(raw.get("public_control_port", 8000))
+        self.public_api_port = int(raw.get("public_api_port", 8001))
         self.runtime_root = Path(raw["runtime_root"]).expanduser()
         self.default_model = str(raw.get("default_model", ""))
         self.start_timeout_s = int(raw.get("start_timeout_s", 420))
@@ -494,10 +498,12 @@ def build_status() -> dict:
         "manager": {
             "pid": os.getpid(),
             "uptime_s": int(time.time() - STARTED_AT),
-            "control_port": CFG.control_port,
-            "api_port": CFG.api_port,
+            "scheme": CFG.public_scheme,
+            "control_port": CFG.public_control_port,
+            "api_port": CFG.public_api_port,
             "backend_port": CFG.backend_port,
-            "api_url": f"http://{hostname}:{CFG.api_port}/v1",
+            "control_url": f"{CFG.public_scheme}://{hostname}:{CFG.public_control_port}/",
+            "api_url": f"{CFG.public_scheme}://{hostname}:{CFG.public_api_port}/v1",
         },
         "backend": {
             "model": model_info,
@@ -673,6 +679,17 @@ class ControlHandler(http.server.BaseHTTPRequestHandler):
                 self._serve_static("app.js")
             elif path == "/health":
                 self._send_json({"status": "ok", "service": "vllm-manager"})
+            elif path == "/ca.crt":
+                if CA_CERT_PATH and Path(CA_CERT_PATH).is_file():
+                    data = Path(CA_CERT_PATH).read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-pem-file")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(data)
+                else:
+                    self._send_error_json("CA certificate not configured", 404)
             elif path == "/api/status":
                 self._send_json(build_status())
             elif path == "/api/models":

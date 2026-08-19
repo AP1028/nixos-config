@@ -14,9 +14,10 @@ CUDA 12.9 host toolkit + torch 2.11.0+cu128, driver 595.71.05.
 ## Handoff commands
 
 **Daily use goes through the vllm-manager systemd service instead** (see
-`../vllm-manager/README.md`): control panel `http://192.168.3.200:8500/`,
-OpenAI API `http://192.168.3.200:8000/v1`. The manager owns port 8000 and
-runs the official and uncensored FP8 checkpoints interchangeably.
+`../vllm-manager/README.md`): control panel `https://192.168.3.200:8000/`,
+OpenAI API `https://192.168.3.200:8001/v1` (self-signed TLS, install the
+CA from `https://192.168.3.200:8000/ca.crt`). The manager owns ports
+8000/8001 and runs the official and uncensored FP8 checkpoints interchangeably.
 
 The scripts below still work but bind port 8000 themselves; stop the manager
 first if you need them (`sudo systemctl stop vllm-manager`).
