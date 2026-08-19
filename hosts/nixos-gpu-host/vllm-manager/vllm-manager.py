@@ -318,7 +318,7 @@ def build_args(model: dict, vision: bool = False, effort: str = "max") -> list[s
     # Tool calling for agent clients (DSH sends tools with tool_choice=auto).
     # The Qwen3 template emits its native tool-call format; qwen3xml parses it
     # back into OpenAI tool_calls. Requests without tools are unaffected.
-    args += ["--tool-call-parser", "qwen3xml", "--enable-auto-tool-choice"]
+    args += ["--tool-call-parser", "qwen3_xml", "--enable-auto-tool-choice"]
     args += [
         "--disable-log-stats",
         "--reasoning-parser", "qwen3",
