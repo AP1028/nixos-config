@@ -71,12 +71,13 @@ HOP_BY_HOP = {
 # capacity 144,606 tokens). "native" targets the model's configured
 # max_position_embeddings (262,144) text-only with turboquant_k8v4 KV (the
 # most compact fork-verified dtype, 19.8 GiB at 98k in the tuning runs).
-# Measured k8v4 KV capacity is 241,979 tokens, so native serves 240,000.
+# Measured 4bit_nc KV capacity is 377,487 tokens (1.44x of 262,144), so
+# native serves the model's full configured 256k window.
 MAX_MODEL_LEN = 98304
 CONTEXT_MODES = {
     "98k": {"max_model_len": 98304, "text_only": False, "kv_cache_dtype": None},
     "128k": {"max_model_len": 131072, "text_only": True, "kv_cache_dtype": "turboquant_k8v4"},
-    "native": {"max_model_len": 240000, "text_only": True, "kv_cache_dtype": "turboquant_k8v4"},
+    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc"},
 }
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
