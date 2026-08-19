@@ -3,6 +3,13 @@
   # in ~/.zshrc (and ~/.zshenv). This makes it inheritable by tools that read
   # the user's dotfiles directly, e.g. distrobox containers, unlike a
   # system-wide /etc/zshrc.
+  #
+  # Node.js does not consult the system CA store, so tools like DSH need the
+  # LAN vLLM stack's self-signed certs injected explicitly.  The bundle holds
+  # the PUBLIC certificates of nixos-gpu-host (192.168.3.200:8000/8001) and
+  # nixos-webapp-vm (homeserver040322.ddns.net:18081) — no private keys.
+  home.sessionVariables.NODE_EXTRA_CA_CERTS = "/home/tianyixia/.dsh/certs/vllm-ca-bundle.crt";
+
   programs.zsh = {
     enable = true;
     autosuggestion.enable = true;
