@@ -1,6 +1,4 @@
-{ interface }:
-
-{
+{interface}: {
   config,
   lib,
   pkgs,
@@ -16,6 +14,10 @@
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
+      # Only run when the OpenWRT router (192.168.3.1, reachable via the home
+      # OpenVPN tunnel) is actually routed; otherwise skip cleanly instead of
+      # failing the unit (and the activation) with "invalid gateway".
+      ExecCondition = "${pkgs.bash}/bin/bash -c '${pkgs.iproute2}/bin/ip route show 192.168.3.0/24 | grep -q .'";
     };
     script = ''
       ${pkgs.iproute2}/bin/ip route replace default via 192.168.3.1 table 100
