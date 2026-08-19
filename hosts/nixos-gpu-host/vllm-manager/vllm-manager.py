@@ -281,6 +281,8 @@ def build_env(model: dict, effort: str = "max") -> dict:
         "STABLE_ROOT": root,
         "VLLM_ALLOW_MAMBA_SPEC_FULL_CUDAGRAPH": "0",
         "VLLM_SM75_SPEC_SYNC_MODE": str(model.get("spec_sync_mode", "safe")),
+        # Match the legacy launcher's tool-calling posture.
+        "VLLM_ENFORCE_STRICT_TOOL_CALLING": "0",
     })
     if effort in EFFORT_BUDGETS:
         env["VLLM_DEFAULT_THINKING_TOKEN_BUDGET"] = str(EFFORT_BUDGETS[effort])
@@ -313,6 +315,10 @@ def build_args(model: dict, vision: bool = False, effort: str = "max") -> list[s
         # Server-side default: disable the Qwen3 thinking block. Requests can
         # still re-enable it with chat_template_kwargs / thinking_token_budget.
         args += ["--default-chat-template-kwargs", '{"enable_thinking": false}']
+    # Tool calling for agent clients (DSH sends tools with tool_choice=auto).
+    # The Qwen3 template emits its native tool-call format; qwen3xml parses it
+    # back into OpenAI tool_calls. Requests without tools are unaffected.
+    args += ["--tool-call-parser", "qwen3xml", "--enable-auto-tool-choice"]
     args += [
         "--disable-log-stats",
         "--reasoning-parser", "qwen3",
