@@ -76,7 +76,7 @@ HOP_BY_HOP = {
 MAX_MODEL_LEN = 98304
 CONTEXT_MODES = {
     "98k": {"max_model_len": 98304, "text_only": False, "kv_cache_dtype": None},
-    "128k": {"max_model_len": 131072, "text_only": True, "kv_cache_dtype": "turboquant_k8v4"},
+    "128k": {"max_model_len": 131072, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc"},
     "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc"},
 }
 DEFAULT_CONTEXT_MODE = "98k"
@@ -314,9 +314,10 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
     # fit alongside the larger KV pool.
     text_only = mode["text_only"] or not vision
     max_model_len = mode["max_model_len"]
-    # Compressed KV dtypes widen the block size (k8v4 -> 2112); the fork
-    # asserts block_size <= max_num_batched_tokens in mamba align mode.
-    batched = 4096 if mode["kv_cache_dtype"] else 2048
+    # 4bit_nc keeps block_size <= 2048, so the 2048-token prefill chunks
+    # used by the fork's tuning runs stay valid: larger chunks overflow the
+    # post-capture workspace lock in the turboquant attention backend.
+    batched = 2048
     args = [
         "--host", CFG.backend_host,
         "--port", str(CFG.backend_port),
