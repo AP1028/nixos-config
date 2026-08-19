@@ -142,7 +142,7 @@ function renderStatus(status) {
 
 async function refreshLogs() {
   try {
-    const data = await getJSON("/api/logs?lines=150");
+    const data = await getJSON("api/logs?lines=150");
     $("#logView").textContent = data.log || "(empty log)";
     $("#logLabel").textContent = data.model ? "model: " + data.model : "no backend running";
   } catch (err) {
@@ -163,7 +163,7 @@ function stopLogs() {
 
 async function refresh() {
   try {
-    const status = await getJSON("/api/status");
+    const status = await getJSON("api/status");
     renderStatus(status);
   } catch (err) {
     $("#lastUpdated").textContent = "error: " + err.message;
@@ -187,9 +187,9 @@ async function runAction(act, modelId) {
   busy = true;
   document.querySelectorAll("button[data-act]").forEach((b) => (b.disabled = true));
   try {
-    if (act === "start") await postJSON("/api/start", { model: modelId });
-    else if (act === "switch") await postJSON("/api/switch", { model: modelId });
-    else if (act === "stop") await postJSON("/api/stop", {});
+    if (act === "start") await postJSON("api/start", { model: modelId });
+    else if (act === "switch") await postJSON("api/switch", { model: modelId });
+    else if (act === "stop") await postJSON("api/stop", {});
     await refresh();
   } catch (err) {
     window.alert("action failed: " + err.message);
@@ -206,7 +206,7 @@ document.addEventListener("click", (ev) => {
   if (btn.dataset.act === "logs") {
     stopLogs();
     const modelId = btn.dataset.model;
-    getJSON("/api/logs?lines=200&model=" + encodeURIComponent(modelId))
+    getJSON("api/logs?lines=200&model=" + encodeURIComponent(modelId))
       .then((data) => {
         $("#logView").textContent = data.log || "(no log for this model yet)";
         $("#logLabel").textContent = "model: " + (data.model || modelId);
