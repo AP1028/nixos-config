@@ -76,7 +76,7 @@ MAX_MODEL_LEN = 98304
 CONTEXT_MODES = {
     "98k": {"max_model_len": 98304, "text_only": False, "kv_cache_dtype": None},
     "128k": {"max_model_len": 131072, "text_only": True, "kv_cache_dtype": "turboquant_k8v4"},
-    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_k8v4"},
+    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc"},
 }
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
