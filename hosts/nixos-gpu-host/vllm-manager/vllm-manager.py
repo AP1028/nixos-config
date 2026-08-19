@@ -962,6 +962,49 @@ class ControlHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
 
+def normalize_chat_messages(body: bytes | None, path: str) -> bytes | None:
+    """Move/merge system messages to the front of chat-completion requests.
+
+    The Qwen3 chat template raises "System message must be at the beginning"
+    when any system message appears after the first position (SillyTavern
+    injects persona/world-info system blocks mid-history).  Server-side
+    normalization keeps every OpenAI-compatible client working: string system
+    contents are merged into one leading system message, non-string system
+    blocks are moved verbatim right behind it.
+    """
+    if body is None:
+        return None
+    if "/chat/completions" not in path:
+        return body
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return body
+    msgs = data.get("messages")
+    if not isinstance(msgs, list) or len(msgs) < 2:
+        return body
+    systems = [m for m in msgs if isinstance(m, dict) and m.get("role") == "system"]
+    if not systems:
+        return body
+    if msgs[0] is systems[0] and all(m.get("role") != "system" for m in msgs[1:]):
+        return body  # already a single leading system message
+    text_parts: list[str] = []
+    verbatim: list[dict] = []
+    for m in systems:
+        content = m.get("content")
+        if isinstance(content, str) and content.strip():
+            text_parts.append(content.strip())
+        else:
+            verbatim.append(m)
+    leading: list[dict] = []
+    if text_parts:
+        leading.append({"role": "system", "content": "\n\n".join(text_parts)})
+    leading.extend(verbatim)
+    rest = [m for m in msgs if not (isinstance(m, dict) and m.get("role") == "system")]
+    data["messages"] = leading + rest
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
 class ProxyHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
     server_version = "VllmManagerProxy/1.0"
@@ -984,6 +1027,8 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         except ValueError:
             length = 0
         body = self.rfile.read(length) if length > 0 else None
+        if CFG.raw.get("normalize_system_messages", True):
+            body = normalize_chat_messages(body, self.path)
 
         fwd = {}
         for key, value in self.headers.items():
