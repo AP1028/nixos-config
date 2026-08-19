@@ -313,6 +313,9 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
     # fit alongside the larger KV pool.
     text_only = mode["text_only"] or not vision
     max_model_len = mode["max_model_len"]
+    # Compressed KV dtypes widen the block size (k8v4 -> 2112); the fork
+    # asserts block_size <= max_num_batched_tokens in mamba align mode.
+    batched = 4096 if mode["kv_cache_dtype"] else 2048
     args = [
         "--host", CFG.backend_host,
         "--port", str(CFG.backend_port),
@@ -324,7 +327,7 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
         "--max-model-len", str(max_model_len),
         "--enable-chunked-prefill",
         "--max-num-seqs", "1",
-        "--max-num-batched-tokens", "2048",
+        "--max-num-batched-tokens", str(batched),
         "--quantization", "fp8",
         "--gpu-memory-utilization", f"{GPU_UTIL:.2f}",
         "--enable-prompt-tokens-details",
