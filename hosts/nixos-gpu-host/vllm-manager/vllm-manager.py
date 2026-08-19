@@ -1036,6 +1036,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 continue
             fwd[key] = value
         fwd["Host"] = f"{backend_host}:{backend_port}"
+        # The normalization above can change the body length; always restate
+        # Content-Length from the bytes actually forwarded.
+        if body is not None:
+            fwd["Content-Length"] = str(len(body))
 
         conn = None
         try:
