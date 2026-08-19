@@ -28,6 +28,7 @@
     ./gpu.nix
     ./comfyui.nix
     ./vllm-qwen
+    ./vllm-manager
 
     ./packages
   ];

@@ -6,3 +6,4 @@ result
 # local.nix.template (rebuild.sh copies it on first run).
 local.nix
 git-excluded/
+__pycache__/
