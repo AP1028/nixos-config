@@ -75,9 +75,15 @@ HOP_BY_HOP = {
 # native serves the model's full configured 256k window.
 MAX_MODEL_LEN = 98304
 CONTEXT_MODES = {
-    "98k": {"max_model_len": 98304, "text_only": False, "kv_cache_dtype": None},
-    "128k": {"max_model_len": 131072, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc"},
-    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc"},
+    "98k": {"max_model_len": 98304, "text_only": False, "kv_cache_dtype": None, "eager": False},
+    # fp16 KV fits at most 116,000 tokens on the uncensored checkpoint
+    # (fork: "estimated maximum model length is 116000"); fp16 avoids the
+    # turboquant workspace-lock crash on long chunked prefill.
+    "116k": {"max_model_len": 116000, "text_only": True, "kv_cache_dtype": None, "eager": False},
+    # Native 256k: 4-bit KV (377,487-token capacity) needs >=3120-token
+    # prefill chunks, which overflow the post-capture workspace lock in the
+    # turboquant attention backend, so this tier runs eager (no CUDA graphs).
+    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True},
 }
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
@@ -314,10 +320,9 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
     # fit alongside the larger KV pool.
     text_only = mode["text_only"] or not vision
     max_model_len = mode["max_model_len"]
-    # 4bit_nc keeps block_size <= 2048, so the 2048-token prefill chunks
-    # used by the fork's tuning runs stay valid: larger chunks overflow the
-    # post-capture workspace lock in the turboquant attention backend.
-    batched = 2048
+    # Compressed KV widens the block size (4bit_nc -> 3120), which must be
+    # <= max_num_batched_tokens in mamba align mode.
+    batched = 4096 if mode["kv_cache_dtype"] else 2048
     args = [
         "--host", CFG.backend_host,
         "--port", str(CFG.backend_port),
@@ -336,6 +341,10 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
     ]
     if mode["kv_cache_dtype"]:
         args += ["--kv-cache-dtype", mode["kv_cache_dtype"]]
+    if mode["eager"]:
+        # No CUDA graph capture: the turboquant continuation-prefill
+        # workspace can grow freely instead of hitting the locked size.
+        args += ["--enforce-eager"]
     if text_only:
         # Text-only serving: skip the vision encoder and its profiling.
         args += ["--language-model-only", "--skip-mm-profiling"]

@@ -95,7 +95,7 @@ function renderModels(models, backend) {
       '<label class="vision-row" title="context window; 128k/native force text-only; restarts the backend when changed on the running model">' +
       "<span>context</span>" +
       '<select data-act="context" data-model="' + escapeHtml(m.id) + '">' +
-      ["98k", "128k", "native"].map((c) => '<option value="' + c + '"' + (ctxValue === c ? " selected" : "") + ">" + c + "</option>").join("") +
+      ["98k", "116k", "native"].map((c) => '<option value="' + c + '"' + (ctxValue === c ? " selected" : "") + ">" + c + "</option>").join("") +
       "</select>" +
       (servingCtx ? '<span class="serving-tag">serving</span>' : "") +
       "</label>";
