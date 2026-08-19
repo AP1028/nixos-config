@@ -44,6 +44,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+# NixOS keeps ninja/gcc/cmake/nvidia-smi/ss/pkill in /run/current-system/sw/bin,
+# but systemd services start with a minimal PATH.  Fix PATH once at import so
+# both the manager's own subprocess calls and the vLLM workers it spawns can
+# find the toolchain (JIT builds C++ extensions and needs ninja/gcc).
+_NIX_SW_BIN = "/run/current-system/sw/bin"
+if os.path.isdir(_NIX_SW_BIN) and _NIX_SW_BIN not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = _NIX_SW_BIN + ":" + os.environ.get("PATH", "/usr/bin:/bin")
+
 APP_DIR = Path(os.environ.get("VLLM_MANAGER_APP_DIR", Path(__file__).resolve().parent))
 STATE_DIR = Path(os.environ.get("VLLM_MANAGER_STATE_DIR", os.getcwd()))
 CONFIG_PATH = Path(os.environ.get("VLLM_MANAGER_CONFIG", APP_DIR / "models.json"))
@@ -236,6 +244,9 @@ def build_env(model: dict) -> dict:
     root = str(CFG.runtime_root)
     fl = f"{root}/.deps/FlashQLA-SM70-SM75"
     env = os.environ.copy()
+    venv_bin = str(CFG.runtime_root / ".venv" / "bin")
+    if venv_bin not in env.get("PATH", ""):
+        env["PATH"] = f"{venv_bin}:" + env.get("PATH", "/usr/bin:/bin")
     env.update({
         "CUDA_HOME": "/etc/vllm-cuda-home",
         "CUDA_PATH": "/etc/vllm-cuda-home",
