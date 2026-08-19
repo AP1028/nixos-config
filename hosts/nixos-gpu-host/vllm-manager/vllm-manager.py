@@ -70,13 +70,13 @@ HOP_BY_HOP = {
 # vision encoder loaded is 99,016 tokens). 128k is text-only (measured KV
 # capacity 144,606 tokens). "native" targets the model's configured
 # max_position_embeddings (262,144) text-only with turboquant_k8v4 KV (the
-# most compact fork-verified dtype, 19.8 GiB at 98k in the tuning runs) so
-# the full 256k window fits the 2x 2080 Ti 22GB KV pool.
+# most compact fork-verified dtype, 19.8 GiB at 98k in the tuning runs).
+# Measured k8v4 KV capacity is 241,979 tokens, so native serves 240,000.
 MAX_MODEL_LEN = 98304
 CONTEXT_MODES = {
     "98k": {"max_model_len": 98304, "text_only": False, "kv_cache_dtype": None},
     "128k": {"max_model_len": 131072, "text_only": True, "kv_cache_dtype": "turboquant_k8v4"},
-    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc"},
+    "native": {"max_model_len": 240000, "text_only": True, "kv_cache_dtype": "turboquant_k8v4"},
 }
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
