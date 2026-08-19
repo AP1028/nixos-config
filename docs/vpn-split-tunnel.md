@@ -149,3 +149,28 @@ git-excluded `.dsh-cache/` directory) can generate one from a MaxMind
 `Country.mmdb` using `libmaxminddb` (`mmdb_enum` walks the IPv4 subtree
 and emits `CN` networks). Regenerate after updating the GeoIP database, then
 re-apply with `nmcli connection modify <campus-vpn> ipv4.routes "$(paste -sd, list.txt)"`.
+
+## Bilibili content access (SJTU only — not the OpenVPN path)
+
+bilibili geo-DNS can hand out overseas CDN nodes (Akamai `148.153.x` /
+`192.254.90.x`) even on a mainland network (resolver/browser-DoH dependent).
+Those IPs are not in the CN list, so they would go direct and the region check
+on `api.bilibili.com` would see the physical IP instead of the campus egress.
+
+Fix (already applied on the campus split-tunnel profile): hardcode the
+oversea CDN nodes into the campus tunnel:
+
+```bash
+for ip in 148.153.45.10 148.153.46.90 148.153.56.162 148.153.56.163 \
+          148.153.64.18 192.254.90.178 192.254.90.179; do
+  nmcli connection modify <campus-vpn> +ipv4.routes "$ip/32"
+done
+```
+
+If bilibili starts serving new overseas IPs (check with
+`getent ahostsv4 www.bilibili.com` and `ip route get <ip>`), add them the
+same way.
+
+**Scope note:** this override exists solely for the campus (CN) split tunnel
+and content access. It does not affect the OpenVPN (home LAN) profile — that
+tunnel only ever carries `192.168.3.0/24`.
