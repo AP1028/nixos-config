@@ -3,6 +3,8 @@
 #   /private/            -> Authelia login portal (pretty, remember-me)
 #   /private/pve1/       -> https://192.168.3.10:8006/  (Proxmox VE 1)
 #   /private/pve2/       -> https://192.168.3.100:8006/ (Proxmox VE 2)
+#   /private/vllm/control/ -> https://192.168.3.200:8000/ (vLLM control panel)
+#   /private/vllm/api/     -> https://192.168.3.200:8001/ (OpenAI-compatible API)
 #
 # Secrets are NOT stored in nixos-config. Authelia generates its own
 # jwt/storage/session secrets in /var/lib/authelia-main on first start, and the
@@ -236,6 +238,16 @@
             <div class="desc">DeepSeek Harness.</div>
             <span class="badge private">Authelia + basic auth</span>
           </a>
+          <a class="card" href="/private/vllm/control/">
+            <div class="name">vLLM Control Panel</div>
+            <div class="desc">GPU host model manager: switch models, VRAM usage, logs.</div>
+            <span class="badge private">Authelia</span>
+          </a>
+          <a class="card" href="/private/vllm/api/v1/models">
+            <div class="name">vLLM API</div>
+            <div class="desc">OpenAI-compatible endpoint of the running model. Base path: /private/vllm/api/v1</div>
+            <span class="badge private">Authelia</span>
+          </a>
         </div>
       </main>
     </body>
@@ -348,6 +360,29 @@
     ${dshSubFilters "/private/dsh"}
   '';
 
+  # vLLM manager on nixos-gpu-host (self-signed TLS upstream). The control
+  # UI is served with relative asset/API paths (prefix-safe since 2026-08),
+  # so no sub_filter rewriting is needed; the OpenAI API is a plain stream
+  # proxy. Both are protected by the Authelia portal like every other
+  # /private/ app.
+  vllmControlProxyConfig = ''
+    ${autheliaAuthRequest}
+
+    proxy_ssl_verify off;
+    proxy_read_timeout 300s;
+  '';
+
+  vllmApiProxyConfig = ''
+    ${autheliaAuthRequest}
+
+    proxy_ssl_verify off;
+    proxy_buffering off;
+    proxy_redirect / /private/vllm/api/;
+    proxy_read_timeout 1800s;
+    proxy_send_timeout 1800s;
+    client_max_body_size 512m;
+  '';
+
   # Imperative password setter. It takes the plaintext password as argv,
   # hashes it at runtime, and writes it to the runtime users database. No
   # password or hash ever enters nixos-config or the nix store.
@@ -431,7 +466,7 @@ in {
           map (domain: {
             inherit domain;
             policy = "one_factor";
-            resources = ["^/private/(pve1|pve2|sillytavern|dsh|main)(/.*)?$"];
+            resources = ["^/private/(pve1|pve2|sillytavern|dsh|main|vllm)(/.*)?$"];
           })
           privateDomains;
       };
@@ -576,6 +611,26 @@ in {
       proxyWebsockets = true;
       recommendedProxySettings = false;
       extraConfig = dshProxyConfig;
+    };
+
+    "= /private/vllm/control" = {
+      return = "308 /private/vllm/control/";
+      extraConfig = privateHttpsOnly;
+    };
+
+    "/private/vllm/control/" = {
+      proxyPass = "https://192.168.3.200:8000/";
+      extraConfig = vllmControlProxyConfig;
+    };
+
+    "= /private/vllm/api" = {
+      return = "308 /private/vllm/api/";
+      extraConfig = privateHttpsOnly;
+    };
+
+    "/private/vllm/api/" = {
+      proxyPass = "https://192.168.3.200:8001/";
+      extraConfig = vllmApiProxyConfig;
     };
   };
 }
