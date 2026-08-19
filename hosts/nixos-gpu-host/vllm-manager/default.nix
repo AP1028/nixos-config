@@ -38,6 +38,10 @@ in {
       StateDirectory = "vllm-manager";
       Restart = "always";
       RestartSec = 3;
+      # Only signal the manager on stop/restart: the vLLM backend it spawned
+      # must survive manager restarts (NixOS rebuilds) so the next instance
+      # can adopt the still-running backend instead of reloading the model.
+      KillMode = "process";
       Environment = ["VLLM_MANAGER_APP_DIR=${appDir}"];
     };
   };
