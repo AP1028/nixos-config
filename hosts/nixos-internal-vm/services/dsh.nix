@@ -29,7 +29,13 @@ in {
       Type = "simple";
       User = "tianyixia";
       Group = "users";
-      Environment = "DSH_HOME=/home/tianyixia/.dsh";
+      Environment = [
+        "DSH_HOME=/home/tianyixia/.dsh"
+        # Node does not read the system CA store; give dsh the LAN vLLM
+        # stack's self-signed PUBLIC certs (gpu-host + webapp-vm) so the
+        # vllm-gpu provider can talk to homeserver040322.ddns.net:18081.
+        "NODE_EXTRA_CA_CERTS=/home/tianyixia/.dsh/certs/vllm-ca-bundle.crt"
+      ];
       ExecStart = "${dsh}/bin/dsh web --host 127.0.0.1 --port 3080 --trusted-host 192.168.3.105 --trusted-host nixos-internal-vm";
       Restart = "on-failure";
     };
