@@ -40,6 +40,7 @@
     ../../modules/services/audio.nix
     ../../modules/services/clash-verge.nix
     ../../modules/services/sunshine.nix
+    ../../modules/services/upnp-port-forward.nix
     ../../modules/services/openssh.nix
     ../../modules/services/firewall-open.nix
     (import ../../modules/services/iptables-clash-openwrt.nix { interface = "wlan0"; })
