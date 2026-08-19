@@ -6,8 +6,9 @@
 # nginx terminates TLS on the public ports and proxies to them:
 #   * https://<host>:8000  -> management UI + control API
 #   * https://<host>:8001  -> OpenAI-compatible model API (streaming enabled)
-# No plain-HTTP listener is exposed: every public port is TLS-only and
-# ssl_reject_handshake rejects cleartext clients.
+# No plain-HTTP listener is exposed: every public port is TLS-only
+# (listen ... ssl), so cleartext clients get nginx's 400 "plain HTTP to
+# HTTPS port" error and no HTTP content is ever served unencrypted.
 #
 # TLS uses a build-time self-signed certificate (10y) with SANs for
 # nixos-gpu-host / localhost / 192.168.3.200 / 127.0.0.1, following the
@@ -68,8 +69,6 @@ in {
       ];
       sslCertificate = "${selfSignedCert}/cert.pem";
       sslCertificateKey = "${selfSignedCert}/key.pem";
-      # No plain HTTP on the public ports: reject cleartext at the TLS layer.
-      sslRejectHandshake = true;
       locations."/" = {
         proxyPass = "http://127.0.0.1:8501";
         extraConfig = ''
@@ -89,7 +88,6 @@ in {
       ];
       sslCertificate = "${selfSignedCert}/cert.pem";
       sslCertificateKey = "${selfSignedCert}/key.pem";
-      sslRejectHandshake = true;
       locations."/" = {
         proxyPass = "http://127.0.0.1:8502";
         extraConfig = ''
