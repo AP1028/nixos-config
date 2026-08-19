@@ -54,6 +54,7 @@ in VRAM at a time (2x 22 GiB GPUs, ~21.7 GiB used per GPU when serving).
 | POST /api/start {"model":"uncensored"} | start a model (202; ready when /health turns 200) |
 | POST /api/stop | stop the running model (idempotent) |
 | POST /api/switch {"model":"official"} | stop + start (one operation) |
+| POST /api/vision {"model":"official","enabled":true} | toggle vision input per model; restarts the backend when the running model changes mode |
 | GET /health | manager liveness |
 | GET /ca.crt | public certificate (install to trust) |
 
@@ -63,6 +64,22 @@ curl examples:
     curl -k -X POST https://192.168.3.200:8000/api/switch       -H 'Content-Type: application/json' -d '{"model":"uncensored"}'
     curl -k https://192.168.3.200:8001/v1/models
     curl -k https://192.168.3.200:8001/v1/chat/completions       -H 'Content-Type: application/json'       -d '{"model":"qwen38-27b-fp8-fast-mtp3","messages":[{"role":"user","content":"hi"}],"max_tokens":128}'
+
+## Vision input toggle
+
+The checkpoints are multimodal (Qwen3.5 vision tower), but the tuned fast
+preset serves text-only. The control panel's "vision input" switch (or
+POST /api/vision) changes that per model:
+
+* vision OFF (default): `--language-model-only --skip-mm-profiling` — fastest
+  startup, max KV cache (144k tokens = 1.47x the 98k context)
+* vision ON: the vision encoder loads and image inputs are accepted
+  (OpenAI-style `image_url` parts). Startup is slower (multimodal profiling)
+  and the encoder eats into the KV budget.
+
+Flipping the switch for the running model restarts the backend automatically
+(1.5-3 min). DSH (or any OpenAI client) must declare the model as
+`input: [text, image]` only while vision is ON.
 
 Switching takes ~1.5-3 min (CUDA graph capture on model load). The first
 request after a fresh load may JIT-compile a few Triton kernels (latency

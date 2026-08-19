@@ -82,6 +82,12 @@ function renderModels(models, backend) {
     const dir = '<div class="meta">' + escapeHtml(m.model_dir) + "</div>";
     const served = '<div class="meta">served as: ' + escapeHtml(m.served_name) + "</div>";
     const note = m.note ? '<div class="note">' + escapeHtml(m.note) + "</div>" : "";
+    const servingVision = isCurrent && backend.vision === true;
+    const visionRow =
+      '<label class="vision-row" title="restarts the backend when toggled on the running model">' +
+      '<input type="checkbox" data-act="vision" data-model="' + escapeHtml(m.id) + '"' + (m.vision ? " checked" : "") + ">" +
+      "<span>vision input" + (servingVision ? " · 👁 serving" : "") + "</span>" +
+      "</label>";
 
     let actions;
     if (isCurrent && (phase === "running" || phase === "ready" || phase === "starting")) {
@@ -104,7 +110,7 @@ function renderModels(models, backend) {
 
     return '<div class="card' + (isCurrent ? " active" : "") + '">' +
       "<h3>" + escapeHtml(m.display_name) + " " + badge + "</h3>" +
-      dir + served + note +
+      dir + served + note + visionRow +
       '<div class="actions">' + actions + "</div>" + failure +
       "</div>";
   }).join("");
@@ -199,6 +205,38 @@ async function runAction(act, modelId) {
     document.querySelectorAll("button[data-act]").forEach((b) => (b.disabled = false));
   }
 }
+
+document.addEventListener("change", async (ev) => {
+  const cb = ev.target.closest("input[data-act='vision']");
+  if (!cb || busy) return;
+  const modelId = cb.dataset.model;
+  const enabled = cb.checked;
+  const status = lastStatus || {};
+  const backend = status.backend || {};
+  const isCurrent = backend.model && backend.model.id === modelId;
+  const running = isCurrent && (backend.phase === "ready" || backend.phase === "starting");
+  const msg = running
+    ? (enabled
+        ? "Enable vision input for the running model? The backend will restart (~2-3 min)."
+        : "Disable vision input for the running model? The backend will restart (~2-3 min).")
+    : (enabled
+        ? "Enable vision input for " + modelId + "? Applies the next time it starts."
+        : "Disable vision input for " + modelId + "? Applies the next time it starts.");
+  if (!window.confirm(msg)) { cb.checked = !enabled; return; }
+  busy = true;
+  document.querySelectorAll("button[data-act], input[data-act]").forEach((el) => (el.disabled = true));
+  try {
+    await postJSON("api/vision", { model: modelId, enabled });
+    await refresh();
+  } catch (err) {
+    window.alert("vision toggle failed: " + err.message);
+    cb.checked = !enabled;
+    await refresh();
+  } finally {
+    busy = false;
+    document.querySelectorAll("button[data-act], input[data-act]").forEach((el) => (el.disabled = false));
+  }
+});
 
 document.addEventListener("click", (ev) => {
   const btn = ev.target.closest("button[data-act]");

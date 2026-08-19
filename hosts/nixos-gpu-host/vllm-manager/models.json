@@ -18,6 +18,7 @@
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
       "served_name": "qwen38-27b-fp8-fast-mtp3",
       "spec_sync_mode": "auto",
+      "vision": false,
       "note": "MTP3 · PIECEWISE CUDA graphs · sync=auto (fast preset)"
     },
     {
@@ -26,6 +27,7 @@
       "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
       "served_name": "Qwen3.8-27B-FP8-uncensored",
       "spec_sync_mode": "safe",
+      "vision": false,
       "note": "MTP3 · PIECEWISE CUDA graphs · sync=safe (verified 2026-08-19)"
     }
   ]
