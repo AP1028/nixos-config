@@ -96,6 +96,7 @@
           { nixpkgs.hostPlatform = "x86_64-linux"; }
           ./hosts/asusg16/hardware-configuration.nix
           ./hosts/asusg16/default.nix
+          ./modules/security/lan-vllm-certs.nix
 
           lanzaboote.nixosModules.lanzaboote
           vscode-server.nixosModules.default
