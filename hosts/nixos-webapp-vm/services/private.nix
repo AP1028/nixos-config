@@ -4,7 +4,10 @@
 #   /private/pve1/       -> https://192.168.3.10:8006/  (Proxmox VE 1)
 #   /private/pve2/       -> https://192.168.3.100:8006/ (Proxmox VE 2)
 #   /private/vllm/control/ -> https://192.168.3.200:8000/ (vLLM control panel)
-#   /private/vllm/api/     -> https://192.168.3.200:8001/ (OpenAI-compatible API)
+#   /api/v1/          -> https://192.168.3.200:8001/v1/ (OpenAI-compatible API,
+#                        protected by an API key instead of Authelia: send
+#                        "Authorization: Bearer <key>"; key lives in
+#                        /var/lib/vllm-api-key on this VM, see below)
 #
 # Secrets are NOT stored in nixos-config. Authelia generates its own
 # jwt/storage/session secrets in /var/lib/authelia-main on first start, and the
@@ -243,10 +246,10 @@
             <div class="desc">GPU host model manager: switch models, VRAM usage, logs.</div>
             <span class="badge private">Authelia</span>
           </a>
-          <a class="card" href="/private/vllm/api/v1/models">
+          <a class="card" href="/api/v1/models">
             <div class="name">vLLM API</div>
-            <div class="desc">OpenAI-compatible endpoint of the running model. Base path: /private/vllm/api/v1</div>
-            <span class="badge private">Authelia</span>
+            <div class="desc">OpenAI-compatible endpoint of the running model. Base path: /api/v1 · HTTPS only · API key required (Authorization: Bearer &lt;key&gt;)</div>
+            <span class="badge private">API key</span>
           </a>
         </div>
       </main>
@@ -362,9 +365,8 @@
 
   # vLLM manager on nixos-gpu-host (self-signed TLS upstream). The control
   # UI is served with relative asset/API paths (prefix-safe since 2026-08),
-  # so no sub_filter rewriting is needed; the OpenAI API is a plain stream
-  # proxy. Both are protected by the Authelia portal like every other
-  # /private/ app.
+  # so no sub_filter rewriting is needed; it stays behind the Authelia portal
+  # like every other /private/ app.
   vllmControlProxyConfig = ''
     ${autheliaAuthRequest}
 
@@ -372,12 +374,40 @@
     proxy_read_timeout 300s;
   '';
 
+  # The OpenAI-compatible API is served at the top-level /api/v1 prefix (not
+  # under /private/): API clients cannot do the Authelia cookie dance, so the
+  # route is protected by an API key instead.  The key is kept OUT of
+  # nixos-config in a root-only runtime file (same pattern as
+  # /var/lib/authelia-main/public-domains); set it on the VM and rebuild with
+  # --impure:
+  #
+  #   sudo python3 -c "import secrets; print(secrets.token_hex(32))" > /var/lib/vllm-api-key
+  #   sudo chmod 600 /var/lib/vllm-api-key
+  #
+  # Clients send "Authorization: Bearer <key>".  The route is HTTPS-only:
+  # plain HTTP on 18080 redirects to https://host:18081 (same as the rest of
+  # the private area).  Note: the key is baked into the generated nginx.conf
+  # (world-readable in the nix store), so treat this VM's store as trusted.
+  vllmApiKeyFile = "/var/lib/vllm-api-key";
+  vllmApiKey =
+    if builtins.pathExists vllmApiKeyFile
+    then lib.removeSuffix "\n" (builtins.readFile vllmApiKeyFile)
+    else "";
+
+  vllmApiAuth = ''
+    if ($scheme = http) {
+      return 301 https://$host:18081$request_uri;
+    }
+    if ($http_authorization != "Bearer ${vllmApiKey}") {
+      return 401 '{"error":{"message":"missing or invalid API key","type":"unauthorized"}}';
+    }
+  '';
+
   vllmApiProxyConfig = ''
-    ${autheliaAuthRequest}
+    ${vllmApiAuth}
 
     proxy_ssl_verify off;
     proxy_buffering off;
-    proxy_redirect / /private/vllm/api/;
     proxy_read_timeout 1800s;
     proxy_send_timeout 1800s;
     client_max_body_size 512m;
@@ -623,14 +653,27 @@ in {
       extraConfig = vllmControlProxyConfig;
     };
 
-    "= /private/vllm/api" = {
-      return = "308 /private/vllm/api/";
+    # Top-level OpenAI-compatible API, key-protected (not under /private/:
+    # API clients can't do Authelia).  Regex locations take precedence over
+    # Uptime Kuma's "/api/" prefix, so Kuma keeps every non-v1 /api/ path.
+    "= /api/v1" = {
+      return = "308 /api/v1/models";
       extraConfig = privateHttpsOnly;
     };
 
-    "/private/vllm/api/" = {
-      proxyPass = "https://192.168.3.200:8001/";
+    "~ ^/api/v1/(.*)$" = {
+      proxyPass = "https://192.168.3.200:8001/v1/$1$is_args$args";
       extraConfig = vllmApiProxyConfig;
+    };
+
+    "= /api/health" = {
+      proxyPass = "https://192.168.3.200:8001/health";
+      extraConfig = ''
+        ${vllmApiAuth}
+
+        proxy_ssl_verify off;
+        proxy_read_timeout 60s;
+      '';
     };
   };
 }

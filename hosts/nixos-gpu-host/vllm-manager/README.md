@@ -68,6 +68,16 @@ Switching takes ~1.5-3 min (CUDA graph capture on model load). The first
 request after a fresh load may JIT-compile a few Triton kernels (latency
 spike; normal for this fork).
 
+## Remote access via webapp-vm
+
+nixos-webapp-vm (https://192.168.3.152:18081, DDNS homeserver040322.ddns.net)
+proxies this service for off-LAN access:
+
+* control panel: /private/vllm/control/ (Authelia login portal)
+* OpenAI API:    /api/v1/ (HTTPS-only, API key auth: send
+  "Authorization: Bearer <key>"; the key lives in /var/lib/vllm-api-key on
+  the VM - rotate it there and rebuild webapp-vm with --impure)
+
 ## Deployment / operations
 
 * systemd units: vllm-manager (control/API, restarts automatically, starts at
