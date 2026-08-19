@@ -66,7 +66,19 @@ HOP_BY_HOP = {
     "te", "trailer", "transfer-encoding", "upgrade",
 }
 
+# Context modes. 98k is the vision-compatible default (KV capacity with the
+# vision encoder loaded is 99,016 tokens). 128k is text-only (measured KV
+# capacity 144,606 tokens). "native" targets the model's configured
+# max_position_embeddings (262,144) text-only with turboquant_k8v4 KV (the
+# most compact fork-verified dtype, 19.8 GiB at 98k in the tuning runs) so
+# the full 256k window fits the 2x 2080 Ti 22GB KV pool.
 MAX_MODEL_LEN = 98304
+CONTEXT_MODES = {
+    "98k": {"max_model_len": 98304, "text_only": False, "kv_cache_dtype": None},
+    "128k": {"max_model_len": 131072, "text_only": True, "kv_cache_dtype": None},
+    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_k8v4"},
+}
+DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
 
 # Thinking-effort tiers. "off" disables thinking at the template; low/medium/
@@ -134,9 +146,12 @@ def new_state() -> dict:
         "manual_stop": False,
         "vision": None,
         "thinking_effort": None,
+        "context_mode": None,
+        "max_model_len": None,
         "last_logs": {},
         "vision_modes": {},
         "thinking_efforts": {},
+        "context_modes": {},
     }
 
 
@@ -291,7 +306,13 @@ def build_env(model: dict, effort: str = "max") -> dict:
     return env
 
 
-def build_args(model: dict, vision: bool = False, effort: str = "max") -> list[str]:
+def build_args(model: dict, vision: bool = False, effort: str = "max",
+               context_mode: str = DEFAULT_CONTEXT_MODE) -> list[str]:
+    mode = CONTEXT_MODES.get(context_mode, CONTEXT_MODES[DEFAULT_CONTEXT_MODE])
+    # 128k/native context modes force text-only: the vision encoder does not
+    # fit alongside the larger KV pool.
+    text_only = mode["text_only"] or not vision
+    max_model_len = mode["max_model_len"]
     args = [
         "--host", CFG.backend_host,
         "--port", str(CFG.backend_port),
@@ -300,7 +321,7 @@ def build_args(model: dict, vision: bool = False, effort: str = "max") -> list[s
         "--dtype", "half",
         "--tensor-parallel-size", "2",
         "--generation-config", "vllm",
-        "--max-model-len", str(MAX_MODEL_LEN),
+        "--max-model-len", str(max_model_len),
         "--enable-chunked-prefill",
         "--max-num-seqs", "1",
         "--max-num-batched-tokens", "2048",
@@ -308,7 +329,9 @@ def build_args(model: dict, vision: bool = False, effort: str = "max") -> list[s
         "--gpu-memory-utilization", f"{GPU_UTIL:.2f}",
         "--enable-prompt-tokens-details",
     ]
-    if not vision:
+    if mode["kv_cache_dtype"]:
+        args += ["--kv-cache-dtype", mode["kv_cache_dtype"]]
+    if text_only:
         # Text-only serving: skip the vision encoder and its profiling.
         args += ["--language-model-only", "--skip-mm-profiling"]
     if effort == "off":
@@ -347,6 +370,14 @@ def thinking_effort_preference(st: dict, model: dict) -> str:
     if model["id"] in modes:
         return modes[model["id"]]
     return str(model.get("thinking_effort", "max"))
+
+
+def context_mode_preference(st: dict, model: dict) -> str:
+    """Per-model context mode: runtime state override, else models.json."""
+    modes = st.get("context_modes", {})
+    if model["id"] in modes:
+        return modes[model["id"]]
+    return str(model.get("context", DEFAULT_CONTEXT_MODE))
 
 
 class ManagerError(Exception):
@@ -392,7 +423,9 @@ def start_model(model_id: str) -> dict:
 
         vision = vision_preference(st, model)
         effort = thinking_effort_preference(st, model)
-        args = build_args(model, vision, effort)
+        context_mode = context_mode_preference(st, model)
+        mode = CONTEXT_MODES.get(context_mode, CONTEXT_MODES[DEFAULT_CONTEXT_MODE])
+        args = build_args(model, vision, effort, context_mode)
         env = build_env(model, effort)
         try:
             proc = subprocess.Popen(
@@ -417,8 +450,10 @@ def start_model(model_id: str) -> dict:
             "healthy": False,
             "failure": None,
             "manual_stop": False,
-            "vision": vision,
+            "vision": vision and not mode["text_only"],
             "thinking_effort": effort,
+            "context_mode": context_mode,
+            "max_model_len": mode["max_model_len"],
         })
         st.setdefault("last_logs", {})[model_id] = str(log_path)
         save_state(st)
@@ -427,8 +462,10 @@ def start_model(model_id: str) -> dict:
             "model": model_id,
             "pid": proc.pid,
             "phase": "starting",
-            "vision": vision,
+            "vision": vision and not mode["text_only"],
             "thinking_effort": effort,
+            "context_mode": context_mode,
+            "max_model_len": mode["max_model_len"],
             "log": str(log_path),
             "note": "backend is loading (CUDA graph capture); /health turns 200 "
                     "when ready (usually 1.5-3 min)",
@@ -498,6 +535,8 @@ def stop_model() -> dict:
             "manual_stop": True,
             "vision": None,
             "thinking_effort": None,
+            "context_mode": None,
+            "max_model_len": None,
         })
         save_state(st)
         return {"ok": True, "stopped": stopped_pid, "phase": "stopped"}
@@ -533,6 +572,34 @@ def set_thinking_effort(model_id: str, effort: str) -> dict:
             "effort": effort,
             "restarted": restarted is not None,
             "note": ("backend restarted with the new effort; load takes 1.5-3 min"
+                     if restarted is not None else
+                     "preference saved; applies the next time this model starts"),
+        }
+
+
+def set_context(model_id: str, mode: str) -> dict:
+    """Persist the per-model context mode; restart the backend when the
+    running model's mode changes so the new window takes effect now."""
+    if mode not in CONTEXT_MODES:
+        raise ManagerError(f"unknown context mode: {mode} (use 98k/128k/native)", 400)
+    with OP_LOCK:
+        try:
+            CFG.model(model_id)
+        except KeyError as exc:
+            raise ManagerError(f"unknown model id: {model_id}", 400) from exc
+        st = load_state()
+        st.setdefault("context_modes", {})[model_id] = mode
+        save_state(st)
+        restarted = None
+        if st.get("current_model") == model_id and st.get("phase") in ("starting", "ready"):
+            stop_model()
+            restarted = start_model(model_id)
+        return {
+            "ok": True,
+            "model": model_id,
+            "mode": mode,
+            "restarted": restarted is not None,
+            "note": ("backend restarted with the new context mode; load takes 1.5-3 min"
                      if restarted is not None else
                      "preference saved; applies the next time this model starts"),
         }
@@ -592,6 +659,7 @@ def build_status() -> dict:
             "state": "stopped",
             "vision": vision_preference(st, m),
             "thinking_effort": thinking_effort_preference(st, m),
+            "context_mode": context_mode_preference(st, m),
         }
         if current == m["id"]:
             entry["state"] = st.get("phase", "stopped")
@@ -625,6 +693,8 @@ def build_status() -> dict:
             "failure": st.get("failure"),
             "vision": st.get("vision"),
             "thinking_effort": st.get("thinking_effort"),
+            "context_mode": st.get("context_mode"),
+            "max_model_len": st.get("max_model_len"),
             "log": st.get("log"),
         },
         "models": models,
@@ -695,6 +765,10 @@ def bootstrap() -> None:
                     if st.get("thinking_effort") is None:
                         # Pre-effort-toggle state: no budget default was set.
                         st["thinking_effort"] = "max"
+                    if st.get("context_mode") is None:
+                        # Pre-context-toggle state: the 98k default was served.
+                        st["context_mode"] = DEFAULT_CONTEXT_MODE
+                        st["max_model_len"] = CONTEXT_MODES[DEFAULT_CONTEXT_MODE]["max_model_len"]
                     save_state(st)
                 return  # adopt the running backend
 
@@ -850,6 +924,11 @@ class ControlHandler(http.server.BaseHTTPRequestHandler):
                 if not model_id:
                     raise ManagerError("missing 'model' in JSON body", 400)
                 self._send_json(set_thinking_effort(model_id, str(body.get("effort", "max"))), 202)
+            elif path == "/api/context":
+                model_id = body.get("model")
+                if not model_id:
+                    raise ManagerError("missing 'model' in JSON body", 400)
+                self._send_json(set_context(model_id, str(body.get("mode", DEFAULT_CONTEXT_MODE))), 202)
             else:
                 self._send_error_json(f"not found: {path}", 404)
         except ManagerError as exc:

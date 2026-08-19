@@ -82,11 +82,22 @@ function renderModels(models, backend) {
     const dir = '<div class="meta">' + escapeHtml(m.model_dir) + "</div>";
     const served = '<div class="meta">served as: ' + escapeHtml(m.served_name) + "</div>";
     const note = m.note ? '<div class="note">' + escapeHtml(m.note) + "</div>" : "";
+    const ctxValue = m.context_mode || "98k";
+    const servingCtx = isCurrent && (backend.context_mode || null) === ctxValue;
     const servingVision = isCurrent && backend.vision === true;
+    const visionLocked = ctxValue !== "98k";
     const visionRow =
-      '<label class="vision-row" title="restarts the backend when toggled on the running model">' +
-      '<input type="checkbox" data-act="vision" data-model="' + escapeHtml(m.id) + '"' + (m.vision ? " checked" : "") + ">" +
-      "<span>vision input" + (servingVision ? " · 👁 serving" : "") + "</span>" +
+      '<label class="vision-row" title="restarts the backend when toggled on the running model; 128k/native context forces text-only">' +
+      '<input type="checkbox" data-act="vision" data-model="' + escapeHtml(m.id) + '"' + (m.vision ? " checked" : "") + (visionLocked ? " disabled" : "") + ">" +
+      "<span>vision input" + (servingVision ? " · 👁 serving" : "") + (visionLocked ? " · off (128k/native)" : "") + "</span>" +
+      "</label>";
+    const contextRow =
+      '<label class="vision-row" title="context window; 128k/native force text-only; restarts the backend when changed on the running model">' +
+      "<span>context</span>" +
+      '<select data-act="context" data-model="' + escapeHtml(m.id) + '">' +
+      ["98k", "128k", "native"].map((c) => '<option value="' + c + '"' + (ctxValue === c ? " selected" : "") + ">" + c + "</option>").join("") +
+      "</select>" +
+      (servingCtx ? '<span class="serving-tag">serving</span>' : "") +
       "</label>";
 
     const effortValue = m.thinking_effort || "max";
@@ -122,7 +133,7 @@ function renderModels(models, backend) {
 
     return '<div class="card' + (isCurrent ? " active" : "") + '">' +
       "<h3>" + escapeHtml(m.display_name) + " " + badge + "</h3>" +
-      dir + served + note + visionRow + effortRow +
+      dir + served + note + visionRow + effortRow + contextRow +
       '<div class="actions">' + actions + "</div>" + failure +
       "</div>";
   }).join("");
@@ -219,6 +230,32 @@ async function runAction(act, modelId) {
 }
 
 document.addEventListener("change", async (ev) => {
+  const ctxSel = ev.target.closest("select[data-act='context']");
+  if (ctxSel && !busy) {
+    const modelId = ctxSel.dataset.model;
+    const mode = ctxSel.value;
+    const status = lastStatus || {};
+    const backend = status.backend || {};
+    const isCurrent = backend.model && backend.model.id === modelId;
+    const running = isCurrent && (backend.phase === "ready" || backend.phase === "starting");
+    const msg = running
+      ? "Switch context to '" + mode + "' for the running model? The backend will restart (~2-3 min)."
+      : "Set context to '" + mode + "' for " + modelId + "? Applies the next time it starts.";
+    if (!window.confirm(msg)) { await refresh(); return; }
+    busy = true;
+    document.querySelectorAll("button[data-act], input[data-act], select[data-act]").forEach((el) => (el.disabled = true));
+    try {
+      await postJSON("api/context", { model: modelId, mode });
+      await refresh();
+    } catch (err) {
+      window.alert("context change failed: " + err.message);
+      await refresh();
+    } finally {
+      busy = false;
+      document.querySelectorAll("button[data-act], input[data-act], select[data-act]").forEach((el) => (el.disabled = false));
+    }
+    return;
+  }
   const sel = ev.target.closest("select[data-act='effort']");
   if (sel && !busy) {
     const modelId = sel.dataset.model;
