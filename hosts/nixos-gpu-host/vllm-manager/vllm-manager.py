@@ -75,15 +75,17 @@ HOP_BY_HOP = {
 # native serves the model's full configured 256k window.
 MAX_MODEL_LEN = 98304
 CONTEXT_MODES = {
-    "98k": {"max_model_len": 98304, "text_only": False, "kv_cache_dtype": None, "eager": False},
+    "98k": {"max_model_len": 98304, "text_only": False, "kv_cache_dtype": None, "eager": False, "gpu_util": 0.94},
     # fp16 KV fits at most 116,000 tokens on the uncensored checkpoint
     # (fork: "estimated maximum model length is 116000"); fp16 avoids the
     # turboquant workspace-lock crash on long chunked prefill.
-    "116k": {"max_model_len": 116000, "text_only": True, "kv_cache_dtype": None, "eager": False},
-    # Native 256k: 4-bit KV (377,487-token capacity) needs >=3120-token
+    "116k": {"max_model_len": 116000, "text_only": True, "kv_cache_dtype": None, "eager": False, "gpu_util": 0.94},
+    # Native 256k: 4-bit KV (469,237-token capacity) needs >=3120-token
     # prefill chunks, which overflow the post-capture workspace lock in the
     # turboquant attention backend, so this tier runs eager (no CUDA graphs).
-    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True},
+    # Eager's dynamic workspace growth needs more headroom than 0.94 leaves
+    # (a 104 MiB prefill allocation OOM'd with 103 MiB free), hence 0.935.
+    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.935},
 }
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
@@ -336,7 +338,7 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
         "--max-num-seqs", "1",
         "--max-num-batched-tokens", str(batched),
         "--quantization", "fp8",
-        "--gpu-memory-utilization", f"{GPU_UTIL:.2f}",
+        "--gpu-memory-utilization", f"{mode.get('gpu_util', GPU_UTIL):.3f}",
         "--enable-prompt-tokens-details",
     ]
     if mode["kv_cache_dtype"]:
@@ -441,6 +443,8 @@ def start_model(model_id: str) -> dict:
         mode = CONTEXT_MODES.get(context_mode, CONTEXT_MODES[DEFAULT_CONTEXT_MODE])
         args = build_args(model, vision, effort, context_mode)
         env = build_env(model, effort)
+        if mode["eager"]:
+            env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
         try:
             proc = subprocess.Popen(
                 [str(py), "-m", "vllm.entrypoints.openai.api_server", *args],
