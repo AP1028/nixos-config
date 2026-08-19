@@ -18,7 +18,9 @@
     mkdir -p "$out/web"
     cp ${./vllm-manager.py} "$out/vllm-manager.py"
     cp ${./models.json} "$out/models.json"
-    cp ${./web/index.html} ${./web/app.js} ${./web/style.css} "$out/web/"
+    cp ${./web/index.html} "$out/web/index.html"
+    cp ${./web/app.js} "$out/web/app.js"
+    cp ${./web/style.css} "$out/web/style.css"
   '';
 in {
   networking.firewall.allowedTCPPorts = [8000 8500];
