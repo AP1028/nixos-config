@@ -60,6 +60,18 @@
             fi
             sleep 2
           done
+
+          # Nest openvpn-cn-splittunnel: NM pins the (DDNS) home-server address
+          # as a /32 via the physical device; pin it into this xfrm device with
+          # a low metric instead so the OpenVPN endpoint rides this tunnel.
+          i=0
+          while [ "$i" -lt 5 ]; do
+            for ip in $(${pkgs.getent}/bin/getent ahostsv4 homeserver040322.ddns.net 2>/dev/null | sed -E 's/[[:space:]].*//' | sort -u); do
+              ip route replace "$ip/32" dev "$iface" metric 5 2>/dev/null || true
+            done
+            sleep 1
+            i=$((i + 1))
+          done
         fi
       '';
       type = "basic";
@@ -67,15 +79,19 @@
 
     {
       source = pkgs.writeShellScript "nm-openvpn-nest" ''
-        # Nest openvpn-cn-splittunnel inside SJTU_splittunnel: NM pins the
+        # Nest openvpn-cn-splittunnel inside SJTU_splittunnel. NM pins the
         # OpenVPN server's address as a /32 via the physical device (loop
-        # protection); drop it so the endpoint rides the SJTU tunnel instead.
-        # The server is behind DDNS, so resolve it at connect time.
+        # protection). If the SJTU tunnel is up, re-pin it into the xfrm
+        # device with a low metric instead, so the endpoint rides the SJTU
+        # tunnel. The server is behind DDNS, so resolve it at connect time
+        # (covers DDNS changes without touching the profile).
         if [ "$CONNECTION_ID" = "openvpn-cn-splittunnel" ] && [ "$2" = "vpn-up" ]; then
+          iface=$(ip -o link show type xfrm 2>/dev/null | head -1 | sed -E 's/^[0-9]+: ([^:@]+).*/\1/')
+          [ -n "$iface" ] || exit 0
           i=0
-          while [ "$i" -lt 10 ]; do
-            for ip in $(${pkgs.glibc.bin}/bin/getent ahostsv4 homeserver040322.ddns.net 2>/dev/null | sed -E 's/[[:space:]].*//' | sort -u); do
-              ip route del "$ip/32" 2>/dev/null || true
+          while [ "$i" -lt 5 ]; do
+            for ip in $(${pkgs.getent}/bin/getent ahostsv4 homeserver040322.ddns.net 2>/dev/null | sed -E 's/[[:space:]].*//' | sort -u); do
+              ip route replace "$ip/32" dev "$iface" metric 5 2>/dev/null || true
             done
             sleep 1
             i=$((i + 1))
