@@ -623,6 +623,10 @@ def bootstrap() -> None:
                 if backend_health_ok():
                     st["phase"] = "ready"
                     st["healthy"] = True
+                    if st.get("vision") is None:
+                        # Pre-vision-toggle state: an adopted backend was
+                        # launched text-only under the old manager.
+                        st["vision"] = False
                     save_state(st)
                 return  # adopt the running backend
 
