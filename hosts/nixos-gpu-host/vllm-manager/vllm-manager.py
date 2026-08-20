@@ -83,11 +83,11 @@ CONTEXT_MODES = {
     # 200k: 4-bit KV, eager (no CUDA graphs - the turboquant continuation
     # workspace overflows the post-capture lock) at gpu_util 0.92 so eager's
     # dynamic prefill buffers have ~450 MiB/GPU of working headroom.
-    "200k": {"max_model_len": 200000, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.92},
+    "200k": {"max_model_len": 200000, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.88},
     # Native 256k: same eager + 4-bit KV recipe at 0.90 util for working
     # headroom, with the unlimited-thinking effort capped to a 16k default
     # budget so reasoning cannot balloon activations into an OOM.
-    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.90, "thinking_budget": 16384},
+    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.88, "thinking_budget": 16384},
 }
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
@@ -450,8 +450,11 @@ def start_model(model_id: str) -> dict:
         mode = CONTEXT_MODES.get(context_mode, CONTEXT_MODES[DEFAULT_CONTEXT_MODE])
         args = build_args(model, vision, effort, context_mode)
         env = build_env(model, effort, context_mode)
-        if mode["eager"]:
-            env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        # NOTE: expandable_segments was tried and made the recurrent OOMs
+        # worse - eager-mode requests of varying shapes kept growing the
+        # reserved segments until the GPU was exhausted.  The default
+        # caching allocator frees unused blocks instead.
+        env.pop("PYTORCH_CUDA_ALLOC_CONF", None)
         try:
             proc = subprocess.Popen(
                 [str(py), "-m", "vllm.entrypoints.openai.api_server", *args],
@@ -744,7 +747,10 @@ def log_tail(model_id: str | None, lines: int) -> str:
 # ------------------------------------------------------------ monitor
 
 def monitor_loop() -> None:
-    """Track backend phase: starting -> ready, or -> failed on crash."""
+    """Track backend phase: starting -> ready, -> failed on crash, and
+    auto-restart a ready backend whose engine died (EngineDeadError-style
+    crashes leave the API process alive but every request 500s)."""
+    unhealthy_ticks = 0
     while True:
         time.sleep(3)
         try:
@@ -752,19 +758,39 @@ def monitor_loop() -> None:
                 st = load_state()
                 phase = st.get("phase")
                 if phase not in ("starting", "ready"):
+                    unhealthy_ticks = 0
                     continue
                 pid = st.get("pid")
                 if backend_health_ok():
+                    unhealthy_ticks = 0
                     if phase != "ready":
                         st["phase"] = "ready"
                         st["healthy"] = True
                         st["failure"] = None
                         save_state(st)
                 elif phase == "ready":
-                    # lost health while process alive -> keep watching, mark unhealthy
+                    # lost health while the API process is alive: the engine
+                    # core has died.  Give it a few ticks, then self-heal.
+                    unhealthy_ticks += 1
                     st["healthy"] = False
                     save_state(st)
+                    if unhealthy_ticks >= 4:
+                        model_id = st.get("current_model")
+                        print(f"monitor: engine dead for {model_id}; "
+                              "auto-restarting the backend", file=sys.stderr)
+                        st["failure"] = ("engine died; auto-restarted by the manager at "
+                                         + time.strftime("%F %T"))[-2000:]
+                        save_state(st)
+                        stop_model()
+                        if model_id:
+                            try:
+                                start_model(model_id)
+                            except ManagerError as exc:
+                                print(f"monitor: auto-restart failed: {exc}",
+                                      file=sys.stderr)
+                        unhealthy_ticks = 0
                 elif not pid_alive(pid):
+                    unhealthy_ticks = 0
                     st["phase"] = "failed"
                     st["healthy"] = False
                     st["failure"] = (tail_of(st.get("log"), 25) or "backend exited")[-2000:]
