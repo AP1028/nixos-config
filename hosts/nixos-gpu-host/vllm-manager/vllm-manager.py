@@ -83,11 +83,11 @@ CONTEXT_MODES = {
     # 200k: 4-bit KV, eager (no CUDA graphs - the turboquant continuation
     # workspace overflows the post-capture lock) at gpu_util 0.92 so eager's
     # dynamic prefill buffers have ~450 MiB/GPU of working headroom.
-    "200k": {"max_model_len": 200000, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.88, "prefix_cache": False},
+    "200k": {"max_model_len": 200000, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.88, "prefix_cache": False, "mtp": False},
     # Native 256k: same eager + 4-bit KV recipe at 0.90 util for working
     # headroom, with the unlimited-thinking effort capped to a 16k default
     # budget so reasoning cannot balloon activations into an OOM.
-    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.88, "thinking_budget": 16384, "prefix_cache": False},
+    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.88, "thinking_budget": 16384, "prefix_cache": False, "mtp": False},
 }
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
@@ -376,8 +376,9 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
         # +2 GiB over seven requests and caused the recurrent OOMs, so those
         # tiers run without it.
         args += ["--mamba-cache-mode", "align", "--enable-prefix-caching"]
+    if mode.get("mtp", True):
+        args += ["--speculative-config", '{"method":"mtp","num_speculative_tokens":3}']
     args += [
-        "--speculative-config", '{"method":"mtp","num_speculative_tokens":3}',
         "--compilation-config",
         '{"cudagraph_mode":"PIECEWISE","cudagraph_capture_sizes":[4],'
         '"max_cudagraph_capture_size":4}',
