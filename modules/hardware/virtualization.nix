@@ -64,6 +64,10 @@
           active = false;
         }
         {
+          definition = ../../vms/win11-hypervisor-dgpu.xml;
+          active = false;
+        }
+        {
           definition = ../../vms/win11-virtio.xml;
           active = false;
         }
