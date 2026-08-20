@@ -84,9 +84,10 @@ CONTEXT_MODES = {
     # workspace overflows the post-capture lock) at gpu_util 0.92 so eager's
     # dynamic prefill buffers have ~450 MiB/GPU of working headroom.
     "200k": {"max_model_len": 200000, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.92},
-    # Native 256k: same eager + 4-bit KV recipe; loads and advertises the full
-    # window, but the fork's eager prefill can OOM on very long prompts.
-    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.92},
+    # Native 256k: same eager + 4-bit KV recipe at 0.90 util for working
+    # headroom, with the unlimited-thinking effort capped to a 16k default
+    # budget so reasoning cannot balloon activations into an OOM.
+    "native": {"max_model_len": 262144, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.90, "thinking_budget": 16384},
 }
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
@@ -280,7 +281,7 @@ def backend_python() -> Path:
     return CFG.runtime_root / ".venv" / "bin" / "python"
 
 
-def build_env(model: dict, effort: str = "max") -> dict:
+def build_env(model: dict, effort: str = "max", context_mode: str = DEFAULT_CONTEXT_MODE) -> dict:
     root = str(CFG.runtime_root)
     fl = f"{root}/.deps/FlashQLA-SM70-SM75"
     env = os.environ.copy()
@@ -313,6 +314,11 @@ def build_env(model: dict, effort: str = "max") -> dict:
         env["VLLM_DEFAULT_THINKING_TOKEN_BUDGET"] = str(EFFORT_BUDGETS[effort])
     else:
         env.pop("VLLM_DEFAULT_THINKING_TOKEN_BUDGET", None)
+        mode = CONTEXT_MODES.get(context_mode, CONTEXT_MODES[DEFAULT_CONTEXT_MODE])
+        if mode.get("thinking_budget"):
+            # "max" effort on a memory-tight tier: bound the default budget so
+            # unbounded reasoning cannot OOM the eager execution.
+            env["VLLM_DEFAULT_THINKING_TOKEN_BUDGET"] = str(mode["thinking_budget"])
     return env
 
 
@@ -443,7 +449,7 @@ def start_model(model_id: str) -> dict:
         context_mode = context_mode_preference(st, model)
         mode = CONTEXT_MODES.get(context_mode, CONTEXT_MODES[DEFAULT_CONTEXT_MODE])
         args = build_args(model, vision, effort, context_mode)
-        env = build_env(model, effort)
+        env = build_env(model, effort, context_mode)
         if mode["eager"]:
             env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
         try:
