@@ -89,13 +89,13 @@ function renderModels(models, backend) {
     const visionRow =
       '<label class="vision-row" title="restarts the backend when toggled on the running model; 128k/native context forces text-only">' +
       '<input type="checkbox" data-act="vision" data-model="' + escapeHtml(m.id) + '"' + (m.vision ? " checked" : "") + (visionLocked ? " disabled" : "") + ">" +
-      "<span>vision input" + (servingVision ? " · 👁 serving" : "") + (visionLocked ? " · off (128k/native)" : "") + "</span>" +
+      "<span>vision input" + (servingVision ? " · 👁 serving" : "") + (visionLocked ? " · off — only 98k supports images" : "") + "</span>" +
       "</label>";
     const contextRow =
       '<label class="vision-row" title="context window; 128k/native force text-only; restarts the backend when changed on the running model">' +
       "<span>context</span>" +
       '<select data-act="context" data-model="' + escapeHtml(m.id) + '">' +
-      ["98k", "116k", "200k", "native"].map((c) => '<option value="' + c + '"' + (ctxValue === c ? " selected" : "") + ">" + c + "</option>").join("") +
+      [["98k", "98k (vision-capable)"], ["116k", "116k (text-only)"], ["200k", "200k (text-only)"], ["native", "native 256k (text-only)"]].map((pair) => '<option value="' + pair[0] + '"' + (ctxValue === pair[0] ? " selected" : "") + ">" + pair[1] + "</option>").join("") +
       "</select>" +
       (servingCtx ? '<span class="serving-tag">serving</span>' : "") +
       "</label>";
