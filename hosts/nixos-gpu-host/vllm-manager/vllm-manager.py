@@ -83,7 +83,10 @@ CONTEXT_MODES = {
     # 200k: 4-bit KV, eager (no CUDA graphs - the turboquant continuation
     # workspace overflows the post-capture lock) at gpu_util 0.92 so eager's
     # dynamic prefill buffers have ~450 MiB/GPU of working headroom.
-    "200k": {"max_model_len": 200000, "text_only": True, "kv_cache_dtype": "turboquant_4bit_nc", "eager": True, "gpu_util": 0.88, "prefix_cache": False, "mtp": False},
+    # 200k FAST recipe: int8-per-token-head KV doubles the fp16 capacity
+    # (~232k tokens) while keeping PIECEWISE graphs + MTP3 + prefix caching,
+    # so decode stays near the 58 tok/s of the small tiers.
+    "200k": {"max_model_len": 200000, "text_only": True, "kv_cache_dtype": "int8_per_token_head", "eager": False, "gpu_util": 0.94, "prefix_cache": True, "mtp": True, "thinking_budget": 16384},
     # Native 256k: same eager + 4-bit KV recipe at 0.90 util for working
     # headroom, with the unlimited-thinking effort capped to a 16k default
     # budget so reasoning cannot balloon activations into an OOM.
@@ -329,9 +332,9 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
     # fit alongside the larger KV pool.
     text_only = mode["text_only"] or not vision
     max_model_len = mode["max_model_len"]
-    # Compressed KV widens the block size (4bit_nc -> 3120), which must be
-    # <= max_num_batched_tokens in mamba align mode.
-    batched = 4096 if mode["kv_cache_dtype"] else 2048
+    # The eager tiers need 4096-token chunks for the 4bit_nc block size;
+    # graph tiers (fp16/int8 KV) keep the tuning-proven 2048.
+    batched = 4096 if mode["eager"] else 2048
     args = [
         "--host", CFG.backend_host,
         "--port", str(CFG.backend_port),
