@@ -1,0 +1,38 @@
+{
+  "control_host": "127.0.0.1",
+  "control_port": 8501,
+  "api_host": "127.0.0.1",
+  "api_port": 8502,
+  "backend_host": "127.0.0.1",
+  "backend_port": 9001,
+  "public_scheme": "https",
+  "public_control_port": 8000,
+  "public_api_port": 8001,
+  "runtime_root": "/home/tianyixia/vLLM-2080Ti-Definitive",
+  "default_model": "official",
+  "start_timeout_s": 420,
+  "models": [
+    {
+      "id": "official",
+      "display_name": "Qwen3.8-27B-FP8 (official)",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
+      "served_name": "qwen38-27b-fp8-fast-mtp3",
+      "spec_sync_mode": "auto",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "98k",
+      "note": "MTP3 · PIECEWISE CUDA graphs · sync=auto (fast preset)"
+    },
+    {
+      "id": "uncensored",
+      "display_name": "Qwen3.8-27B Uncensored (FP8)",
+      "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
+      "served_name": "Qwen3.8-27B-FP8-uncensored",
+      "spec_sync_mode": "safe",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "98k",
+      "note": "MTP3 · PIECEWISE CUDA graphs · sync=safe (verified 2026-08-19)"
+    }
+  ]
+}

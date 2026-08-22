@@ -2,20 +2,27 @@
   config,
   lib,
   pkgs,
-  inputs,
   ...
 }: {
-  # vGPU guest driver (grid 535.309.01) is provided by vgpu-guest.nix;
-  # the nixpkgs desktop nvidia driver is disabled there (mkForce).
+  # 2x RTX 2080 Ti (Turing, sm_75) passed through from the Proxmox host with
+  # NVLink. Turing is still supported by the latest stable NVIDIA driver and
+  # current nixpkgs CUDA packages, so there are no vGPU-era CUDA/driver pins
+  # here (the previous vGPU grid driver setup is gone with the P40s).
   hardware.graphics.enable = true;
 
-  # CUDA toolkit must match driver 535 (max CUDA 12.2) -> nixos-23.11's
-  # cudaPackages_12_2 (12.2 was removed from newer nixpkgs).
+  services.xserver.videoDrivers = ["nvidia"];
+
+  hardware.nvidia = {
+    # Latest stable driver still supports Turing.
+    package = config.boot.kernelPackages.nvidiaPackages.stable;
+
+    # Closed-source kernel modules for the 2080 Ti; modern drivers require an
+    # explicit choice here.
+    open = false;
+  };
+
   environment.systemPackages = with pkgs; [
-    (import inputs.nixos-23-11 {
-      system = "x86_64-linux";
-      config.allowUnfree = true;
-    }).cudaPackages_12_2.cudatoolkit
+    cudaPackages.cudatoolkit
     nvtopPackages.nvidia
   ];
 }
