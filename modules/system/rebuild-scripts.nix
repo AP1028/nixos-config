@@ -30,8 +30,14 @@ in {
           echo "Push successful."
         fi
       fi
+      # nix (as root) refuses git+file flakes from repos not owned by root
+      # (libgit2 ownership check; safe.directory is not honored by the
+      # bundled libgit2). Mirror the freshly-pulled repo into a root-owned
+      # build copy and rebuild from there.
+      echo "Syncing to root-owned build copy (/root/nixos-config)..."
+      ${pkgs.rsync}/bin/rsync -a --delete --chown=root:root "$CONFIG_DIR/" /root/nixos-config/
       echo "Starting NixOS rebuild for ${host}..."
-      sudo nixos-rebuild switch --impure --flake "$CONFIG_DIR#${host}"
+      sudo nixos-rebuild switch --impure --flake "/root/nixos-config#${host}"
     '')
 
     (pkgs.writeShellScriptBin "nixos-update-flake" ''
