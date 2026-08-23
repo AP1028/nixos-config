@@ -1,106 +1,163 @@
-# DeepSeek Harness (dsh) — ported from nixpkgs PR #552467
-# (https://github.com/NixOS/nixpkgs/pull/552467, commit 78c899151abde5b57684cb56a7851606ce39ab62).
+# DeepSeek Harness (dsh) — built from the upstream monorepo at dsh-v0.1.0-rc.8
+# (commit 141eb6fef83422698aef7a981029e843e8161534).
 #
-# Approach: package the official npm distribution of @deepseek-ai/dsh instead
-# of the GitHub source snapshot. The rc.6 tarball ships prebuilt lib/ code and
-# prebuilt native artifacts (landlock-run per arch, node-pty build, koffi,
-# sharp, node-addon-require-builtin); `buildNpmPackage` hermetically installs
-# the production dependency closure from the checked-in package-lock.json with
-# Node 24, and the binary runs on nodejs-slim_24 with pnpm on PATH (so
-# `dsh plugin` profile management works from the store install).
+# Uses the upstream pnpm-lock.yaml via fetchPnpmDeps and builds the TS/web
+# workspace with pnpmBuildHook. The whole tree is shipped because dsh resolves
+# workspace packages in-tree at runtime (linkWorkspacePackages), so the loader's
+# bare imports of workspace specifiers need the mirrored root node_modules.
 #
-# No corresponding source commit is claimed (upstream publishes the CLI on npm
-# independently of its public source snapshot).
+# Compared with the open nixpkgs PRs:
+# - #552467: source-based build, Nix bash default, native landlock-run compiler
+#   substitution, pnpm/Node runtime handling.
+# - #553134: npm-artifact packaging; this config replaces that with upstream
+#   source now that a matching public tag exists.
+# - #554081: simplified pnpm build + web boot test; we keep its install layout
+#   and add back native landlock, Nix bash, slim Node runtime, and richer
+#   install checks.
 #
-# Update notes: bump `version`, the fetchzip src hash (see PR diff for the
-# registry URL form) and npmDepsHash. If npmDepsHash mismatches, build once
-# with `npmDepsHash = lib.fakeHash` (or "" in older nixpkgs) and copy the
-# reported store hash.
+# Update notes: bump `version`, `rev`/`hash`, and the `fetchPnpmDeps` hash. The
+# source tarball has no .git, so also update `DSH_CLIENT_COMMIT_HASH` in
+# `preBuild` to the new pinned commit.
 
 {
-  buildNpmPackage,
-  fetchzip,
-  jq,
   lib,
+  stdenv,
+  bashInteractive,
+  fetchFromGitHub,
+  fetchPnpmDeps,
   makeBinaryWrapper,
   nodejs_24,
   nodejs-slim_24,
+  pkgsStatic,
   pnpm_11,
-  stdenv,
+  pnpmBuildHook,
+  pnpmConfigHook,
   versionCheckHook,
 }:
 
 let
   runtimeNode = nodejs-slim_24;
   runtimePnpm = pnpm_11.override { nodejs-slim = runtimeNode; };
-  landlockPackage =
-    if stdenv.hostPlatform.isAarch64 then
-      "node-addon-landlock-run-linux-arm64"
-    else
-      "node-addon-landlock-run-linux-x64";
 in
-buildNpmPackage (finalAttrs: {
+stdenv.mkDerivation (finalAttrs: {
   pname = "deepseek-harness";
-  version = "0.1.0-rc.6";
-  nodejs = nodejs_24;
+  version = "0.1.0-rc.8";
 
-  __structuredAttrs = true;
-
-  src = fetchzip {
-    url = "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-${finalAttrs.version}.tgz";
-    hash = "sha256-caYhF/Q3wBGCs6nW80RCEzWPF5eS3vs5kw7dyGjlLdo=";
+  src = fetchFromGitHub {
+    owner = "deepseek-ai";
+    repo = "deepseek-harness";
+    rev = "141eb6fef83422698aef7a981029e843e8161534";
+    hash = "sha256-FzToX43k6upXkwTxTYXHRK5IdatxibxeZgZBpuDE7S4=";
   };
 
-  npmDepsHash = "sha256-pi40Ksr3Kn7uLpUKQyiTi7XoSFg/1uTxFq1U/zGw/+s=";
+  pnpmDeps = fetchPnpmDeps {
+    inherit (finalAttrs) pname version src;
+    pnpm = pnpm_11;
+    fetcherVersion = 4;
+    hash = "sha256-+PsdK9u3ZKv4XtSc8tBKKP48J/95/CGTMIUf8Q8dbok=";
+  };
 
-  nativeBuildInputs = [ makeBinaryWrapper ];
+  nativeBuildInputs = [
+    makeBinaryWrapper
+    nodejs_24
+    pnpm_11
+    pnpmConfigHook
+    pnpmBuildHook
+  ];
 
   postPatch = ''
-    ${lib.getExe jq} 'del(.devDependencies)' package.json > package.json.new
-    mv package.json.new package.json
-    # The rc.6 npm tarball does not ship a lockfile.
-    cp ${./package-lock.json} package-lock.json
+    # Nixpkgs' static musl compiler replaces upstream's expected musl-gcc.
+    substituteInPlace native/landlock-run/scripts/build.ts \
+      --replace-fail \
+        "'musl-gcc'" \
+        "'${lib.getExe pkgsStatic.stdenv.cc}'"
+
+    # NixOS does not provide /bin/bash; default terminal-bash to a store path.
+    substituteInPlace packages/terminal/terminal-bash/src/config.ts \
+      --replace-fail \
+        "export const DEFAULT_BASH_SHELL = '/bin/bash'" \
+        "export const DEFAULT_BASH_SHELL = '${lib.getExe bashInteractive}'"
+
+    # Keep CSS virtual module ids relative so built client bundles do not embed
+    # the Nix build root (/build/source/...) in their generated comments.
+    substituteInPlace packages/client/tsdown.client.ts \
+      --replace-fail \
+        "return CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX" \
+        "return CSS_VIRTUAL_PREFIX + relative(process.cwd(), abs) + CSS_VIRTUAL_SUFFIX" \
+      --replace-fail \
+        "return INLINE_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX" \
+        "return INLINE_CSS_VIRTUAL_PREFIX + relative(process.cwd(), abs) + CSS_VIRTUAL_SUFFIX" \
+      --replace-fail \
+        "return GLOBAL_CSS_VIRTUAL_PREFIX + abs + CSS_VIRTUAL_SUFFIX" \
+        "return GLOBAL_CSS_VIRTUAL_PREFIX + relative(process.cwd(), abs) + CSS_VIRTUAL_SUFFIX" \
+      --replace-fail \
+        "const fileId = virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)" \
+        "const fileId = resolvePath(virtualId.slice(CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))" \
+      --replace-fail \
+        "const fileId = virtualId.slice(INLINE_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)" \
+        "const fileId = resolvePath(virtualId.slice(INLINE_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))" \
+      --replace-fail \
+        "const fileId = virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)" \
+        "const fileId = resolvePath(virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))"
   '';
 
-  dontNpmBuild = true;
   dontPatchShebangs = true;
 
-  postInstall = ''
-    app="$out/lib/node_modules/@deepseek-ai/dsh"
+  preBuild = ''
+    # Source tarballs do not include .git; supply the pinned commit hash that
+    # scripts/client-build-environment.ts embeds into client artifacts.
+    export DSH_CLIENT_COMMIT_HASH=141eb6f
+  '';
 
-    rm -rf \
-      "$app/node_modules/node-pty/deps" \
-      "$app/node_modules/node-pty/node-addon-api" \
-      "$app/node_modules/node-pty/prebuilds" \
-      "$app/node_modules/node-pty/scripts" \
-      "$app/node_modules/node-pty/src" \
-      "$app/node_modules/node-pty/third_party" \
-      "$app/node_modules/katex/src"
+  postBuild = ''
+    pnpm --dir native/landlock-run run build:native
+  '';
 
-    find "$app/node_modules/node-pty/build" -type f \
-      ! -path '*/Release/pty.node' -delete
-    find "$app/node_modules/node-pty/build" -depth -type d -empty -delete
+  installPhase = ''
+    runHook preInstall
 
+    mkdir -p $out/libexec/dsh
+    cp -r . $out/libexec/dsh/
+
+    # Optional cross-platform binary packages leave dangling symlinks in
+    # node_modules/.pnpm; drop them so the fixup phase passes.
+    find $out/libexec/dsh/node_modules/.pnpm -type l ! -exec test -e {} \; -delete
+
+    # pnpm only links workspace packages into each dependent package's own
+    # node_modules, so the loader's bare `import(name)` cannot resolve workspace
+    # specifiers from its own directory. Mirror the virtual store's scoped
+    # packages into the root node_modules so bare specifiers resolve anywhere.
+    shopt -s nullglob
+    store_scopes=("$out/libexec/dsh/node_modules/.pnpm/node_modules/"@*/)
+    for scope in "''${store_scopes[@]}"; do
+      scope_name=$(basename "$scope")
+      mkdir -p "$out/libexec/dsh/node_modules/$scope_name"
+      for pkg in "$scope"*; do
+        ln -sfn "../.pnpm/node_modules/$scope_name/$(basename "$pkg")" \
+          "$out/libexec/dsh/node_modules/$scope_name/$(basename "$pkg")"
+      done
+    done
+
+    # Use the slimmer runtime Node and keep pnpm available for `dsh plugin`.
     while IFS= read -r file; do
       substituteInPlace "$file" \
         --replace-warn ${lib.getExe nodejs_24} ${lib.getExe runtimeNode}
-    done < <(find "$app" -type f -exec grep -IlF ${lib.getExe nodejs_24} {} +)
+    done < <(find "$out/libexec/dsh" -type f -exec grep -IlF ${lib.getExe nodejs_24} {} +)
 
-    rm "$out/bin/dsh"
-    makeBinaryWrapper ${lib.getExe runtimeNode} "$out/bin/dsh" \
+    makeBinaryWrapper ${lib.getExe runtimeNode} $out/bin/dsh \
       --add-flags "--expose-internals" \
-      --add-flags "$app/lib/bin.js" \
-      --prefix PATH : ${lib.makeBinPath [ runtimePnpm ]}
+      --add-flags "$out/libexec/dsh/apps/cli/lib/bin.js" \
+      --prefix PATH : ${lib.makeBinPath [ runtimeNode runtimePnpm ]}
+
+    runHook postInstall
   '';
 
   doInstallCheck = true;
-
   nativeInstallCheckInputs = [ versionCheckHook ];
-
   versionCheckProgramArg = "--version";
 
   postInstallCheck = ''
-    app="$out/lib/node_modules/@deepseek-ai/dsh"
+    app="$out/libexec/dsh"
 
     "$out/bin/dsh" --help > /dev/null
     DSH_HOME="$(mktemp -d)" \
@@ -111,7 +168,7 @@ buildNpmPackage (finalAttrs: {
 
     webLog="$(mktemp)"
     DSH_HOME="$(mktemp -d)" \
-      "$out/bin/dsh" web --host 127.0.0.1 --port 0 > "$webLog" 2>&1 &
+      "$out/bin/dsh" web --host 127.0.0.1 --port 0 --no-open > "$webLog" 2>&1 &
     webPid=$!
 
     cleanupWeb() {
@@ -141,12 +198,19 @@ buildNpmPackage (finalAttrs: {
     cleanupWeb
     trap - EXIT
 
-    APP="$app" ${lib.getExe runtimeNode} <<'NODE'
+    ptyPkg="$(find "$app/node_modules/.pnpm" -path '*/node_modules/node-pty/package.json' -print -quit)"
+    koffiPkg="$(find "$app/node_modules/.pnpm" -path '*/node_modules/koffi/package.json' -print -quit)"
+    addonPkg="$(find "$app/node_modules/.pnpm" -path '*/node_modules/node-addon-require-builtin/package.json' -print -quit)"
+    sharpPkg="$(find "$app/node_modules/.pnpm" -path '*/node_modules/sharp/package.json' -print -quit)"
+    test -n "$ptyPkg" -a -n "$koffiPkg" -a -n "$addonPkg" -a -n "$sharpPkg"
+    PTY="$(dirname "$ptyPkg")" KOFFI="$(dirname "$koffiPkg")" \
+      ADDON="$(dirname "$addonPkg")" SHARP="$(dirname "$sharpPkg")" \
+      ${lib.getExe runtimeNode} <<'NODE'
     const path = require("node:path");
-    const pty = require(path.join(process.env.APP, "node_modules/node-pty"));
-    require(path.join(process.env.APP, "node_modules/koffi"));
-    require(path.join(process.env.APP, "node_modules/node-addon-require-builtin"));
-    require(path.join(process.env.APP, "node_modules/sharp"));
+    const pty = require(process.env.PTY);
+    const koffi = require(process.env.KOFFI);
+    const addon = require(process.env.ADDON);
+    const sharp = require(process.env.SHARP);
 
     const child = pty.spawn("${stdenv.shell}", ["-c", "printf pty-ok"], {
       cols: 80,
@@ -159,30 +223,27 @@ buildNpmPackage (finalAttrs: {
     });
     NODE
 
-    landlock="$app/node_modules/@deepseek-ai/${landlockPackage}/bin/landlock-run"
+    landlock="$app/native/landlock-run/packages/linux-x64/bin/landlock-run"
     test -x "$landlock"
     "$landlock" --probe | grep -Eq '^landlock: (fully|partially) enforced$'
 
-    if find "$app" -xtype l -print -quit | grep -q .; then
-      find "$app" -xtype l -print >&2
+    if find "$app" -type l ! -exec test -e {} \; -print -quit | grep -q .; then
+      find "$app" -type l ! -exec test -e {} \; -print >&2
       exit 1
     fi
 
-    if grep -RIlE '/build/(source|tmp\.|\.home)' "$out"; then
+    if grep -RIlE --exclude-dir=node_modules '/build/(source|tmp\.|\.home)' "$app"; then
       exit 1
     fi
   '';
 
   meta = {
-    description = "Open-source agent harness developed by DeepSeek AI";
+    description = "AI agent harness with a plugin-based architecture";
     homepage = "https://github.com/deepseek-ai/deepseek-harness";
     downloadPage = "https://www.npmjs.com/package/@deepseek-ai/dsh";
     license = lib.licenses.mit;
     mainProgram = "dsh";
-    platforms = [
-      "aarch64-linux"
-      "x86_64-linux"
-    ];
+    platforms = [ "x86_64-linux" ];
     sourceProvenance = with lib.sourceTypes; [
       fromSource
       binaryNativeCode

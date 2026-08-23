@@ -8,4 +8,7 @@
     # expose node to dsh's sandboxed shell so sandbox commands can use it
     nodejs
   ];
+  imports = [
+    ../../../modules/packages/opencode.nix
+  ];
 }
