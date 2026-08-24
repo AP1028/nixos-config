@@ -50,12 +50,82 @@ stdenv.mkDerivation (finalAttrs: {
     hash = "sha256-FzToX43k6upXkwTxTYXHRK5IdatxibxeZgZBpuDE7S4=";
   };
 
-  pnpmDeps = fetchPnpmDeps {
+  # fetchPnpmDeps downloads the entire dependency tree (several GB of
+  # cross-platform binaries) in one shot and dies on the first network blip.
+  # The stock installPhase is therefore overridden to:
+  #  - keep the pnpm store in a persistent dir for the whole builder run, so
+  #    retried attempts resume already-downloaded packages instead of starting
+  #    over;
+  #  - configure pnpm itself with many more fetch retries and much longer
+  #    timeouts;
+  #  - retry the whole `pnpm install` up to 5 times before giving up.
+  #
+  # The pinned output hash is unaffected: the fixup phase normalizes the store
+  # (sorted json, fixed permissions, sorted tar, dumped sqlite), so the output
+  # is byte-identical however the downloads landed.
+  pnpmDeps = (fetchPnpmDeps {
     inherit (finalAttrs) pname version src;
     pnpm = pnpm_11;
     fetcherVersion = 4;
     hash = "sha256-+PsdK9u3ZKv4XtSc8tBKKP48J/95/CGTMIUf8Q8dbok=";
-  };
+  }).overrideAttrs (old: {
+    installPhase = ''
+      runHook preInstall
+
+      mkdir -p $out
+      storePath="$HOME/dsh-pnpm-store"
+
+      versionAtLeast () {
+        local cur_version=$1 min_version=$2
+        printf "%s\0%s" "$min_version" "$cur_version" | sort -zVC
+      }
+
+      lockfileVersion="$(yq -r .lockfileVersion pnpm-lock.yaml)"
+      if [[ ''${lockfileVersion:0:1} -gt ${lib.versions.major pnpm_11.version} ]]; then
+        echo "ERROR: lockfileVersion $lockfileVersion in pnpm-lock.yaml is too new for pnpm ${lib.versions.major pnpm_11.version}!"
+        exit 1
+      fi
+
+      pushd "$HOME"
+      pnpmVersion=$(pnpm --version)
+      if versionAtLeast "$pnpmVersion" "11"; then
+        export pnpm_config_pm_on_fail=ignore
+        export pnpm_config_side_effects_cache=false
+        export pnpm_config_update_notifier=false
+      fi
+      pnpm config set store-dir "$storePath"
+      # Tolerate a flaky network: retry individual package fetches up to 10
+      # times with backoff, and allow a single fetch up to 10 minutes.
+      pnpm config set fetch-retries 10
+      pnpm config set fetch-retry-mintimeout 5000
+      pnpm config set fetch-retry-maxtimeout 120000
+      pnpm config set fetch-timeout 600000
+      popd
+
+      for attempt in 1 2 3 4 5; do
+        echo "=== dsh pnpm fetch: attempt $attempt of 5 ==="
+        # Drop incomplete downloads left behind by a failed attempt.
+        rm -rf "$storePath"/{v3,v10,v11}/tmp
+        if pnpm install \
+            --force \
+            --ignore-scripts \
+            --registry="$NIX_NPM_REGISTRY" \
+            --frozen-lockfile; then
+          break
+        fi
+        if [ "$attempt" -ge 5 ]; then
+          echo "pnpm install failed after 5 attempts" >&2
+          exit 1
+        fi
+        echo "pnpm install failed on attempt $attempt; retrying in 30s" >&2
+        sleep 30
+      done
+
+      echo 4 > $out/.fetcher-version
+
+      runHook postInstall
+    '';
+  });
 
   nativeBuildInputs = [
     makeBinaryWrapper
