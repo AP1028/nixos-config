@@ -24,7 +24,7 @@
       fi
 
       for pattern in \
-        'history:xne()' \
+        'history:[A-Za-z_$][A-Za-z0-9_$]*()' \
         'location.href="/page-not-found"' \
         'location.href="/manage-status-page"' \
         'location.href="/status/"' \
@@ -36,7 +36,9 @@
         fi
       done
 
-      sed -i 's/history:xne()/history:xne("\/monitor\/")/' "$js"
+      # The router's createWebHistory() call. Minifiers rename the function
+      # (history:xne() -> history:poe() -> ...), so match it generically.
+      sed -i 's/history:\([A-Za-z_$][A-Za-z0-9_$]*\)()/history:\1("\/monitor\/")/' "$js"
       sed -i 's#location.href="/page-not-found"#location.href="/monitor/page-not-found"#' "$js"
       sed -i 's#location.href="/manage-status-page"#location.href="/monitor/manage-status-page"#' "$js"
       # Kuma's public status pages live at /status/<slug> upstream; under the

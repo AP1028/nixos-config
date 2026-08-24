@@ -2,6 +2,7 @@
   imports = [
     ./default.nix
     ../../system/sudo-env.nix
+    ../../packages/opencode.nix
   ];
 
   sudoEnv.headless = true;
