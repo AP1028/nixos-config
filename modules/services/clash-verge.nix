@@ -2,7 +2,6 @@
   config,
   lib,
   pkgs,
-  inputs,
   ...
 }: {
   # Clash Verge (Mihomo) with TUN mode for transparent proxying
@@ -13,11 +12,8 @@
     tunMode = true; # virtual network device for system‑wide routing
   };
 
-  # Unpinned as of 2.5.2 (fixed the 2.5.1 blank proxy regression, issue #6409).
-  # The old-nixpkgs flake input is still kept as a fallback pin if a future
-  # version breaks again:
-  #   programs.clash-verge.package =
-  #     inputs.old-nixpkgs.legacyPackages.${pkgs.stdenv.hostPlatform.system}.clash-verge-rev;
+  # Unpinned as of 2.5.2 (fixed the 2.5.1 blank proxy regression, issue #6409);
+  # the old-nixpkgs fallback pin was removed with the 56c02bc nixpkgs bump.
 
   networking.firewall = {
     trustedInterfaces = ["Mihomo"]; # allow TUN traffic through firewall

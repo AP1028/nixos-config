@@ -30,9 +30,6 @@
 
     nixos-23-11.url = "github:nixos/nixpkgs/nixos-23.11";
 
-    # Pinned to nixpkgs with clash-verge-rev 2.4.7 (2.5.1 has blank proxy regression)
-    old-nixpkgs.url = "github:NixOS/nixpkgs/9ae611a455b90cf061d8f332b977e387bda8e1ca";
-
     vscode-server = {
       url = "github:nix-community/nixos-vscode-server";
     };
@@ -107,18 +104,6 @@
 
           home-manager.nixosModules.home-manager
           nixvirt.nixosModules.default
-
-          # Disable ceph in qemu_full (fails to build on unstable, not needed)
-          ({ ... }: {
-            nixpkgs.overlays = [
-              (final: prev: {
-                qemu_full = prev.qemu_full.override { cephSupport = false; };
-                # moonlight-qt 6.1.0 does not build against ffmpeg >= 8
-                # (AVCodec.pix_fmts was removed in FFmpeg 8.0); pin ffmpeg_7.
-                moonlight-qt = prev.moonlight-qt.override { ffmpeg = prev.ffmpeg_7; };
-              })
-            ];
-          })
         ];
       };
 

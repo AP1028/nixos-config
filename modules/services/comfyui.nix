@@ -84,6 +84,16 @@
       xformers = base.xformers.overridePythonAttrs (old: {
         pythonRelaxDeps = (old.pythonRelaxDeps or []) ++ ["cuda-bindings"];
       });
+      # astropy's IERS tests are date-dependent: they assert on prediction
+      # flags in the bundled astropy-iers-data table, which goes stale and
+      # fails 3 tests once the system date passes the table's range.
+      astropy = prev.astropy.overridePythonAttrs (old: {
+        disabledTests = (old.disabledTests or []) ++ [
+          "test_iers_b_out_of_range_handling"
+          "test_simple"
+          "test_ut1_iers_A"
+        ];
+      });
       einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
       mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
       scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});

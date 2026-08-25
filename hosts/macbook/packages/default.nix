@@ -13,7 +13,6 @@
 
     nmap
     zenmap
-    flclash
 
     vscode
     neovim

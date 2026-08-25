@@ -1,4 +1,4 @@
-{ lib, stdenv, fetchurl, fetchFromGitHub, wrapGAppsHook3, libGLU, zlib, cmake, ninja, python312, rocksdb, makeWrapper }:
+{ lib, stdenv, fetchurl, fetchgit, wrapGAppsHook3, libGLU, zlib, cmake, ninja, python312, rocksdb, makeWrapper }:
 
 let
   py = python312.pkgs;
@@ -8,15 +8,15 @@ let
     pname = "amulet-faulthandler";
     version = "1.0.7";
     pyproject = true;
-    src = fetchFromGitHub {
-      owner = "Amulet-Team";
-      repo = "Amulet-Fault-Handler";
-      tag = version;
-      hash = "sha256-DuF8r8NlAybvIO6iOfJl2FNRtWs0LW+EyKHVBYoL8ag=";
+    src = fetchgit {
+      url = "https://github.com/Amulet-Team/Amulet-Fault-Handler";
+      rev = "542b6a04bd240eb5c197fca710f5569b52d0c1d7";
+      hash = "sha256-oVtcEONgCsPKq2elQAgjqMReZwenY/lt4Yf2m48kuPg=";
     };
     build-system = with py; [ setuptools wheel versioneer pybind11 ];
     nativeBuildInputs = [ cmake ninja ];
     dontUseCmakeConfigure = true;
+    dontCheckPythonMetadata = true; # versioneer needs .git (stripped by fetchgit) -> 0+unknown
     pythonImportsCheck = [ "amulet_faulthandler" ];
     meta = {
       description = "Python fault handler for Amulet applications";
@@ -30,15 +30,15 @@ let
     pname = "amulet-nbt";
     version = "2.1.8";
     pyproject = true;
-    src = fetchFromGitHub {
-      owner = "Amulet-Team";
-      repo = "Amulet-NBT";
-      tag = version;
-      hash = "sha256-wTfheiGD/TkzQTug1SQNu5dJNm++odmi9pz3B8kIHBA=";
+    src = fetchgit {
+      url = "https://github.com/Amulet-Team/Amulet-NBT";
+      rev = "faeb8f8b7d8cf32a01d5bf1284fe96fac858f06c";
+      hash = "sha256-+6Ed3zgXl8Hav7NN+TLisFLuE9+Rr8HhgL3b+P3qMWM=";
     };
     build-system = with py; [ setuptools wheel cython versioneer np ];
     dependencies = with py; [ mutf8 ];
     dontCheckRuntimeDeps = true;
+    dontCheckPythonMetadata = true; # versioneer needs .git (stripped by fetchgit) -> 0+unknown
     pythonImportsCheck = [ "amulet_nbt" ];
     meta = {
       description = "Python library for reading and writing binary NBT and stringified NBT";
@@ -52,10 +52,9 @@ let
     pname = "amulet-leveldb";
     version = "1.0.7";
     pyproject = true;
-    src = fetchFromGitHub {
-      owner = "Amulet-Team";
-      repo = "Amulet-LevelDB";
-      tag = version;
+    src = fetchgit {
+      url = "https://github.com/Amulet-Team/Amulet-LevelDB";
+      rev = "1efad7ba7c1cb17d24d8737047c0f61c544e37c4";
       hash = "sha256-c5MvT0QU9XZgo1sGLZA8l8mfhPoNhYelDk7IkBdZFzo=";
       fetchSubmodules = true;
       postFetch = ''
@@ -68,6 +67,7 @@ let
     '';
     build-system = with py; [ setuptools wheel cython versioneer ];
     buildInputs = [ zlib ];
+    dontCheckPythonMetadata = true; # versioneer needs .git (stripped by fetchgit) -> 0+unknown
     pythonImportsCheck = [ "leveldb" ];
     meta = {
       description = "Cython wrapper for Mojang's custom LevelDB";
@@ -110,9 +110,8 @@ let
       hash = "sha256-6zPlH0mhXgI5UM14Jcp0pKK0Pbg1SCWsJPwbfuCeb6M=";
     };
 
-    rocksdbZ = fetchFromGitHub {
-      owner = "Amulet-Team";
-      repo = "rocksdb";
+    rocksdbZ = fetchgit {
+      url = "https://github.com/Amulet-Team/rocksdb";
       rev = "4153aebf840920ce41dbc47896febbd3020b9d5f";
       hash = "sha256-ArQuY4s7tWXYufr1Q1zhu6pgHRu8m3a0hOobObL+oOw=";
     };
@@ -128,6 +127,7 @@ let
     ];
     buildInputs = [ rocksdb ];
     dontUseCmakeConfigure = true;
+    dontCheckPythonMetadata = true; # versioneer needs .git (stripped by fetchgit) -> 0+unknown
     pythonImportsCheck = [ "rocksdb" ];
     meta = {
       description = "Pybind11 wrapper for Facebook's RocksDB";
@@ -141,14 +141,18 @@ let
     pname = "pymctranslate";
     version = "1.2.46";
     pyproject = true;
-    src = fetchFromGitHub {
-      owner = "gentlegiantJGC";
-      repo = "PyMCTranslate";
-      tag = version;
-      hash = "sha256-dZj1V5G+/GJm6l4M3UbzVUUaSnEFYpSb0dG8Cagxg2c=";
+    src = fetchgit {
+      # versioneer's parentdir_prefix is "PyMCTranslate-"; the checkout dir
+      # name must be PyMCTranslate-<version> or it yields an invalid version.
+      name = "PyMCTranslate-${version}";
+      url = "https://github.com/gentlegiantJGC/PyMCTranslate";
+      rev = "4711f3de25a1df436345ecb206c85e658c2a8ecf";
+      hash = "sha256-lASBQuwuy1fhLjL/OovaKr/3rYg84RHeMpC32boFJ6Y=";
     };
     build-system = with py; [ setuptools wheel versioneer ];
     dependencies = with py; [ np amulet-nbt ];
+    dontCheckPythonMetadata = true; # versioneer needs .git (stripped by fetchgit) -> 0+unknown
+    dontCheckRuntimeDeps = true; # amulet-nbt reports 0+unknown from versioneer
     pythonImportsCheck = [ "PyMCTranslate" ];
     meta = {
       description = "Minecraft data translation system";
@@ -162,15 +166,16 @@ let
     pname = "minecraft-resource-pack";
     version = "1.4.11";
     pyproject = true;
-    src = fetchFromGitHub {
-      owner = "Amulet-Team";
-      repo = "Minecraft-Model-Reader";
-      tag = version;
-      hash = "sha256-Cp+Tf9URiLMQzX4RzIjJXhy269ZAdFkDNMkRvhcIK8Y=";
+    src = fetchgit {
+      url = "https://github.com/Amulet-Team/Minecraft-Model-Reader";
+      rev = "45a3461916b3f54e7823b76afa6724b56075ce7e";
+      hash = "sha256-rmvfanjt6Z4SBGnBH5Ldp1T8QJCfdqVZKxSeD8LFivA=";
     };
     build-system = with py; [ setuptools wheel versioneer ];
     dependencies = with py; [ pillow np amulet-nbt platformdirs ];
     pythonRelaxDeps = [ "platformdirs" ];
+    dontCheckPythonMetadata = true; # versioneer needs .git (stripped by fetchgit) -> 0+unknown
+    dontCheckRuntimeDeps = true; # deps report 0+unknown from versioneer
     pythonImportsCheck = [ "minecraft_model_reader" ];
     doCheck = false;
     meta = {
@@ -196,6 +201,7 @@ let
     ];
     pythonRelaxDeps = [ "portalocker" "platformdirs" ];
     dontCheckRuntimeDeps = true;
+    dontCheckPythonMetadata = true; # versioneer needs .git (stripped by fetchgit) -> 0+unknown
     pythonImportsCheck = [ "amulet" ];
     meta = {
       description = "Python library for reading and writing Minecraft save formats";
@@ -210,11 +216,10 @@ in py.buildPythonApplication rec {
   version = "0.10.60";
   pyproject = true;
 
-  src = fetchFromGitHub {
-    owner = "Amulet-Team";
-    repo = "Amulet-Map-Editor";
-    tag = version;
-    hash = "sha256-1s3dS4rqEmUGDNNJEAXhEbA1F6vk47qSubbyXlYkHbg=";
+  src = fetchgit {
+    url = "https://github.com/Amulet-Team/Amulet-Map-Editor";
+    rev = "436da0a0149332e9dbb772c8364d2c55dc9a2730";
+    hash = "sha256-1aZM9yd2NOWNmwbCfuEXCDg4JkcumrF0NlhZSU+PfZ8=";
   };
 
   postPatch = ''
@@ -250,6 +255,7 @@ in py.buildPythonApplication rec {
   ];
 
   pythonRelaxDeps = [ "platformdirs" ];
+  dontCheckRuntimeDeps = true; # deps report 0+unknown from versioneer
 
   nativeBuildInputs = with py; [
     wrapGAppsHook3
@@ -284,6 +290,7 @@ DESKTOP
   '';
 
   pythonImportsCheck = [ "amulet_map_editor" ];
+  dontCheckPythonMetadata = true; # versioneer needs .git (stripped by fetchgit) -> 0+unknown
 
   meta = {
     description = "Minecraft world editor and converter supporting all versions since Java 1.12 and Bedrock 1.7";
