@@ -36,16 +36,19 @@ in {
       proxyPass = "${gpuVmUpstream}";
       proxyWebsockets = true;
       extraConfig = ''
-        # NAS traffic: multi-GB uploads and long .zip streams are normal. All
-        # transfer timeouts are 0 = disabled, so multi-hundred-GB downloads
-        # (and stall-prone uploads) can never be cut off mid-stream.
+        # NAS traffic: multi-GB uploads and long .zip streams are normal.
+        # Timeouts are 7 days between successive I/O ops (= effectively
+        # unlimited for multi-hundred-GB downloads). NOTE: 0 (nginx "no
+        # timeout") is NOT used here — nginx reports an instant upstream
+        # timeout for the first request when proxy_read/proxy_send_timeout
+        # are 0.
         client_max_body_size 0;
-        client_body_timeout 0;
+        client_body_timeout 604800s;
         proxy_request_buffering off;
         proxy_buffering off;
-        proxy_read_timeout 0;
-        proxy_send_timeout 0;
-        send_timeout 0;
+        proxy_read_timeout 604800s;
+        proxy_send_timeout 604800s;
+        send_timeout 604800s;
       '';
     };
   };
