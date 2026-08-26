@@ -86,12 +86,18 @@
       });
       # astropy's IERS tests are date-dependent: they assert on prediction
       # flags in the bundled astropy-iers-data table, which goes stale and
-      # fails 3 tests once the system date passes the table's range.
+      # fails 3 tests once the system date passes the table's range. The
+      # big-table C-reader tests are marked @pytest.mark.hugemem: under the
+      # xdist workers they allocate >1 GB each and OOM-kill the worker on
+      # RAM-constrained hosts (gpu-vm with vLLM resident), failing the whole
+      # suite.
       astropy = prev.astropy.overridePythonAttrs (old: {
         disabledTests = (old.disabledTests or []) ++ [
           "test_iers_b_out_of_range_handling"
           "test_simple"
           "test_ut1_iers_A"
+          "test_read_big_table"
+          "test_read_big_table2"
         ];
       });
       einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
