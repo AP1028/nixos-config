@@ -10,6 +10,7 @@
     ./networking
     ./services/nginx.nix
     ./services/files.nix
+    ./services/file-gpu.nix
     ./services/uptime-kuma.nix
     ./services/private.nix
 
