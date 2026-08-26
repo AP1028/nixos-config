@@ -105,13 +105,16 @@
 
   # Shared proxy settings for every /files-gpu/... nginx location on this VM.
   fileWebProxyExtraConfig = ''
-    # NAS traffic: multi-GB files and long .zip streams are normal.
+    # NAS traffic: multi-GB files and long .zip streams are normal. All
+    # transfer timeouts are 0 = disabled, so multi-hundred-GB downloads
+    # (and stall-prone uploads) can never be cut off mid-stream.
     client_max_body_size 0;
-    client_body_timeout 3600s;
+    client_body_timeout 0;
     proxy_request_buffering off;
     proxy_buffering off;
-    proxy_read_timeout 3600s;
-    proxy_send_timeout 3600s;
+    proxy_read_timeout 0;
+    proxy_send_timeout 0;
+    send_timeout 0;
 
     # Trust boundary for quantum's proxy auth (must override inbound).
     # Host / X-Real-IP / X-Forwarded-* come from recommendedProxySettings;
