@@ -2,7 +2,7 @@
 #
 # One FileBrowser Quantum instance exposes a single read+write source:
 #
-#   /home/tianyixia/file-server -> READ+WRITE (drag & drop upload, mkdir, rename)
+#   /home/tianyixia/files-gpu -> READ+WRITE (drag & drop upload, mkdir, rename)
 #
 # NO DELETE ANYWHERE: the only web user has Permissions.Delete = false.
 #
@@ -13,24 +13,30 @@
 # on demand instead of being scanned at boot.
 #
 # Self-contained twin of hosts/nixos-file-vm/services/file-web.nix (the NAS
-# UI): same app, same auth policy, same nginx architecture, but the URL
-# prefix is /files-gpu/ and the service runs as tianyixia itself — the pool
-# is the user's own home directory, so ownership stays clean (every file
-# the web UI creates belongs to the same account that uses the pool from
-# the shell). Same trust boundary as vllm-manager on this host, which also
-# runs as tianyixia. The pool is a plain directory on the VM disk (no ZFS).
+# UI): same app, same auth policy, same nginx architecture. It is served at
+# /files/files-gpu/ — the webapp VM nests this twin under the /files/
+# namespace next to the file-vm UI (/files/Public, /files/Dropbox) — and the
+# service runs as tianyixia itself: the pool is the user's own home
+# directory, so ownership stays clean (every file the web UI creates belongs
+# to the same account that uses the pool from the shell). Same trust
+# boundary as vllm-manager on this host, which also runs as tianyixia. The
+# pool is a plain directory on the VM disk (no ZFS).
 {
   config,
   lib,
   pkgs,
   ...
 }: let
-  # Quantum's vue-router normally uses `baseURL` for BOTH history and API
-  # paths. With baseURL=/files-gpu/ that produces /files-gpu//files-gpu/...
-  # URLs (the router route is already "/files-gpu/:path"). Patch the built
-  # frontend bundle so history uses "/" while the API keeps using /files-gpu/:
-  # one /files-gpu/ in browser URLs, and all api/static traffic stays under
-  # /files-gpu/.
+  # Quantum's vue-router uses `baseURL` for BOTH history and API paths, and
+  # its file-listing ROUTE is hardcoded "/files/:path" in the bundle. For
+  # this instance the UI is published under /files/files-gpu/ (the webapp
+  # hosts the file-vm UI at /files/ and this twin at /files/files-gpu/), so
+  # the preBuild patch rewrites:
+  #   * history base      Nt.baseURL  -> "/"           (browser URLs keep ONE
+  #                                                     /files/files-gpu/ prefix)
+  #   * item hrefs        `${baseURL}files/` -> `/files/files-gpu/`
+  #   * router routes     "/files/", "/files" -> "/files/files-gpu/" variants
+  # API/static traffic keeps using Nt.baseURL (= /files/files-gpu/).
   filebrowserQuantum = pkgs.filebrowser-quantum.overrideAttrs (old: {
     nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.gzip];
     # TestJSONAuth_NoTimingAttack measures ms-level auth latencies with only
@@ -56,20 +62,32 @@
             echo "files-gpu: quantum item-href pattern not found; update the patch" >&2
             exit 1
           fi
+          if ! grep -q '"/files/"' "$plain"; then
+            echo "files-gpu: quantum router route pattern not found; update the patch" >&2
+            exit 1
+          fi
           if ! grep -q '`''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}`' "$plain"; then
             echo "files-gpu: quantum new-tab pattern not found; update the patch" >&2
             exit 1
           fi
 
-          # vue-router history base: browser URLs are /files-gpu/Public, not
-          # /files-gpu//files-gpu/Public. API/static keep using Nt.baseURL
-          # (/files-gpu/).
+          # vue-router history base: browser URLs are /files/files-gpu/Public,
+          # not /files/files-gpu//files/files-gpu/Public. API/static keep
+          # using Nt.baseURL (/files/files-gpu/).
           sed -i 's/history:RK(Nt.baseURL)/history:RK("\/")/' "$plain"
 
-          # Folder item hrefs: one /files-gpu/ prefix.
-          sed -i 's#\`''${Nt.baseURL}files/#\`/files-gpu/#g' "$plain"
+          # Folder item hrefs: one /files/files-gpu/ prefix.
+          sed -i 's#\`''${Nt.baseURL}files/#\`/files/files-gpu/#g' "$plain"
 
-          # "Open in new tab": fullPath already carries /files-gpu/.
+          # The file-listing ROUTE is hardcoded "/files/:path" upstream. The
+          # file-vm instance relies on that (served at /files/); this twin is
+          # served at /files/files-gpu/, so point the route there too — with
+          # the wrong route the SPA falls into its catch-all and redirects
+          # to bogus /files/... URLs ("nothing to show here").
+          sed -i 's#"/files/"#"/files/files-gpu/"#g' "$plain"
+          sed -i 's#"/files"#"/files/files-gpu"#g' "$plain"
+
+          # "Open in new tab": fullPath already carries /files/files-gpu/.
           sed -i 's#\`''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}\`#\`''${window.location.origin}''${o}\`#g' "$plain"
 
           gzip -9 -n -c "$plain" > "$f.new"
@@ -85,8 +103,8 @@
           echo "files-gpu: quantum index template asset pattern not found; update the patch" >&2
           exit 1
         fi
-        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-files-gpu-patched.js.gz
-        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-files-gpu-patched.js/g' http/embed/public/index.html
+        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-files-gpu2-patched.js.gz
+        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-files-gpu2-patched.js/g' http/embed/public/index.html
       '';
   });
 
@@ -103,7 +121,7 @@
     }
   '';
 
-  # Shared proxy settings for every /files-gpu/... nginx location on this VM.
+  # Shared proxy settings for every /files/files-gpu/... nginx location.
   fileWebProxyExtraConfig = ''
     # NAS traffic: multi-GB files and long .zip streams are normal. Timeouts
     # are 7 days between successive I/O ops (= effectively unlimited for
@@ -129,9 +147,11 @@
     server = {
       port = 8081;
       listen = "127.0.0.1"; # only nginx is public; nginx is what injects auth
-      # The UI is published under /files-gpu/ (both directly on this VM and
-      # via the nixos-webapp-vm WAN proxy), so all frontend/api URLs carry it.
-      baseURL = "/files-gpu/";
+      # The UI is published under /files/files-gpu/ (both directly on this
+      # VM and via the nixos-webapp-vm WAN proxy, which nests it under the
+      # /files/ namespace next to the file-vm UI), so all frontend/api URLs
+      # carry it.
+      baseURL = "/files/files-gpu/";
       disableUpdateCheck = true;
       logging = [
         {levels = "info|warning|error";}
@@ -147,8 +167,8 @@
       };
       sources = [
         {
-          path = "/home/tianyixia/file-server";
-          name = "file-server";
+          path = "/home/tianyixia/files-gpu";
+          name = "files-gpu";
           config = {
             readOnly = false;
             private = true;
@@ -187,7 +207,7 @@
 
     frontend = {
       name = "GPU Files";
-      description = "Web file browser for tianyixia's file-server pool";
+      description = "Web file browser for tianyixia's files-gpu pool";
       disableDefaultLinks = true;
       styling = {
         customCSS = "${fileWebCustomCss}"; # hide folder size captions
@@ -260,7 +280,7 @@ in {
       ProtectSystem = "strict";
       ProtectHome = false;
       ReadWritePaths = [
-        "/home/tianyixia/file-server"
+        "/home/tianyixia/files-gpu"
         "/var/lib/fileweb"
         "/var/cache/fileweb"
       ];
@@ -297,40 +317,53 @@ in {
         }
       ];
       locations = {
-        # Direct bookmarks to the old root URL keep working.
+        # Direct bookmarks to the root keep working.
         "= /" = {
-          return = "308 /files-gpu/";
+          return = "308 /files/files-gpu/";
+        };
+
+        # Redirect the old /files-gpu/ (and even older /file-gpu/) locations
+        # to the new /files/files-gpu/ home.
+        "= /file-gpu" = {
+          return = "308 /files/files-gpu/";
+        };
+        "= /file-gpu/" = {
+          return = "308 /files/files-gpu/";
         };
         "= /files-gpu" = {
-          return = "308 /files-gpu/";
+          return = "308 /files/files-gpu/";
+        };
+        "= /files-gpu/" = {
+          return = "308 /files/files-gpu/";
         };
 
-        # API / static traffic stays on its Quantum baseURL (/files-gpu/...).
-        "/files-gpu/api/" = {
+        # API / static traffic stays on its Quantum baseURL
+        # (/files/files-gpu/...).
+        "/files/files-gpu/api/" = {
           proxyPass = "http://127.0.0.1:8081";
           proxyWebsockets = true;
           extraConfig = fileWebProxyExtraConfig;
         };
-        "/files-gpu/public/" = {
+        "/files/files-gpu/public/" = {
           proxyPass = "http://127.0.0.1:8081";
           proxyWebsockets = true;
           extraConfig = fileWebProxyExtraConfig;
         };
-        "= /files-gpu/health" = {
+        "= /files/files-gpu/health" = {
           proxyPass = "http://127.0.0.1:8081";
           extraConfig = fileWebProxyExtraConfig;
         };
 
-        # Everything else under /files-gpu/ is a vue-router deep link
-        # (/files-gpu/file-server/...); serve the SPA index for it. The
-        # patched router uses history base "/", so browser URLs never
-        # become /files-gpu//files-gpu/...
-        "/files-gpu/" = {
+        # Everything else under /files/files-gpu/ is a vue-router deep link
+        # (/files/files-gpu/files-gpu/...); serve the SPA index for it. The
+        # patched router uses history base "/" and route /files/files-gpu/,
+        # so browser URLs never become /files/files-gpu//files/files-gpu/...
+        "/files/files-gpu/" = {
           proxyPass = "http://127.0.0.1:8081";
           proxyWebsockets = true;
           extraConfig =
             ''
-              rewrite ^/files-gpu/.*$ /files-gpu/ break;
+              rewrite ^/files/files-gpu/.*$ /files/files-gpu/ break;
             ''
             + fileWebProxyExtraConfig;
         };
@@ -339,9 +372,10 @@ in {
   };
 
   # The storage pool itself: a plain directory on the VM disk (no ZFS on
-  # this host), created at boot as the user's own writable space.
+  # this host), created at boot as the user's own writable space. Named
+  # "files-gpu" to match the UI source and URL prefix.
   systemd.tmpfiles.rules = [
-    "d /home/tianyixia/file-server 0770 tianyixia users -"
+    "d /home/tianyixia/files-gpu 0770 tianyixia users -"
   ];
 
   # firewall-open.nix already opens every port on this VM; no extra firewall
