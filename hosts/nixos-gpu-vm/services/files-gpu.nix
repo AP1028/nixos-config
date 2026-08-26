@@ -14,7 +14,7 @@
 #
 # Self-contained twin of hosts/nixos-file-vm/services/file-web.nix (the NAS
 # UI): same app, same auth policy, same nginx architecture, but the URL
-# prefix is /file-gpu/ and the service runs as tianyixia itself — the pool
+# prefix is /files-gpu/ and the service runs as tianyixia itself — the pool
 # is the user's own home directory, so ownership stays clean (every file
 # the web UI creates belongs to the same account that uses the pool from
 # the shell). Same trust boundary as vllm-manager on this host, which also
@@ -26,11 +26,11 @@
   ...
 }: let
   # Quantum's vue-router normally uses `baseURL` for BOTH history and API
-  # paths. With baseURL=/file-gpu/ that produces /file-gpu//file-gpu/...
-  # URLs (the router route is already "/file-gpu/:path"). Patch the built
-  # frontend bundle so history uses "/" while the API keeps using /file-gpu/:
-  # one /file-gpu/ in browser URLs, and all api/static traffic stays under
-  # /file-gpu/.
+  # paths. With baseURL=/files-gpu/ that produces /files-gpu//files-gpu/...
+  # URLs (the router route is already "/files-gpu/:path"). Patch the built
+  # frontend bundle so history uses "/" while the API keeps using /files-gpu/:
+  # one /files-gpu/ in browser URLs, and all api/static traffic stays under
+  # /files-gpu/.
   filebrowserQuantum = pkgs.filebrowser-quantum.overrideAttrs (old: {
     nativeBuildInputs = (old.nativeBuildInputs or []) ++ [pkgs.gzip];
     # TestJSONAuth_NoTimingAttack measures ms-level auth latencies with only
@@ -49,27 +49,27 @@
           zcat "$f" > "$plain"
 
           if ! grep -q 'history:RK(Nt.baseURL)' "$plain"; then
-            echo "file-gpu: quantum router history pattern not found; update the patch" >&2
+            echo "files-gpu: quantum router history pattern not found; update the patch" >&2
             exit 1
           fi
           if ! grep -q '`''${Nt.baseURL}files/' "$plain"; then
-            echo "file-gpu: quantum item-href pattern not found; update the patch" >&2
+            echo "files-gpu: quantum item-href pattern not found; update the patch" >&2
             exit 1
           fi
           if ! grep -q '`''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}`' "$plain"; then
-            echo "file-gpu: quantum new-tab pattern not found; update the patch" >&2
+            echo "files-gpu: quantum new-tab pattern not found; update the patch" >&2
             exit 1
           fi
 
-          # vue-router history base: browser URLs are /file-gpu/Public, not
-          # /file-gpu//file-gpu/Public. API/static keep using Nt.baseURL
-          # (/file-gpu/).
+          # vue-router history base: browser URLs are /files-gpu/Public, not
+          # /files-gpu//files-gpu/Public. API/static keep using Nt.baseURL
+          # (/files-gpu/).
           sed -i 's/history:RK(Nt.baseURL)/history:RK("\/")/' "$plain"
 
-          # Folder item hrefs: one /file-gpu/ prefix.
-          sed -i 's#\`''${Nt.baseURL}files/#\`/file-gpu/#g' "$plain"
+          # Folder item hrefs: one /files-gpu/ prefix.
+          sed -i 's#\`''${Nt.baseURL}files/#\`/files-gpu/#g' "$plain"
 
-          # "Open in new tab": fullPath already carries /file-gpu/.
+          # "Open in new tab": fullPath already carries /files-gpu/.
           sed -i 's#\`''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}\`#\`''${window.location.origin}''${o}\`#g' "$plain"
 
           gzip -9 -n -c "$plain" > "$f.new"
@@ -82,11 +82,11 @@
         # 24h, so publish the patched bundle under a new name and point the
         # SPA template at it.
         if ! grep -q 'index-RkHXvfmg.js' http/embed/public/index.html; then
-          echo "file-gpu: quantum index template asset pattern not found; update the patch" >&2
+          echo "files-gpu: quantum index template asset pattern not found; update the patch" >&2
           exit 1
         fi
-        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-patched.js.gz
-        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-patched.js/g' http/embed/public/index.html
+        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-files-gpu-patched.js.gz
+        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-files-gpu-patched.js/g' http/embed/public/index.html
       '';
   });
 
@@ -95,7 +95,7 @@
   # "viewable only" (on-demand listing) mode the app would otherwise show a
   # meaningless "4.0 KB" for every folder, so the UI hides folder sizes and
   # the API reports them as 0 (useLogicalSize).
-  fileWebCustomCss = pkgs.writeText "file-gpu-custom.css" ''
+  fileWebCustomCss = pkgs.writeText "files-gpu-custom.css" ''
     /* Folder sizes are disabled: on-demand listing has no recursive size
        index, and a fake 4 KB per folder is worse than no size at all. */
     .listing-item[data-dir="true"] > .text > .size {
@@ -103,7 +103,7 @@
     }
   '';
 
-  # Shared proxy settings for every /file-gpu/... nginx location on this VM.
+  # Shared proxy settings for every /files-gpu/... nginx location on this VM.
   fileWebProxyExtraConfig = ''
     # NAS traffic: multi-GB files and long .zip streams are normal.
     client_max_body_size 0;
@@ -120,13 +120,13 @@
     proxy_set_header X-Remote-User "files";
   '';
 
-  fileWebConfig = (pkgs.formats.yaml {}).generate "file-gpu.yaml" {
+  fileWebConfig = (pkgs.formats.yaml {}).generate "files-gpu.yaml" {
     server = {
       port = 8081;
       listen = "127.0.0.1"; # only nginx is public; nginx is what injects auth
-      # The UI is published under /file-gpu/ (both directly on this VM and
+      # The UI is published under /files-gpu/ (both directly on this VM and
       # via the nixos-webapp-vm WAN proxy), so all frontend/api URLs carry it.
-      baseURL = "/file-gpu/";
+      baseURL = "/files-gpu/";
       disableUpdateCheck = true;
       logging = [
         {levels = "info|warning|error";}
@@ -283,7 +283,7 @@ in {
     # (recommendedProxySettings + our X-Remote-User header exceed the default
     # hash table).
     appendHttpConfig = "proxy_headers_hash_max_size 512;";
-    virtualHosts.file-gpu = {
+    virtualHosts.files-gpu = {
       serverName = "_";
       listen = [
         {
@@ -294,38 +294,38 @@ in {
       locations = {
         # Direct bookmarks to the old root URL keep working.
         "= /" = {
-          return = "308 /file-gpu/";
+          return = "308 /files-gpu/";
         };
-        "= /file-gpu" = {
-          return = "308 /file-gpu/";
+        "= /files-gpu" = {
+          return = "308 /files-gpu/";
         };
 
-        # API / static traffic stays on its Quantum baseURL (/file-gpu/...).
-        "/file-gpu/api/" = {
+        # API / static traffic stays on its Quantum baseURL (/files-gpu/...).
+        "/files-gpu/api/" = {
           proxyPass = "http://127.0.0.1:8081";
           proxyWebsockets = true;
           extraConfig = fileWebProxyExtraConfig;
         };
-        "/file-gpu/public/" = {
+        "/files-gpu/public/" = {
           proxyPass = "http://127.0.0.1:8081";
           proxyWebsockets = true;
           extraConfig = fileWebProxyExtraConfig;
         };
-        "= /file-gpu/health" = {
+        "= /files-gpu/health" = {
           proxyPass = "http://127.0.0.1:8081";
           extraConfig = fileWebProxyExtraConfig;
         };
 
-        # Everything else under /file-gpu/ is a vue-router deep link
-        # (/file-gpu/file-server/...); serve the SPA index for it. The
+        # Everything else under /files-gpu/ is a vue-router deep link
+        # (/files-gpu/file-server/...); serve the SPA index for it. The
         # patched router uses history base "/", so browser URLs never
-        # become /file-gpu//file-gpu/...
-        "/file-gpu/" = {
+        # become /files-gpu//files-gpu/...
+        "/files-gpu/" = {
           proxyPass = "http://127.0.0.1:8081";
           proxyWebsockets = true;
           extraConfig =
             ''
-              rewrite ^/file-gpu/.*$ /file-gpu/ break;
+              rewrite ^/files-gpu/.*$ /files-gpu/ break;
             ''
             + fileWebProxyExtraConfig;
         };
