@@ -32,6 +32,7 @@
     (import ../../modules/services/iptables-clash-openwrt.nix { interface = "ens18"; })
 
     ./services/helloneojournautics.nix
+    ./services/factorio.nix
     ./services/jzmf-vanilla.nix
     ./services/jzmf-construction.nix
     ./services/jzmf-construction-backup.nix
