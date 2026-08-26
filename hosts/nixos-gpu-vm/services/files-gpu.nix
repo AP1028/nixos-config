@@ -76,6 +76,14 @@
           # using Nt.baseURL (/files/files-gpu/).
           sed -i 's/history:RK(Nt.baseURL)/history:RK("\/")/' "$plain"
 
+          # Route NAVIGATIONS are backtick template literals (\`/files/\${...}\`)
+          # that the quoted-string seds below cannot match: the source
+          # auto-redirect, breadcrumbs and recent-links all push /files/...
+          # URLs. Without this, the auto-redirect pushes the route root
+          # again and the SPA never issues the listing request. MUST run
+          # before the item-href sed, which itself emits \`/files/files-gpu/\`.
+          sed -i 's#\`/files/#\`/files/files-gpu/#g' "$plain"
+
           # Folder item hrefs: one /files/files-gpu/ prefix.
           sed -i 's#\`''${Nt.baseURL}files/#\`/files/files-gpu/#g' "$plain"
 
@@ -103,8 +111,8 @@
           echo "files-gpu: quantum index template asset pattern not found; update the patch" >&2
           exit 1
         fi
-        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-files-gpu2-patched.js.gz
-        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-files-gpu2-patched.js/g' http/embed/public/index.html
+        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-files-gpu3-patched.js.gz
+        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-files-gpu3-patched.js/g' http/embed/public/index.html
       '';
   });
 
