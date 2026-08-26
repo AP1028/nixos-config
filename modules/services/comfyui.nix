@@ -80,9 +80,15 @@
       # opencv4 -> name mismatch -> same pre-install check failure.
       facexlib = base.facexlib.overridePythonAttrs (old: {dontCheckRuntimeDeps = true;});
       # xformers setup.py requires cuda-bindings==12.9.4 (a torch-2.10 wheel
-      # dep nix strips); relax that requirement too.
+      # dep nix strips); relax that requirement too. Upstream comfyui-nix
+      # caps kernel compilation at MAX_JOBS=2 to avoid OOM (each sm_90
+      # CUTLASS kernel peaks ~3GB); gpu-vm has 12 cores and 31GB, so raise
+      # the cap to 4 (~12GB worst-case) and use more cores for the build.
       xformers = base.xformers.overridePythonAttrs (old: {
         pythonRelaxDeps = (old.pythonRelaxDeps or []) ++ ["cuda-bindings"];
+        preBuild = (old.preBuild or "") + ''
+          export MAX_JOBS=4
+        '';
       });
       # astropy's IERS tests are date-dependent: they assert on prediction
       # flags in the bundled astropy-iers-data table, which goes stale and
