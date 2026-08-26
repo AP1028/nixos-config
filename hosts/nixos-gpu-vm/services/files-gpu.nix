@@ -83,10 +83,14 @@
           # pushes the route root again and the SPA never issues the
           # listing request. MUST run before the item-href sed, which
           # itself emits /files/files-gpu/.
-          sed -i 's#\`/files/#\`/files/files-gpu/#g' "$plain"
+          #
+          # NOTE: sed patterns use \x60 (hex backtick) because an escaped
+          # `\`` is NOT matched by GNU sed (it keeps the backslash), so the
+          # classic \`-escaped seds silently no-op.
+          sed -i 's#\x60/files/#\x60/files/files-gpu/#g' "$plain"
 
           # Folder item hrefs: one /files/files-gpu/ prefix.
-          sed -i 's#\`''${Nt.baseURL}files/#\`/files/files-gpu/#g' "$plain"
+          sed -i 's#\x60''${Nt.baseURL}files/#\x60/files/files-gpu/#g' "$plain"
 
           # The file-listing ROUTE is hardcoded "/files/:path" upstream. The
           # file-vm instance relies on that (served at /files/); this twin is
@@ -97,7 +101,7 @@
           sed -i 's#"/files"#"/files/files-gpu"#g' "$plain"
 
           # "Open in new tab": fullPath already carries /files/files-gpu/.
-          sed -i 's#\`''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}\`#\`''${window.location.origin}''${o}\`#g' "$plain"
+          sed -i 's#\x60''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}\x60#\x60''${window.location.origin}''${o}\x60#g' "$plain"
 
           gzip -9 -n -c "$plain" > "$f.new"
           mv "$f.new" "$f"
@@ -112,8 +116,8 @@
           echo "files-gpu: quantum index template asset pattern not found; update the patch" >&2
           exit 1
         fi
-        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-files-gpu3-patched.js.gz
-        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-files-gpu3-patched.js/g' http/embed/public/index.html
+        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-files-gpu4-patched.js.gz
+        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-files-gpu4-patched.js/g' http/embed/public/index.html
       '';
   });
 
