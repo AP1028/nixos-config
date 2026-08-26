@@ -66,8 +66,17 @@
     # Deliberately does NOT follow our nixpkgs: upstream's own pinned nixpkgs
     # matches the prebuilt store paths they publish to comfyui.cachix.org,
     # so we download instead of building (and their test suites pass there).
+    #
+    # AI STACK PIN (2026-08): frozen to the exact revs that built the
+    # working gpu-vm comfyui stack (torch/xformers/flash-attn CUDA kernel
+    # compiles take hours from source), so `nix flake update` can never
+    # drag them into a rebuild again. Bump deliberately by editing these
+    # two revs, re-running `nix flake lock`, and re-applying the comfyui
+    # test-skip overrides from modules/services/comfyui.nix git history
+    # (2026-08-25/26: astropy IERS/hugemem skips, xformers MAX_JOBS).
     comfyui-nix = {
-      url = "github:utensils/comfyui-nix";
+      url = "github:utensils/comfyui-nix/60cf396864c09e954f23b31c4637c2bb65ebe085";
+      inputs.nixpkgs.url = "github:NixOS/nixpkgs/f13ff45afd1bb73e640eaa08a7066dbed07e3238";
     };
   };
 

@@ -80,40 +80,14 @@
       # opencv4 -> name mismatch -> same pre-install check failure.
       facexlib = base.facexlib.overridePythonAttrs (old: {dontCheckRuntimeDeps = true;});
       # xformers setup.py requires cuda-bindings==12.9.4 (a torch-2.10 wheel
-      # dep nix strips); relax that requirement too. Upstream comfyui-nix
-      # caps kernel compilation at MAX_JOBS=2 to avoid OOM (each sm_90
-      # CUTLASS kernel peaks ~3GB); gpu-vm has 12 cores and 31GB, so raise
-      # the cap to 4 (~12GB worst-case) and use more cores for the build.
+      # dep nix strips); relax that requirement too.
       xformers = base.xformers.overridePythonAttrs (old: {
         pythonRelaxDeps = (old.pythonRelaxDeps or []) ++ ["cuda-bindings"];
-        preBuild = (old.preBuild or "") + ''
-          export MAX_JOBS=4
-        '';
-      });
-      # astropy's IERS tests are date-dependent: they assert on prediction
-      # flags in the bundled astropy-iers-data table, which goes stale and
-      # fails 3 tests once the system date passes the table's range. The
-      # big-table C-reader tests are marked @pytest.mark.hugemem: under the
-      # xdist workers they allocate >1 GB each and OOM-kill the worker on
-      # RAM-constrained hosts (gpu-vm with vLLM resident), failing the whole
-      # suite.
-      astropy = prev.astropy.overridePythonAttrs (old: {
-        disabledTests = (old.disabledTests or []) ++ [
-          "test_iers_b_out_of_range_handling"
-          "test_simple"
-          "test_ut1_iers_A"
-          "test_read_big_table"
-          "test_read_big_table2"
-        ];
       });
       einops = prev.einops.overridePythonAttrs (old: {doCheck = false;});
       mss = prev.mss.overridePythonAttrs (old: {doCheck = false;});
       scipy = prev.scipy.overridePythonAttrs (old: {doCheck = false;});
-      triton = prev.triton.overridePythonAttrs (old: {
-        doCheck = false;
-        # NOTE: cannot scope triton to the nvidia backend — 3.7's core
-        # (gluon_ir.cc) hard-includes the amd dialect's generated headers.
-      });
+      triton = prev.triton.overridePythonAttrs (old: {doCheck = false;});
       onnxruntime = prev.onnxruntime.overridePythonAttrs (old: {doCheck = false;});
       inline-snapshot = prev."inline-snapshot".overridePythonAttrs (old: {doCheck = false;});
       fastapi = prev.fastapi.overridePythonAttrs (old: {doCheck = false;});
