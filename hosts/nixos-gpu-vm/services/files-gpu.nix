@@ -76,12 +76,13 @@
           # using Nt.baseURL (/files/files-gpu/).
           sed -i 's/history:RK(Nt.baseURL)/history:RK("\/")/' "$plain"
 
-          # Route NAVIGATIONS are backtick template literals (\`/files/\${...}\`)
-          # that the quoted-string seds below cannot match: the source
-          # auto-redirect, breadcrumbs and recent-links all push /files/...
-          # URLs. Without this, the auto-redirect pushes the route root
-          # again and the SPA never issues the listing request. MUST run
-          # before the item-href sed, which itself emits \`/files/files-gpu/\`.
+          # Route NAVIGATIONS are backtick template literals (e.g.
+          # /files/{source}) that the quoted-string seds below cannot
+          # match: the source auto-redirect, breadcrumbs and recent-links
+          # all push /files/... URLs. Without this, the auto-redirect
+          # pushes the route root again and the SPA never issues the
+          # listing request. MUST run before the item-href sed, which
+          # itself emits /files/files-gpu/.
           sed -i 's#\`/files/#\`/files/files-gpu/#g' "$plain"
 
           # Folder item hrefs: one /files/files-gpu/ prefix.
