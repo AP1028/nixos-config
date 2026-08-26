@@ -94,6 +94,7 @@
           ./hosts/asusg16/hardware-configuration.nix
           ./hosts/asusg16/default.nix
           ./modules/security/lan-vllm-certs.nix
+          ./modules/security/homeserver-cert.nix
 
           lanzaboote.nixosModules.lanzaboote
           vscode-server.nixosModules.default

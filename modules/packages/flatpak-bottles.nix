@@ -4,9 +4,26 @@
   ...
 }: let
   nvVersion = builtins.replaceStrings ["."] ["-"] config.hardware.nvidia.package.version;
+  bottlesFix = pkgs.writeText "bottles-connection-fix.py" (builtins.readFile ./bottles-connection-fix.py);
 in {
   services.flatpak.enable = true;
   fonts.fontDir.enable = true;
+
+  systemd.services.bottles-network-fix = {
+    description = "Bottles: apply connectivity-check fallback URLs (upstream #4543)";
+    wantedBy = ["multi-user.target"];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      target=/var/lib/flatpak/app/com.usebottles.bottles/x86_64/stable/active/files/share/bottles/bottles/backend/utils/connection.py
+      if [ -f "$target" ] && ! grep -q "_check_urls" "$target"; then
+        rm -f "$target"
+        install -m 444 "${bottlesFix}" "$target"
+      fi
+    '';
+  };
 
   services.flatpak.packages = [
     "com.usebottles.bottles"
