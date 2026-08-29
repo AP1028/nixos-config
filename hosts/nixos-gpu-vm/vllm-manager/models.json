@@ -14,157 +14,169 @@
   "models": [
     {
       "id": "official-98k",
-      "display_name": "FP8 official · 98k (vision)",
+      "display_name": "FP8 official \u00b7 98k (vision)",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
       "served_name": "qwen38-27b-fp8-98k",
       "spec_sync_mode": "auto",
       "vision": false,
       "thinking_effort": "max",
       "context": "98k",
-      "note": "MTP3 · PIECEWISE graphs · sync=auto · fp16 KV · vision-capable"
+      "note": "MTP3 \u00b7 PIECEWISE graphs \u00b7 sync=auto \u00b7 fp16 KV \u00b7 vision-capable"
     },
     {
       "id": "official-116k",
-      "display_name": "FP8 official · 116k",
+      "display_name": "FP8 official \u00b7 116k",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
       "served_name": "qwen38-27b-fp8-116k",
       "spec_sync_mode": "auto",
       "vision": false,
       "thinking_effort": "max",
       "context": "116k",
-      "note": "MTP3 · fp16 KV · text-only"
+      "note": "MTP3 \u00b7 fp16 KV \u00b7 text-only"
     },
     {
       "id": "official-200k",
-      "display_name": "FP8 official · 200k",
+      "display_name": "FP8 official \u00b7 200k",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
       "served_name": "qwen38-27b-fp8-200k",
       "spec_sync_mode": "auto",
       "vision": false,
       "thinking_effort": "max",
       "context": "200k",
-      "note": "MTP3 · int8 KV · prefix caching · text-only"
+      "note": "MTP3 \u00b7 int8 KV \u00b7 prefix caching \u00b7 text-only"
     },
     {
       "id": "official-native",
-      "display_name": "FP8 official · native 256k",
+      "display_name": "FP8 official \u00b7 native 256k",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
       "served_name": "qwen38-27b-fp8-native",
       "spec_sync_mode": "auto",
       "vision": false,
       "thinking_effort": "max",
       "context": "native",
-      "note": "eager · turboquant 4-bit KV · no MTP · text-only · ~13 tok/s"
+      "note": "eager \u00b7 turboquant 4-bit KV \u00b7 no MTP \u00b7 text-only \u00b7 ~13 tok/s"
     },
     {
       "id": "uncensored-98k",
-      "display_name": "FP8 uncensored · 98k (vision)",
+      "display_name": "FP8 uncensored \u00b7 98k (vision)",
       "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
       "served_name": "qwen38-27b-uncensored-98k",
       "spec_sync_mode": "safe",
       "vision": false,
       "thinking_effort": "max",
       "context": "98k",
-      "note": "MTP3 · sync=safe · fp16 KV · vision-capable"
+      "note": "MTP3 \u00b7 sync=safe \u00b7 fp16 KV \u00b7 vision-capable"
     },
     {
       "id": "uncensored-116k",
-      "display_name": "FP8 uncensored · 116k",
+      "display_name": "FP8 uncensored \u00b7 116k",
       "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
       "served_name": "qwen38-27b-uncensored-116k",
       "spec_sync_mode": "safe",
       "vision": false,
       "thinking_effort": "max",
       "context": "116k",
-      "note": "MTP3 · fp16 KV · text-only"
+      "note": "MTP3 \u00b7 fp16 KV \u00b7 text-only"
     },
     {
       "id": "uncensored-200k",
-      "display_name": "FP8 uncensored · 200k",
+      "display_name": "FP8 uncensored \u00b7 200k",
       "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
       "served_name": "qwen38-27b-uncensored-200k",
       "spec_sync_mode": "safe",
       "vision": false,
       "thinking_effort": "max",
       "context": "200k",
-      "note": "MTP3 · int8 KV · prefix caching · text-only"
+      "note": "MTP3 \u00b7 int8 KV \u00b7 prefix caching \u00b7 text-only"
     },
     {
       "id": "uncensored-native",
-      "display_name": "FP8 uncensored · native 256k",
+      "display_name": "FP8 uncensored \u00b7 native 256k",
       "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
       "served_name": "qwen38-27b-uncensored-native",
       "spec_sync_mode": "safe",
       "vision": false,
       "thinking_effort": "max",
       "context": "native",
-      "note": "eager · turboquant 4-bit KV · no MTP · text-only"
+      "note": "eager \u00b7 turboquant 4-bit KV \u00b7 no MTP \u00b7 text-only"
     },
     {
       "id": "llamacpp-940k",
-      "display_name": "Q4_K_M llama.cpp · 940k",
+      "display_name": "Q4_K_M llama.cpp \u00b7 940k",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-GGUF",
       "served_name": "qwen38-27b-q4-940k",
       "backend": "llamacpp",
       "vision": false,
       "thinking_effort": "off",
       "context": "940k",
-      "note": "llama.cpp TP=2 tensor split + NCCL · YaRN ×3.75 · q4_0 KV · ~43 tok/s · linear prefill (needle-verified @315k)"
+      "note": "llama.cpp TP=2 tensor split + NCCL \u00b7 YaRN \u00d73.75 \u00b7 q4_0 KV \u00b7 ~43 tok/s \u00b7 linear prefill (needle-verified @315k)"
+    },
+    {
+      "id": "llamacpp-524k",
+      "display_name": "Q4_K_M llama.cpp \u00b7 524k \u00b7 MTP draft",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-GGUF",
+      "served_name": "qwen38-27b-q4-524k",
+      "backend": "llamacpp",
+      "vision": false,
+      "thinking_effort": "off",
+      "context": "524k",
+      "spec_n": 3,
+      "note": "draft-mtp n3 (speculative) \u00b7 +57-118% deep decode vs no-draft \u00b7 q4_0 KV"
     },
     {
       "id": "llamacpp-589k",
-      "display_name": "Q4_K_M llama.cpp · 589k",
+      "display_name": "Q4_K_M llama.cpp \u00b7 589k",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-GGUF",
       "served_name": "qwen38-27b-q4-589k",
       "backend": "llamacpp",
       "vision": false,
       "thinking_effort": "off",
       "context": "589k",
-      "note": "llama.cpp TP=2 · YaRN ×2.25 · q8_0 KV (higher KV fidelity)"
+      "note": "llama.cpp TP=2 \u00b7 YaRN \u00d72.25 \u00b7 q8_0 KV (higher KV fidelity)"
     },
     {
       "id": "llamacpp-393k",
-      "display_name": "Q4_K_M llama.cpp · 393k",
+      "display_name": "Q4_K_M llama.cpp \u00b7 393k",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-GGUF",
       "served_name": "qwen38-27b-q4-393k",
       "backend": "llamacpp",
       "vision": false,
       "thinking_effort": "off",
       "context": "393k",
-      "note": "llama.cpp TP=2 · YaRN ×1.5 · f16 KV (best KV fidelity)"
+      "note": "llama.cpp TP=2 \u00b7 YaRN \u00d71.5 \u00b7 f16 KV (best KV fidelity)"
     },
     {
       "id": "awq-98k",
-      "display_name": "AWQ int4 · 98k (vision)",
+      "display_name": "AWQ int4 \u00b7 98k (vision)",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-AWQ-MTP",
       "served_name": "qwen38-27b-awq-98k",
       "quantization": "awq",
       "vision": false,
       "thinking_effort": "max",
       "context": "98k",
-      "note": "AWQ-Marlin int4 · fp16 KV · vision-capable"
+      "note": "AWQ-Marlin int4 \u00b7 fp16 KV \u00b7 vision-capable"
     },
     {
       "id": "awq-116k",
-      "display_name": "AWQ int4 · 116k",
+      "display_name": "AWQ int4 \u00b7 116k",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-AWQ-MTP",
       "served_name": "qwen38-27b-awq-116k",
       "quantization": "awq",
       "vision": false,
       "thinking_effort": "max",
       "context": "116k",
-      "note": "AWQ-Marlin int4 · fp16 KV · text-only"
+      "note": "AWQ-Marlin int4 \u00b7 fp16 KV \u00b7 text-only"
     },
     {
       "id": "awq-200k",
-      "display_name": "AWQ int4 · 200k",
+      "display_name": "AWQ int4 \u00b7 200k",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-AWQ-MTP",
       "served_name": "qwen38-27b-awq-200k",
       "quantization": "awq",
       "vision": false,
       "thinking_effort": "max",
       "context": "200k",
-      "note": "AWQ-Marlin int4 · int8 KV · text-only"
+      "note": "AWQ-Marlin int4 \u00b7 int8 KV \u00b7 text-only"
     }
   ]
 }

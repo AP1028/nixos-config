@@ -113,6 +113,7 @@ LLAMACPP_LD_LIBRARY_PATH = "/run/opengl-driver/lib" + (
 LLAMACPP_CONTEXT_MODES = {
     # 983040: q4_0 KV (16.4 GB) + Q4_K_M (17.7 GB) + graph buffers = ~43.3 GB
     "940k": {"ctx": 983040, "kv": "q4_0", "scale": 3.75},
+    "524k": {"ctx": 524288, "kv": "q4_0", "scale": 2.0},
     "589k": {"ctx": 589824, "kv": "q8_0", "scale": 2.25},
     "393k": {"ctx": 393216, "kv": "f16", "scale": 1.5},
 }
@@ -427,7 +428,7 @@ def llamacpp_args(model: dict, context_mode: str) -> list[str]:
     ggufs = sorted(model_dir.glob("*.gguf"))
     if not ggufs:
         raise ManagerError(f"no .gguf found in {model_dir}", 500)
-    return [
+    args = [
         "-m", str(ggufs[0]),
         "-c", str(mode["ctx"]),
         "--port", str(CFG.backend_port),
@@ -437,8 +438,16 @@ def llamacpp_args(model: dict, context_mode: str) -> list[str]:
         "--yarn-orig-ctx", "262144",
         "-ctk", mode["kv"], "-ctv", mode["kv"],
         "-b", "256", "-ub", "256",
-        "--alias", str(model["served_name"]),
     ]
+    spec_n = int(model.get("spec_n", 0))
+    if spec_n > 0:
+        # Speculative MTP drafting with the inline draft head: fewer trunk
+        # passes per token, which matters most at deep context (measured
+        # +57-118% decode at 100-200k depth on this model). Known upstream
+        # instability (#27122) at tensor split: prefer n <= 3.
+        args += ["--spec-type", "draft-mtp", "--spec-draft-n-max", str(spec_n)]
+    args += ["--alias", str(model["served_name"])]
+    return args
 
 
 def vision_preference(st: dict, model: dict) -> bool:
@@ -1167,9 +1176,128 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _send_bytes(self, status: int, payload: bytes, ctype: str = "application/json") -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(payload)))
+        _cors_headers(self)
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _send_error(self, status: int, message: str, etype: str) -> None:
+        payload = json.dumps({
+            "error": {"message": message, "type": etype},
+        }).encode("utf-8")
+        self._send_bytes(status, payload)
+
+    def _running_served_name(self) -> str | None:
+        """Served name of the currently running backend, if any."""
+        with OP_LOCK:
+            st = load_state()
+        cur = st.get("current_model")
+        if not cur:
+            return None
+        try:
+            return str(CFG.model(cur)["served_name"])
+        except KeyError:
+            return None
+
+    def _registry_models_payload(self) -> bytes:
+        """OpenAI /v1/models listing for every registered configuration.
+
+        Each entry carries the exact context window that configuration will
+        serve (max_model_len + context_length), so clients that negotiate
+        models from the API get correct context without any local catalog.
+        Works even when no backend is running: this is the discovery path.
+        """
+        now = int(time.time())
+        data = []
+        for m in CFG.models:
+            ctx = str(m.get("context", DEFAULT_CONTEXT_MODE))
+            if m.get("backend") == "llamacpp":
+                mode = LLAMACPP_CONTEXT_MODES.get(
+                    ctx, LLAMACPP_CONTEXT_MODES[DEFAULT_LLAMACPP_CONTEXT_MODE]
+                )
+                max_len = mode["ctx"]
+            else:
+                mode = CONTEXT_MODES.get(ctx, CONTEXT_MODES[DEFAULT_CONTEXT_MODE])
+                max_len = mode["max_model_len"]
+            data.append({
+                "id": str(m["served_name"]),
+                "object": "model",
+                "created": now,
+                "owned_by": "vllm-manager",
+                "max_model_len": max_len,
+                "context_length": max_len,
+            })
+        return json.dumps({"object": "list", "data": data}).encode("utf-8")
+
+    def _negotiate_body(self, body: bytes | None, path: str) -> bytes | None:
+        """Fill in an empty/absent model on completion requests.
+
+        Clients that do not want to hardcode a model send none (or "auto"):
+        the proxy substitutes the served name of the running backend, so the
+        request is served by whatever configuration is currently loaded.
+        """
+        if body is None or "/completions" not in path:
+            return body
+        try:
+            data = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return body
+        if not isinstance(data, dict):
+            return body
+        model = data.get("model")
+        if model not in (None, "", "auto"):
+            return body  # explicit model; let the backend validate it
+        served = self._running_served_name()
+        if not served:
+            return body  # no backend; the relay's 503 explains the situation
+        data["model"] = served
+        return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+    def _reject_unloaded(self, data: dict) -> bool:
+        """409 with a switch hint when the requested model is registered but
+        a different configuration is running (only one backend can run at a
+        time on these GPUs)."""
+        model = data.get("model")
+        if not isinstance(model, str):
+            return False
+        served = self._running_served_name()
+        if served and model == served:
+            return False
+        registered = {str(m["served_name"]) for m in CFG.models}
+        registered |= {str(m["id"]) for m in CFG.models}
+        if model not in registered:
+            return False
+        if served:
+            self._send_error(
+                409,
+                f"model '{model}' is registered but not loaded; currently "
+                f"serving '{served}'. Switch the configuration from the "
+                f"control panel (or send no model to use the running one).",
+                "model_not_loaded",
+            )
+        else:
+            self._send_error(
+                503,
+                f"model '{model}' is registered but no backend is running. "
+                f"Start a configuration from the control panel.",
+                "backend_down",
+            )
+        return True
+
     def _relay(self) -> None:
         backend_host = CFG.backend_host
         backend_port = CFG.backend_port
+
+        path = self.path.split("?", 1)[0].rstrip("/")
+
+        # Model discovery: the registry answers /v1/models directly, even
+        # while no backend is running.
+        if path == "/v1/models":
+            self._send_bytes(200, self._registry_models_payload())
+            return
 
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -1178,6 +1306,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length > 0 else None
         if CFG.raw.get("normalize_system_messages", True):
             body = normalize_chat_messages(body, self.path)
+        # Model negotiation: empty/absent model -> running backend; explicit
+        # registered-but-unloaded model -> helpful 409/503 instead of a
+        # generic backend error.
+        if body is not None and "/completions" in path:
+            try:
+                data = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                data = None
+            if isinstance(data, dict):
+                if self._reject_unloaded(data):
+                    return
+                if data.get("model") in (None, "", "auto"):
+                    body = self._negotiate_body(body, self.path)
 
         fwd = {}
         for key, value in self.headers.items():
