@@ -9,30 +9,162 @@
   "public_control_port": 8000,
   "public_api_port": 8001,
   "runtime_root": "/home/tianyixia/vLLM-2080Ti-Definitive",
-  "default_model": "official",
+  "default_model": "official-98k",
   "start_timeout_s": 420,
   "models": [
     {
-      "id": "official",
-      "display_name": "Qwen3.8-27B-FP8 (official)",
+      "id": "official-98k",
+      "display_name": "FP8 official · 98k (vision)",
       "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
-      "served_name": "qwen38-27b-fp8-fast-mtp3",
+      "served_name": "qwen38-27b-fp8-98k",
       "spec_sync_mode": "auto",
       "vision": false,
       "thinking_effort": "max",
       "context": "98k",
-      "note": "MTP3 · PIECEWISE CUDA graphs · sync=auto (fast preset)"
+      "note": "MTP3 · PIECEWISE graphs · sync=auto · fp16 KV · vision-capable"
     },
     {
-      "id": "uncensored",
-      "display_name": "Qwen3.8-27B Uncensored (FP8)",
+      "id": "official-116k",
+      "display_name": "FP8 official · 116k",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
+      "served_name": "qwen38-27b-fp8-116k",
+      "spec_sync_mode": "auto",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "116k",
+      "note": "MTP3 · fp16 KV · text-only"
+    },
+    {
+      "id": "official-200k",
+      "display_name": "FP8 official · 200k",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
+      "served_name": "qwen38-27b-fp8-200k",
+      "spec_sync_mode": "auto",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "200k",
+      "note": "MTP3 · int8 KV · prefix caching · text-only"
+    },
+    {
+      "id": "official-native",
+      "display_name": "FP8 official · native 256k",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-FP8",
+      "served_name": "qwen38-27b-fp8-native",
+      "spec_sync_mode": "auto",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "native",
+      "note": "eager · turboquant 4-bit KV · no MTP · text-only · ~13 tok/s"
+    },
+    {
+      "id": "uncensored-98k",
+      "display_name": "FP8 uncensored · 98k (vision)",
       "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
-      "served_name": "Qwen3.8-27B-FP8-uncensored",
+      "served_name": "qwen38-27b-uncensored-98k",
       "spec_sync_mode": "safe",
       "vision": false,
       "thinking_effort": "max",
       "context": "98k",
-      "note": "MTP3 · PIECEWISE CUDA graphs · sync=safe (verified 2026-08-19)"
+      "note": "MTP3 · sync=safe · fp16 KV · vision-capable"
+    },
+    {
+      "id": "uncensored-116k",
+      "display_name": "FP8 uncensored · 116k",
+      "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
+      "served_name": "qwen38-27b-uncensored-116k",
+      "spec_sync_mode": "safe",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "116k",
+      "note": "MTP3 · fp16 KV · text-only"
+    },
+    {
+      "id": "uncensored-200k",
+      "display_name": "FP8 uncensored · 200k",
+      "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
+      "served_name": "qwen38-27b-uncensored-200k",
+      "spec_sync_mode": "safe",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "200k",
+      "note": "MTP3 · int8 KV · prefix caching · text-only"
+    },
+    {
+      "id": "uncensored-native",
+      "display_name": "FP8 uncensored · native 256k",
+      "model_dir": "/home/tianyixia/models/qwen-3.8-27b-uncensored",
+      "served_name": "qwen38-27b-uncensored-native",
+      "spec_sync_mode": "safe",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "native",
+      "note": "eager · turboquant 4-bit KV · no MTP · text-only"
+    },
+    {
+      "id": "llamacpp-940k",
+      "display_name": "Q4_K_M llama.cpp · 940k",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-GGUF",
+      "served_name": "qwen38-27b-q4-940k",
+      "backend": "llamacpp",
+      "vision": false,
+      "thinking_effort": "off",
+      "context": "940k",
+      "note": "llama.cpp TP=2 tensor split + NCCL · YaRN ×3.75 · q4_0 KV · ~43 tok/s · linear prefill (needle-verified @315k)"
+    },
+    {
+      "id": "llamacpp-589k",
+      "display_name": "Q4_K_M llama.cpp · 589k",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-GGUF",
+      "served_name": "qwen38-27b-q4-589k",
+      "backend": "llamacpp",
+      "vision": false,
+      "thinking_effort": "off",
+      "context": "589k",
+      "note": "llama.cpp TP=2 · YaRN ×2.25 · q8_0 KV (higher KV fidelity)"
+    },
+    {
+      "id": "llamacpp-393k",
+      "display_name": "Q4_K_M llama.cpp · 393k",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-GGUF",
+      "served_name": "qwen38-27b-q4-393k",
+      "backend": "llamacpp",
+      "vision": false,
+      "thinking_effort": "off",
+      "context": "393k",
+      "note": "llama.cpp TP=2 · YaRN ×1.5 · f16 KV (best KV fidelity)"
+    },
+    {
+      "id": "awq-98k",
+      "display_name": "AWQ int4 · 98k (vision)",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-AWQ-MTP",
+      "served_name": "qwen38-27b-awq-98k",
+      "quantization": "awq",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "98k",
+      "note": "AWQ-Marlin int4 · fp16 KV · vision-capable"
+    },
+    {
+      "id": "awq-116k",
+      "display_name": "AWQ int4 · 116k",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-AWQ-MTP",
+      "served_name": "qwen38-27b-awq-116k",
+      "quantization": "awq",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "116k",
+      "note": "AWQ-Marlin int4 · fp16 KV · text-only"
+    },
+    {
+      "id": "awq-200k",
+      "display_name": "AWQ int4 · 200k",
+      "model_dir": "/home/tianyixia/models/Qwen3.8-27B-AWQ-MTP",
+      "served_name": "qwen38-27b-awq-200k",
+      "quantization": "awq",
+      "vision": false,
+      "thinking_effort": "max",
+      "context": "200k",
+      "note": "AWQ-Marlin int4 · int8 KV · text-only"
     }
   ]
 }

@@ -29,6 +29,7 @@
     ./comfyui.nix
     ./vllm-qwen
     ./vllm-manager
+    ./llamacpp
     ./services/files-gpu.nix
 
     ./packages

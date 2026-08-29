@@ -95,6 +95,29 @@ CONTEXT_MODES = {
 DEFAULT_CONTEXT_MODE = "98k"
 GPU_UTIL = 0.94
 
+# --- llama.cpp backend (long-context tier, see docs/qwen3.8-27b-vllm-2080ti-report.md) ---
+# The vLLM fork's linear-attention prefill is quadratic (state rescan per
+# chunk); llama.cpp's chunked scan is linear, so windows past ~200k run here.
+# TP=2 tensor split (-sm tensor, NCCL allreduce), YaRN scaled from the model's
+# native 262144. KV tiers trade window size against KV fidelity.
+LLAMACPP_BIN = Path(os.environ.get(
+    "LLAMACPP_BIN",
+    str(Path.home() / "llama.cpp/build/bin/llama-server"),
+))
+_NCCL_LIB_DIRS = sorted(
+    str(p) for p in Path("/nix/store").glob("*-cuda12.9-nccl-*/lib")
+) if Path("/nix/store").is_dir() else []
+LLAMACPP_LD_LIBRARY_PATH = "/run/opengl-driver/lib" + (
+    ":" + ":".join(_NCCL_LIB_DIRS) if _NCCL_LIB_DIRS else ""
+)
+LLAMACPP_CONTEXT_MODES = {
+    # 983040: q4_0 KV (16.4 GB) + Q4_K_M (17.7 GB) + graph buffers = ~43.3 GB
+    "940k": {"ctx": 983040, "kv": "q4_0", "scale": 3.75},
+    "589k": {"ctx": 589824, "kv": "q8_0", "scale": 2.25},
+    "393k": {"ctx": 393216, "kv": "f16", "scale": 1.5},
+}
+DEFAULT_LLAMACPP_CONTEXT_MODE = "940k"
+
 # Thinking-effort tiers. "off" disables thinking at the template; low/medium/
 # high set VLLM_DEFAULT_THINKING_TOKEN_BUDGET (the fork applies it when a
 # request carries no thinking_token_budget of its own); "max" leaves the
@@ -347,7 +370,7 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
         "--enable-chunked-prefill",
         "--max-num-seqs", "1",
         "--max-num-batched-tokens", str(batched),
-        "--quantization", "fp8",
+        "--quantization", str(model.get("quantization", "fp8")),
         "--gpu-memory-utilization", f"{mode.get('gpu_util', GPU_UTIL):.3f}",
         "--enable-prompt-tokens-details",
     ]
@@ -387,6 +410,35 @@ def build_args(model: dict, vision: bool = False, effort: str = "max",
         '"max_cudagraph_capture_size":4}',
     ]
     return args
+
+
+def llamacpp_args(model: dict, context_mode: str) -> list[str]:
+    """Build the llama-server argv for a llama.cpp backend model.
+
+    Mirrors ~/llama.cpp/run-llamacpp-1m.sh: TP=2 tensor split with NCCL,
+    YaRN from the model's native 262144 window, quantized KV per context
+    tier, ubatch 256 (larger batches blow the ctx*batch KQ graph buffer on
+    22 GB cards).
+    """
+    mode = LLAMACPP_CONTEXT_MODES.get(
+        context_mode, LLAMACPP_CONTEXT_MODES[DEFAULT_LLAMACPP_CONTEXT_MODE]
+    )
+    model_dir = Path(str(model["model_dir"]))
+    ggufs = sorted(model_dir.glob("*.gguf"))
+    if not ggufs:
+        raise ManagerError(f"no .gguf found in {model_dir}", 500)
+    return [
+        "-m", str(ggufs[0]),
+        "-c", str(mode["ctx"]),
+        "--port", str(CFG.backend_port),
+        "--host", CFG.backend_host,
+        "-sm", "tensor", "-ts", "1,1", "-ngl", "999", "-fa", "on",
+        "--rope-scaling", "yarn", "--rope-scale", f"{mode['scale']}",
+        "--yarn-orig-ctx", "262144",
+        "-ctk", mode["kv"], "-ctv", mode["kv"],
+        "-b", "256", "-ub", "256",
+        "--alias", str(model["served_name"]),
+    ]
 
 
 def vision_preference(st: dict, model: dict) -> bool:
@@ -444,9 +496,36 @@ def start_model(model_id: str) -> dict:
         if not ok:
             raise ManagerError(f"cannot start: {why}")
 
-        py = backend_python()
-        if not py.is_file():
-            raise ManagerError(f"backend python missing: {py}", 500)
+        is_llamacpp = model.get("backend") == "llamacpp"
+        vision = vision_preference(st, model)
+        effort = thinking_effort_preference(st, model)
+        context_mode = context_mode_preference(st, model)
+        if is_llamacpp:
+            if not LLAMACPP_BIN.is_file():
+                raise ManagerError(f"llama.cpp binary missing: {LLAMACPP_BIN}", 500)
+            vision = False
+            effort = None
+            mode = None
+            args = llamacpp_args(model, context_mode)
+            cmd = [str(LLAMACPP_BIN), *args]
+            env = {
+                "LD_LIBRARY_PATH": LLAMACPP_LD_LIBRARY_PATH,
+                "PATH": os.environ.get("PATH", "/run/current-system/sw/bin"),
+            }
+            py = LLAMACPP_BIN
+        else:
+            mode = CONTEXT_MODES.get(context_mode, CONTEXT_MODES[DEFAULT_CONTEXT_MODE])
+            py = backend_python()
+            if not py.is_file():
+                raise ManagerError(f"backend python missing: {py}", 500)
+            args = build_args(model, vision, effort, context_mode)
+            cmd = [str(py), "-m", "vllm.entrypoints.openai.api_server", *args]
+            env = build_env(model, effort, context_mode)
+            # NOTE: expandable_segments was tried and made the recurrent OOMs
+            # worse - eager-mode requests of varying shapes kept growing the
+            # reserved segments until the GPU was exhausted.  The default
+            # caching allocator frees unused blocks instead.
+            env.pop("PYTORCH_CUDA_ALLOC_CONF", None)
         if not Path(str(model["model_dir"])).is_dir():
             raise ManagerError(f"model dir missing: {model['model_dir']}", 500)
 
@@ -454,20 +533,9 @@ def start_model(model_id: str) -> dict:
         log_path = LOG_DIR / f"{model_id}-{time.strftime('%Y%m%d-%H%M%S')}.log"
         logf = open(log_path, "ab")  # noqa: SIM115 (kept open for the child)
 
-        vision = vision_preference(st, model)
-        effort = thinking_effort_preference(st, model)
-        context_mode = context_mode_preference(st, model)
-        mode = CONTEXT_MODES.get(context_mode, CONTEXT_MODES[DEFAULT_CONTEXT_MODE])
-        args = build_args(model, vision, effort, context_mode)
-        env = build_env(model, effort, context_mode)
-        # NOTE: expandable_segments was tried and made the recurrent OOMs
-        # worse - eager-mode requests of varying shapes kept growing the
-        # reserved segments until the GPU was exhausted.  The default
-        # caching allocator frees unused blocks instead.
-        env.pop("PYTORCH_CUDA_ALLOC_CONF", None)
         try:
             proc = subprocess.Popen(
-                [str(py), "-m", "vllm.entrypoints.openai.api_server", *args],
+                cmd,
                 cwd=str(CFG.runtime_root),
                 env=env,
                 stdout=logf,
@@ -476,7 +544,15 @@ def start_model(model_id: str) -> dict:
             )
         except OSError as exc:
             logf.close()
-            raise ManagerError(f"failed to spawn vLLM: {exc}", 500) from exc
+            raise ManagerError(f"failed to spawn backend: {exc}", 500) from exc
+
+        max_model_len = (
+            LLAMACPP_CONTEXT_MODES.get(
+                context_mode,
+                LLAMACPP_CONTEXT_MODES[DEFAULT_LLAMACPP_CONTEXT_MODE],
+            )["ctx"]
+            if is_llamacpp else mode["max_model_len"]
+        )
 
         st.update({
             "current_model": model_id,
@@ -488,10 +564,10 @@ def start_model(model_id: str) -> dict:
             "healthy": False,
             "failure": None,
             "manual_stop": False,
-            "vision": vision and not mode["text_only"],
+            "vision": vision if is_llamacpp else vision and not mode["text_only"],
             "thinking_effort": effort,
             "context_mode": context_mode,
-            "max_model_len": mode["max_model_len"],
+            "max_model_len": max_model_len,
         })
         st.setdefault("last_logs", {})[model_id] = str(log_path)
         save_state(st)
@@ -500,13 +576,13 @@ def start_model(model_id: str) -> dict:
             "model": model_id,
             "pid": proc.pid,
             "phase": "starting",
-            "vision": vision and not mode["text_only"],
+            "vision": vision if is_llamacpp else vision and not mode["text_only"],
             "thinking_effort": effort,
             "context_mode": context_mode,
-            "max_model_len": mode["max_model_len"],
+            "max_model_len": max_model_len,
             "log": str(log_path),
-            "note": "backend is loading (CUDA graph capture); /health turns 200 "
-                    "when ready (usually 1.5-3 min)",
+            "note": "backend is loading; /health turns 200 when ready "
+                    "(vLLM 1.5-3 min, llama.cpp ~10-60 s)",
         }
 
 
@@ -546,8 +622,18 @@ def stop_model() -> dict:
             time.sleep(1)
 
         # belt & braces: pattern kill anything left on the internal port
-        pattern = (f"vllm.entrypoints.openai.api_server --host {CFG.backend_host} "
-                   f"--port {CFG.backend_port}")
+        cur_id = st.get("current_model")
+        is_llamacpp = False
+        if cur_id:
+            try:
+                is_llamacpp = CFG.model(cur_id).get("backend") == "llamacpp"
+            except KeyError:
+                pass
+        if is_llamacpp:
+            pattern = f"llama-server --port {CFG.backend_port}"
+        else:
+            pattern = (f"vllm.entrypoints.openai.api_server --host {CFG.backend_host} "
+                       f"--port {CFG.backend_port}")
         subprocess.run(["pkill", "-TERM", "-f", pattern], capture_output=True)
         time.sleep(3)
         subprocess.run(["pkill", "-KILL", "-f", pattern], capture_output=True)
@@ -594,9 +680,14 @@ def set_thinking_effort(model_id: str, effort: str) -> dict:
         raise ManagerError(f"unknown effort: {effort} (use off/low/medium/high/max)", 400)
     with OP_LOCK:
         try:
-            CFG.model(model_id)
+            model_cfg = CFG.model(model_id)
         except KeyError as exc:
             raise ManagerError(f"unknown model id: {model_id}", 400) from exc
+        if model_cfg.get("backend") == "llamacpp":
+            raise ManagerError(
+                "thinking effort is a vLLM-fork option; llama.cpp backends "
+                "have no thinking-token budget knob", 400
+            )
         st = load_state()
         st.setdefault("thinking_efforts", {})[model_id] = effort
         save_state(st)
@@ -618,13 +709,21 @@ def set_thinking_effort(model_id: str, effort: str) -> dict:
 def set_context(model_id: str, mode: str) -> dict:
     """Persist the per-model context mode; restart the backend when the
     running model's mode changes so the new window takes effect now."""
-    if mode not in CONTEXT_MODES:
-        raise ManagerError(f"unknown context mode: {mode} (use 98k/128k/native)", 400)
     with OP_LOCK:
         try:
-            CFG.model(model_id)
+            model_cfg = CFG.model(model_id)
         except KeyError as exc:
             raise ManagerError(f"unknown model id: {model_id}", 400) from exc
+        if model_cfg.get("backend") == "llamacpp":
+            modes = LLAMACPP_CONTEXT_MODES
+            default_mode = DEFAULT_LLAMACPP_CONTEXT_MODE
+        else:
+            modes = CONTEXT_MODES
+            default_mode = DEFAULT_CONTEXT_MODE
+        if mode not in modes:
+            raise ManagerError(
+                f"unknown context mode: {mode} (use {'/'.join(modes)})", 400
+            )
         st = load_state()
         st.setdefault("context_modes", {})[model_id] = mode
         save_state(st)
@@ -648,9 +747,14 @@ def set_vision(model_id: str, enabled: bool) -> dict:
     running model's mode changes so the flag takes effect immediately."""
     with OP_LOCK:
         try:
-            CFG.model(model_id)
+            model_cfg = CFG.model(model_id)
         except KeyError as exc:
             raise ManagerError(f"unknown model id: {model_id}", 400) from exc
+        if model_cfg.get("backend") == "llamacpp":
+            raise ManagerError(
+                "vision input is a vLLM-fork option; the llama.cpp backend "
+                "serves text-only", 400
+            )
         st = load_state()
         st.setdefault("vision_modes", {})[model_id] = bool(enabled)
         save_state(st)
@@ -693,10 +797,13 @@ def build_status() -> dict:
             "display_name": m.get("display_name", m["id"]),
             "served_name": m["served_name"],
             "model_dir": m["model_dir"],
+            "backend": m.get("backend", "vllm"),
             "note": m.get("note", ""),
             "state": "stopped",
-            "vision": vision_preference(st, m),
-            "thinking_effort": thinking_effort_preference(st, m),
+            "vision": False if m.get("backend") == "llamacpp"
+                      else vision_preference(st, m),
+            "thinking_effort": None if m.get("backend") == "llamacpp"
+                               else thinking_effort_preference(st, m),
             "context_mode": context_mode_preference(st, m),
         }
         if current == m["id"]:

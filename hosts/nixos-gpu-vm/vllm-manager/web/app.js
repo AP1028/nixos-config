@@ -80,37 +80,32 @@ function renderModels(models, backend) {
     const meta = phaseMeta(phase);
     const badge = '<span class="badge ' + meta.badge + '">' + meta.label + "</span>";
     const dir = '<div class="meta">' + escapeHtml(m.model_dir) + "</div>";
-    const served = '<div class="meta">served as: ' + escapeHtml(m.served_name) + "</div>";
+    const served = '<div class="meta">served as: ' + escapeHtml(m.served_name) +
+      ' · backend: ' + (m.backend === "llamacpp" ? "llama.cpp TP=2" : "vLLM fork") + "</div>";
     const note = m.note ? '<div class="note">' + escapeHtml(m.note) + "</div>" : "";
-    const ctxValue = m.context_mode || "98k";
-    const servingCtx = isCurrent && (backend.context_mode || null) === ctxValue;
+    const isLlamaCpp = m.backend === "llamacpp";
+    const ctxValue = m.context_mode || (isLlamaCpp ? "940k" : "98k");
     const servingVision = isCurrent && backend.vision === true;
     const visionLocked = ctxValue !== "98k";
-    const visionRow =
-      '<label class="vision-row" title="restarts the backend when toggled on the running model; 128k/native context forces text-only">' +
-      '<input type="checkbox" data-act="vision" data-model="' + escapeHtml(m.id) + '"' + (m.vision ? " checked" : "") + (visionLocked ? " disabled" : "") + ">" +
-      "<span>vision input" + (servingVision ? " · 👁 serving" : "") + (visionLocked ? " · off — only 98k supports images" : "") + "</span>" +
-      "</label>";
-    const contextRow =
-      '<label class="vision-row" title="context window; 128k/native force text-only; restarts the backend when changed on the running model">' +
-      "<span>context</span>" +
-      '<select data-act="context" data-model="' + escapeHtml(m.id) + '">' +
-      [["98k", "98k (vision-capable)"], ["116k", "116k (text-only)"], ["200k", "200k (fast, text-only)"], ["native", "native 256k (text-only)"]].map((pair) => '<option value="' + pair[0] + '"' + (ctxValue === pair[0] ? " selected" : "") + ">" + pair[1] + "</option>").join("") +
-      "</select>" +
-      (servingCtx ? '<span class="serving-tag">serving</span>' : "") +
-      "</label>";
+    const visionRow = isLlamaCpp
+      ? ""
+      : '<label class="vision-row" title="restarts the backend when toggled on the running model; non-98k configurations force text-only">' +
+        '<input type="checkbox" data-act="vision" data-model="' + escapeHtml(m.id) + '"' + (m.vision ? " checked" : "") + (visionLocked ? " disabled" : "") + ">" +
+        "<span>vision input" + (servingVision ? " · 👁 serving" : "") + (visionLocked ? " · off — 98k only" : "") + "</span>" +
+        "</label>";
 
     const effortValue = m.thinking_effort || "max";
     const servingEffort = isCurrent && (backend.thinking_effort || null) === effortValue;
     const effortOptions = ["off", "low", "medium", "high", "max"].map((eff) =>
       '<option value="' + eff + '"' + (effortValue === eff ? " selected" : "") + ">" + eff + "</option>"
     ).join("");
-    const effortRow =
-      '<label class="vision-row" title="thinking token budget; restarts the backend when changed on the running model">' +
-      "<span>effort</span>" +
-      '<select data-act="effort" data-model="' + escapeHtml(m.id) + '">' + effortOptions + "</select>" +
-      (servingEffort ? '<span class="serving-tag">serving</span>' : "") +
-      "</label>";
+    const effortRow = isLlamaCpp
+      ? ""
+      : '<label class="vision-row" title="thinking token budget; restarts the backend when changed on the running model">' +
+        "<span>effort</span>" +
+        '<select data-act="effort" data-model="' + escapeHtml(m.id) + '">' + effortOptions + "</select>" +
+        (servingEffort ? '<span class="serving-tag">serving</span>' : "") +
+        "</label>";
 
     let actions;
     if (isCurrent && (phase === "running" || phase === "ready" || phase === "starting")) {
@@ -133,7 +128,7 @@ function renderModels(models, backend) {
 
     return '<div class="card' + (isCurrent ? " active" : "") + '">' +
       "<h3>" + escapeHtml(m.display_name) + " " + badge + "</h3>" +
-      dir + served + note + visionRow + effortRow + contextRow +
+      dir + served + note + visionRow + effortRow +
       '<div class="actions">' + actions + "</div>" + failure +
       "</div>";
   }).join("");
