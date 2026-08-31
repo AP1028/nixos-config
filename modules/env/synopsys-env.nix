@@ -76,6 +76,26 @@
     '';
   };
 
+  # glibc 2.42 no longer enables an executable stack at runtime: dlopen()
+  # hard-fails with EINVAL ("cannot enable executable stack as shared object
+  # requires") for any object that requests an executable stack — and on
+  # x86-64 that includes every object WITHOUT a PT_GNU_STACK segment.
+  # Legacy EDA tooling (Cadence InstallScape's libnativemethods_lnx_64.so,
+  # etc.) still ships such libraries. Preloading a tiny exec-stack object
+  # at process startup makes glibc (rtld tunable glibc.rtld.execstack,
+  # default 1) mark the stack executable for the whole process, so all
+  # subsequent dlopens of legacy objects succeed.
+  stack-exec-shim = pkgs.stdenv.mkDerivation {
+    name = "stack-exec-shim";
+    src = pkgs.writeText "empty.c" "";
+    unpackPhase = "true";
+    buildPhase = "$CC -shared -fPIC -Wl,-z,execstack -o libstackexec.so $src";
+    installPhase = ''
+      mkdir -p $out/lib
+      cp libstackexec.so $out/lib/
+    '';
+  };
+
   # Synopsys tools link against libxml2.so.2 (older SONAME); nixpkgs ships
   # libxml2.so.16. This compat layer provides both.
   libxml2-compat = pkgs.runCommand "libxml2-compat" {} ''
@@ -215,7 +235,8 @@
       export IN_FHS_ENV="synopsys-env"
       unset http_proxy https_proxy ftp_proxy rsync_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY RSYNC_PROXY ALL_PROXY no_proxy NO_PROXY
       export LANG=C LC_ALL=C
-      export LD_PRELOAD="${scl-root-inode-fix}/lib/libscl_fix.so"
+      export LD_PRELOAD="${stack-exec-shim}/lib/libstackexec.so:${scl-root-inode-fix}/lib/libscl_fix.so"
+      export GLIBC_TUNABLES=glibc.rtld.execstack=1
       export __GLX_VENDOR_LIBRARY_NAME=mesa
       export LIBGL_DRIVERS_PATH="/run/opengl-driver/lib/dri:/run/opengl-driver-32/lib/dri"
       if [ -d /run/opengl-driver/share/glvnd/egl_vendor.d ]; then

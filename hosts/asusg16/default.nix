@@ -62,6 +62,7 @@
     ../../modules/env/common.nix
     ../../modules/env/no-internet.nix
     ../../modules/system/sudo-env.nix
+    ../../modules/system/session-scripts.nix
   ];
 
   # nixpkgs added its own `services.comfyui` module (2026-08); the comfyui-nix

@@ -191,6 +191,8 @@
     speedtest-cli
 
     tigervnc
+    tcsh
+    ksh
   ];
 
   programs.java = {

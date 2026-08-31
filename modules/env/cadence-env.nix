@@ -44,6 +44,8 @@
       tcsh
       ksh
       coreutils
+      procps
+      xorg.xvfb
       gawk
       perl
       python3
@@ -169,6 +171,25 @@
       export VSM_FWK=VSM95011
       export VSM_ITK=VSM12141
       export LD_LIBRARY_PATH="/usr/lib64:/usr/lib:/run/opengl-driver/lib:/run/opengl-driver-32/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      # EE477 environment (equivalent of sourcing setup_ee477_ee577a_v2602.csh)
+      export CDSBASE="$HOME/.cadence"
+      export CDS_INST_DIR="$CDSBASE/IC251"
+      export IC_HOME="$CDS_INST_DIR"
+      export CDSHOME="$CDS_INST_DIR"
+      export SPECTRE_HOME="$CDSBASE/spectre181"
+      export OA_HOME="$CDS_INST_DIR/share/oa"
+      export CDS_AUTO_64BIT=ALL
+      export CDS_Netlisting_Mode=Analog
+      export SPECTRE_DEFAULTS=-E
+      for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
+        case ":$PATH:" in
+          *":$p:"*) ;;
+          *) PATH="$p:$PATH" ;;
+        esac
+      done
+      # user wrapper dir first: ~/.cadence/bin/virtuoso preloads the PDK libs
+      export PATH="$HOME/.cadence/bin:$PATH"
+      export PATH
     '';
     runScript = "tcsh";
   };
