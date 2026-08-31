@@ -1,20 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "$(id -u)" -eq 0 ]; then
-  echo "Do not run this script with sudo. It handles sudo internally where needed." >&2
-  exit 1
-fi
-
-# Guard: never proceed if the invoking user resolves to root — this would bake
-# username = "root" into local.nix and the users config. Belt-and-suspenders on
-# top of the id -u check above.
-if [ "$(whoami)" = "root" ]; then
-  echo "Refusing to run as root (whoami = root). Re-run as a regular user; sudo is handled internally." >&2
-  exit 1
-fi
-
 CONFIG_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Two execution paths so the script works directly, via sudo, or via sudo-env:
+#   as_user  — run "normal user" commands (git, file creation) as the repo owner
+#              even when the script itself is running as root.
+#   run_root — run privileged commands directly when already root, via sudo
+#              otherwise.
+if [ "$(id -u)" -eq 0 ]; then
+  if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+    REPO_USER="$SUDO_USER"
+  else
+    REPO_USER="$(stat -c %U "$CONFIG_DIR" 2>/dev/null || true)"
+  fi
+  if [ -z "$REPO_USER" ] || [ "$REPO_USER" = root ]; then
+    echo "Refusing to run as root: could not determine the repo owner." >&2
+    exit 1
+  fi
+  as_user() { sudo -u "$REPO_USER" -- "$@"; }
+  run_root() { "$@"; }
+else
+  REPO_USER="$(whoami)"
+  as_user() { "$@"; }
+  run_root() { sudo "$@"; }
+fi
 HOST=""
 AUTO_REPLACE=0
 AUTO_ABORT=0
@@ -156,7 +166,7 @@ if [ -e /etc/nixos/hardware-configuration.nix ] &&
         # Sync the repo with upstream BEFORE touching the file, so the
         # replacement is committed on top of the latest remote state.
         if command -v git >/dev/null 2>&1; then
-          if (cd "$CONFIG_DIR" && timeout 30 git pull --ff-only) >/dev/null 2>&1; then
+          if (cd "$CONFIG_DIR" && as_user timeout 30 git pull --ff-only) >/dev/null 2>&1; then
             echo "git pull: OK"
           else
             echo "warning: git pull skipped (unavailable or timed out)"
@@ -165,22 +175,22 @@ if [ -e /etc/nixos/hardware-configuration.nix ] &&
           echo "warning: git not found — hardware-configuration.nix will be updated locally only"
         fi
 
-        mkdir -p "$(dirname "$REPO_HW")"
-        cp /etc/nixos/hardware-configuration.nix "$REPO_HW"
+        as_user mkdir -p "$(dirname "$REPO_HW")"
+        as_user cp /etc/nixos/hardware-configuration.nix "$REPO_HW"
         echo "Replaced: $REPO_HW"
 
         if command -v git >/dev/null 2>&1; then
           # -f: this may be a brand-new host whose hardware-configuration.nix
           # has never existed in the repo — force-stage it so it is tracked
           # even if some ignore rule would otherwise skip it.
-          if (cd "$CONFIG_DIR" && git add -f "hosts/$HOST/hardware-configuration.nix"); then
-            if (cd "$CONFIG_DIR" && git diff --cached --quiet); then
+          if (cd "$CONFIG_DIR" && as_user git add -f "hosts/$HOST/hardware-configuration.nix"); then
+            if (cd "$CONFIG_DIR" && as_user git diff --cached --quiet); then
               echo "git: no changes to commit"
             else
-              if (cd "$CONFIG_DIR" && git commit -m "Update hardware-configuration.nix for $HOST from /etc/nixos install"); then
+                  if (cd "$CONFIG_DIR" && as_user git commit -m "Update hardware-configuration.nix for $HOST from /etc/nixos install"); then
                 echo "git commit: OK"
-              elif ! (cd "$CONFIG_DIR" && git config user.email >/dev/null 2>&1 &&
-                      git config user.name >/dev/null 2>&1); then
+              elif ! (cd "$CONFIG_DIR" && as_user git config user.email >/dev/null 2>&1 &&
+                      as_user git config user.name >/dev/null 2>&1); then
                 # The commit failed and no identity is configured for this repo.
                 # Prompt for one (defaults are the auto-set values); if there is
                 # no TTY, auto-set the repo-local identity and continue.
@@ -198,10 +208,10 @@ if [ -e /etc/nixos/hardware-configuration.nix ] &&
                   GIT_EMAIL="$DEFAULT_EMAIL"
                   echo "git: no TTY — auto-setting repo-local identity (${GIT_NAME} <${GIT_EMAIL}>)"
                 fi
-                if (cd "$CONFIG_DIR" && git config user.name "$GIT_NAME" &&
-                    git config user.email "$GIT_EMAIL"); then
+                if (cd "$CONFIG_DIR" && as_user git config user.name "$GIT_NAME" &&
+                    as_user git config user.email "$GIT_EMAIL"); then
                   echo "git: identity set repo-locally to ${GIT_NAME} <${GIT_EMAIL}>"
-                  if (cd "$CONFIG_DIR" && git commit -m "Update hardware-configuration.nix for $HOST from /etc/nixos install"); then
+              if (cd "$CONFIG_DIR" && as_user git commit -m "Update hardware-configuration.nix for $HOST from /etc/nixos install"); then
                     echo "git commit: OK"
                   else
                     echo "warning: git commit failed after setting identity — see error above" >&2
@@ -216,7 +226,7 @@ if [ -e /etc/nixos/hardware-configuration.nix ] &&
           else
             echo "warning: git add failed — see error above" >&2
           fi
-          if (cd "$CONFIG_DIR" && timeout 30 git push); then
+          if (cd "$CONFIG_DIR" && as_user timeout 30 git push); then
             echo "git push: OK"
           else
             echo "warning: git push skipped (unavailable or timed out)" >&2
@@ -247,19 +257,19 @@ fi
 if [ "$(readlink -f /etc/nixos 2>/dev/null)" != "$CONFIG_DIR" ]; then
   if [ -e /etc/nixos ] || [ -L /etc/nixos ]; then
     echo "Backing up existing /etc/nixos to /etc/nixos-bak..."
-    sudo mv /etc/nixos /etc/nixos-bak
+    run_root mv /etc/nixos /etc/nixos-bak
   fi
   echo "Linking /etc/nixos → $CONFIG_DIR"
-  sudo ln -s "$CONFIG_DIR" /etc/nixos
+  run_root ln -s "$CONFIG_DIR" /etc/nixos
 fi
 
 # First run: create local.nix from the tracked template
 if [ ! -f "$CONFIG_DIR/local.nix" ]; then
   if [ "$AUTO_LOCAL_NIX" -eq 1 ]; then
-    MAIN_USER="$(whoami)"
+    MAIN_USER="$REPO_USER"
     echo "Auto-creating local.nix with current user: $MAIN_USER"
   else
-    DEFAULT_USER="$(whoami)"
+    DEFAULT_USER="$REPO_USER"
     echo ""
     echo "First time setup: configure the main user for this machine."
     read -rp "Username [${DEFAULT_USER}]: " MAIN_USER
@@ -270,7 +280,7 @@ if [ ! -f "$CONFIG_DIR/local.nix" ]; then
   sed -e "s|/home/main-user/nixos-config|$CONFIG_DIR|" \
       -e "s|main-user|$MAIN_USER|g" \
       -e "s|Main User|$MAIN_USER|g" \
-      "$CONFIG_DIR/local.nix.template" > "$CONFIG_DIR/local.nix"
+      "$CONFIG_DIR/local.nix.template" | as_user tee "$CONFIG_DIR/local.nix" >/dev/null
   echo "Created local.nix with username: $MAIN_USER, configDir: $CONFIG_DIR"
 fi
 
@@ -279,4 +289,4 @@ cd "$CONFIG_DIR" || { echo "Error: Could not navigate to $CONFIG_DIR"; exit 1; }
 echo "Starting NixOS rebuild for $HOST..."
 # --accept-flake-config: don't prompt to trust the flake-declared nixConfig
 # (nixos-apple-silicon.cachix.org substituter + public key) on first build.
-sudo nixos-rebuild switch --impure --accept-flake-config --flake "$CONFIG_DIR#$HOST"
+run_root nixos-rebuild switch --impure --accept-flake-config --flake "$CONFIG_DIR#$HOST"

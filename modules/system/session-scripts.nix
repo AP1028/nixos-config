@@ -149,6 +149,14 @@ in {
     (pkgs.writeShellScriptBin "force-login" ''
       set -euo pipefail
 
+      # Refuse to run as root: this script talks to the console user's session
+      # and re-execs subcommands as that user; `sudo` is used internally only
+      # for the specific privileged steps.
+      if [ "$(id -u)" -eq 0 ]; then
+        echo "error: run as your normal user, not root (sudo is handled internally)" >&2
+        exit 1
+      fi
+
       ${helpers}
 
       FORCE=0
@@ -252,6 +260,33 @@ PYEOF
       # compositors — systemd/logind/the greeter legitimately hold card fds).
       sudo pkill -9 -x X 2>/dev/null || true
       sudo pkill -9 -x Xorg 2>/dev/null || true
+      # Screen capture / streaming tools (Sunshine/Moonlight, OBS, screen
+      # recorders, ffmpeg kmsgrab) grab /dev/dri/card* for KMS-plane capture and
+      # VAAPI encode. If a stream is active during a flip, the next compositor
+      # can't open the DRM device ("Device or resource busy") and the greeter
+      # shows a black screen. Kill them (console-user only) so the device is
+      # released before the new compositor starts.
+      echo "killing screen-capture/streaming processes..."
+      for pid in $(procs_of_console_user); do
+        case "$(proc_exe "$pid")" in
+          *sunshine*|*wl-screenrec*|*wf-recorder*|*/obs|*obs-studio*|*kmsgrab*|*ffmpeg*|*gnome-screencast*)
+            kill "$pid" 2>/dev/null || true
+            ;;
+        esac
+      done
+      sleep 1
+      for pid in $(procs_of_console_user); do
+        case "$(proc_exe "$pid")" in
+          *sunshine*|*wl-screenrec*|*wf-recorder*|*/obs|*obs-studio*|*kmsgrab*|*ffmpeg*|*gnome-screencast*)
+            kill -9 "$pid" 2>/dev/null || true
+            ;;
+        esac
+      done
+      # Wait for the DRM devices to be released. Anything owned by the console
+      # user that still holds a card (a dying compositor, or a capture tool that
+      # ignored SIGTERM) is killed after a short grace period. systemd/logind
+      # and the SDDM greeter (uid != CONSOLE_USER) legitimately hold card fds
+      # and are left alone.
       echo "waiting for DRM devices to be released..."
       for i in $(seq 1 30); do
         BUSY=""
@@ -266,9 +301,14 @@ PYEOF
                 X|Xorg)
                   BUSY="$BUSY ''${tgt##*/dri/}"
                   ;;
-                *kwin_wayland*|*kwin_x11*)
+                *)
                   if [ "$(stat -c %u "/proc/$p" 2>/dev/null)" = "$CONSOLE_UID" ]; then
                     BUSY="$BUSY ''${tgt##*/dri/}"
+                    if [ "$i" -ge 4 ]; then
+                      echo "  killing $comm (pid $p) holding $tgt"
+                      kill "$p" 2>/dev/null || true
+                      [ "$i" -ge 8 ] && kill -9 "$p" 2>/dev/null || true
+                    fi
                   fi
                   ;;
               esac
@@ -332,6 +372,12 @@ PYEOF
     # rebuilding. Usage: flip-session [--force] x11|wayland
     (pkgs.writeShellScriptBin "flip-session" ''
       set -euo pipefail
+
+      # Refuse to run as root (see force-login for rationale).
+      if [ "$(id -u)" -eq 0 ]; then
+        echo "error: run as your normal user, not root (sudo is handled internally)" >&2
+        exit 1
+      fi
 
       FORCE=0
       TARGET=""
