@@ -45,7 +45,7 @@
       ksh
       coreutils
       procps
-      xorg.xvfb
+      xvfb
       gawk
       perl
       python3

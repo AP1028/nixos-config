@@ -45,7 +45,7 @@
 
     wechat-uos
     go-musicfox
-    libreoffice-qt6-fresh
+    libreoffice-qt-stable
     kdePackages.okular
     gimp3-with-plugins
     krita

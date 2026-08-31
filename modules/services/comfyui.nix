@@ -28,7 +28,10 @@
   comfyuiPatched = pkgs.applyPatches {
     name = "comfyui-nix";
     src = comfyuiSrc;
-    patches = [../../packages/patches/comfyui-nix-deps-check.patch];
+    patches = [
+      ../../packages/patches/comfyui-nix-deps-check.patch
+      ../../packages/patches/comfyui-nix-cccl.patch
+    ];
   };
 
   # Fresh nixpkgs instance (not the system pkgs): avoids infinite recursion

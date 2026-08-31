@@ -182,7 +182,7 @@
     powertop
     linuxPackages_latest.turbostat
 
-    libreoffice-qt6-fresh
+    libreoffice-qt-stable
 
     wireshark
     wireshark-cli
