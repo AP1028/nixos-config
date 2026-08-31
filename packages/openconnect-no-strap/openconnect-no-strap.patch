@@ -1,0 +1,91 @@
+--- a/openconnect-internal.h
++++ b/openconnect-internal.h
+@@ -483,6 +483,7 @@
+ 	struct http_auth_state http_auth[MAX_AUTH_TYPES];
+ 	struct http_auth_state proxy_auth[MAX_AUTH_TYPES];
+ 	int no_external_auth;
++	int no_strap;	/* skip STRAP key registration (ASA rejects the resulting session cookie on reconnect) */
+ 	const char *external_browser;
+ 
+ 	char *localname;
+--- a/openconnect.h
++++ b/openconnect.h
+@@ -787,6 +787,12 @@
+ void openconnect_set_external_browser_callback(struct openconnect_info *vpninfo,
+ 					       openconnect_open_webview_vfn);
+ 
++/* Disable STRAP key registration/authentication (X-AnyConnect-STRAP-*).
++ * Some ASAs bind the session to the STRAP keys and reject the resulting
++ * session cookie from a new connection; with this set, the obtained cookie
++ * works with plain `openconnect -C "webvpn=..."`. */
++void openconnect_set_no_strap(struct openconnect_info *vpninfo, int val);
++
+ /* Callback to allow binding a newly created socket's file descriptor to
+    a specific interface, e.g. with SO_BINDTODEVICE. This tells the kernel
+    not to route the traffic in question over the VPN tunnel. */
+--- a/cstp.c
++++ b/cstp.c
+@@ -255,7 +255,7 @@
+ 		2004, "Cisco Systems, Inc.");
+ 
+ #ifdef HAVE_HPKE_SUPPORT
+-	if (!vpninfo->no_external_auth && vpninfo->strap_pubkey)
++	if (!vpninfo->no_external_auth && !vpninfo->no_strap && vpninfo->strap_pubkey)
+ 		append_connect_strap_headers(vpninfo, reqbuf, strap_rekey);
+ #endif
+ 
+@@ -695,7 +695,7 @@
+ 	if (!vpninfo->cookies) {
+ 		internal_split_cookies(vpninfo, 0, "webvpn");
+ #ifdef HAVE_HPKE_SUPPORT
+-		if (!vpninfo->no_external_auth) {
++		if (!vpninfo->no_external_auth && !vpninfo->no_strap) {
+ 			const char *strap_privkey = http_get_cookie(vpninfo, "openconnect_strapkey");
+ 			if (strap_privkey && *strap_privkey) {
+ 				int derlen;
+@@ -1289,7 +1289,7 @@
+ 	if (vpninfo->try_http_auth)
+ 		buf_append(buf, "X-Support-HTTP-Auth: true\r\n");
+ #ifdef HAVE_HPKE_SUPPORT
+-	if (!vpninfo->no_external_auth) {
++	if (!vpninfo->no_external_auth && !vpninfo->no_strap) {
+ 		if (!vpninfo->strap_pubkey || !vpninfo->strap_dh_pubkey) {
+ 			int err = generate_strap_keys(vpninfo);
+ 			if (err) {
+--- a/auth.c
++++ b/auth.c
+@@ -1665,7 +1665,7 @@
+ 
+ 	struct oc_text_buf *cookie_buf = buf_alloc();
+ #ifdef HAVE_HPKE_SUPPORT
+-	if (!vpninfo->no_external_auth && vpninfo->strap_key) {
++	if (!vpninfo->no_external_auth && !vpninfo->no_strap && vpninfo->strap_key) {
+ 		buf_append(cookie_buf, "openconnect_strapkey=");
+ 		append_strap_privkey(vpninfo, cookie_buf);
+ 		buf_append(cookie_buf, "; webvpn=");
+--- a/library.c
++++ b/library.c
+@@ -1908,6 +1908,13 @@
+ 	vpninfo->try_http_auth = 0;
+ }
+ 
++void openconnect_set_no_strap(struct openconnect_info *vpninfo, int val)
++{
++	if (!vpninfo)
++		return;
++	vpninfo->no_strap = !!val;
++}
++
+ int openconnect_webview_load_changed(struct openconnect_info *vpninfo,
+ 				      const struct oc_webview_result *result)
+ {
+--- a/libopenconnect.map.in
++++ b/libopenconnect.map.in
+@@ -122,6 +122,7 @@
+ OPENCONNECT_5_8 {
+  global:
+ 	openconnect_set_external_browser_callback;
++	openconnect_set_no_strap;
+ 	openconnect_set_mca_cert;
+ 	openconnect_set_mca_key_password;
+ 	openconnect_set_useragent;

@@ -50,6 +50,8 @@
     ../../modules/services/samba.nix
     ../../modules/services/uudeck.nix
 
+    ../../modules/packages/plasma-nm-sso-fix.nix
+
     ./users
 
     ../../modules/env/xilinx-env.nix

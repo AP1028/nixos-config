@@ -1,0 +1,231 @@
+--- a/vpn/openconnect/openconnectauth.cpp
++++ b/vpn/openconnect/openconnectauth.cpp
+@@ -17,6 +17,8 @@
+ #include <QByteArray>
+ #include <QComboBox>
+ #include <QCryptographicHash>
++#include <QEventLoop>
++#include <QHash>
+ #include <QDialog>
+ #include <QDialogButtonBox>
+ #include <QDomDocument>
+@@ -93,6 +95,12 @@
+     Token token;
+     QAtomicPointer<QSemaphore> waitForWebEngineFinish;
+     OpenconnectWebAuthDialog *authDialog;
++    /* Latest cookie value per name, as seen by the QWebEngine cookie store.
++     * openconnect's cstp_sso_detect_done() only considers the cookies passed
++     * in the same oc_webview_result as the final URI, and QWebEngine emits
++     * cookieAdded asynchronously - so we cache the cookies here and attach
++     * them to every load_changed() report. */
++    QHash<QByteArray, QByteArray> webviewCookies;
+ 
+     enum LogLevels {
+         Error = 0,
+@@ -452,6 +460,12 @@
+ 
+     secretData.insert("secrets", QVariant::fromValue<NMStringMap>(secrets));
+ 
++    QStringList logKeys;
++    for (auto it = secrets.constBegin(); it != secrets.constEnd(); ++it) {
++        logKeys << it.key() + "=" + QString::number(it.value().size()) + "B/" + it.value().left(30);
++    }
++    qInfo() << "plasma-nm openconnect: setting() secrets:" << logKeys.join(", ");
++
+     // These secrets are not officially part of the secrets which would be returned back to NetworkManager. We just
+     // need to somehow get them to our secret agent which will handle them separately and store them.
+     if (!d->tmpSecrets.isEmpty()) {
+@@ -525,15 +539,20 @@
+ void OpenconnectAuthWidget::handleWebEngineCookie(const QNetworkCookie &cookie)
+ {
+     Q_D(OpenconnectAuthWidget);
+-    const char *cookiesArr[3] = {nullptr};
+ 
+-    cookiesArr[0] = cookie.name().constData();
+-    cookiesArr[1] = cookie.value().constData();
++    d->webviewCookies.insert(cookie.name(), cookie.value());
++    Q_EMIT webEngineCookieCached();
++
++    qInfo() << "plasma-nm openconnect: cookieAdded" << cookie.name() << "len=" << cookie.value().size()
++            << "cached=" << d->webviewCookies.size();
++
++    QList<QByteArray> storage;
++    QList<const char *> cookiesArr = webviewCookieArray(storage);
+ 
+ #if OPENCONNECT_CHECK_VER(5, 7)
+     struct oc_webview_result res;
+     res.headers = nullptr;
+-    res.cookies = cookiesArr;
++    res.cookies = cookiesArr.data();
+     // Hack due to lack of NULL pointer check in AnyConnect sso_detect_done
+     // logic in libopenconnect.
+     res.uri = "";
+@@ -549,7 +568,8 @@
+ void OpenconnectAuthWidget::handleWebEngineLoad(const QWebEngineLoadingInfo &loadingInfo)
+ {
+     Q_D(OpenconnectAuthWidget);
+-    const char *cookiesArr[1] = {nullptr};
++    QList<QByteArray> storage;
++    QList<const char *> cookiesArr = webviewCookieArray(storage);
+     QList<const char *> responseHeaderList;
+ 
+     switch (loadingInfo.status()) {
+@@ -570,12 +590,15 @@
+     }
+     responseHeaderList.push_back(nullptr);
+ 
++    qInfo() << "plasma-nm openconnect: load" << loadingInfo.url().toString() << "status=" << int(loadingInfo.status())
++            << "cachedCookies=" << d->webviewCookies.size();
++
+ #if OPENCONNECT_CHECK_VER(5, 7)
+     struct oc_webview_result res;
+     res.headers = responseHeaderList.data();
+     // Hack due to lack of NULL pointer check in AnyConnect sso_detect_done
+     // logic in libopenconnect.
+-    res.cookies = cookiesArr;
++    res.cookies = cookiesArr.data();
+     res.uri = "";
+     if (!openconnect_webview_load_changed(d->vpninfo, &res)) {
+         QSemaphore *waitForWebEngineFinish = d->waitForWebEngineFinish.fetchAndStoreRelaxed(nullptr);
+@@ -589,15 +612,35 @@
+ void OpenconnectAuthWidget::handleWebEngineUrl(const QUrl &url)
+ {
+     Q_D(OpenconnectAuthWidget);
++
++    // QWebEngine delivers cookieAdded asynchronously, so the SSO token cookie
++    // set on the 302 leading to the final page can arrive after the final URI
++    // has already been reported. openconnect decides "SSO done" on the report
++    // carrying the final URI and only uses the cookies of *that* report, so
++    // without this wait it would submit an empty token. Wait briefly for any
++    // pending cookie signals, then report the URI with the cached cookies.
++    QEventLoop cookieWait;
++    QTimer cookieWaitTimer;
++    cookieWaitTimer.setSingleShot(true);
++    connect(&cookieWaitTimer, &QTimer::timeout, &cookieWait, &QEventLoop::quit);
++    connect(this, &OpenconnectAuthWidget::webEngineCookieCached, &cookieWait, &QEventLoop::quit);
++    cookieWaitTimer.start(500);
++    cookieWait.exec();
++
++    qInfo() << "plasma-nm openconnect: urlChanged" << url.toString()
++            << "cachedCookies=" << d->webviewCookies.size()
++            << "hasToken=" << d->webviewCookies.contains(QByteArray("acSamlv2Token"));
++
+     // Hack due to lack of NULL pointer check in AnyConnect sso_detect_done
+     // logic in libopenconnect.
+-    const char *cookiesArr[1] = {nullptr};
++    QList<QByteArray> storage;
++    QList<const char *> cookiesArr = webviewCookieArray(storage);
+     QByteArray urlByteArray = url.toString().toLocal8Bit();
+ 
+ #if OPENCONNECT_CHECK_VER(5, 7)
+     struct oc_webview_result res;
+     res.headers = nullptr;
+-    res.cookies = cookiesArr;
++    res.cookies = cookiesArr.data();
+     res.uri = urlByteArray.constData();
+     if (!openconnect_webview_load_changed(d->vpninfo, &res)) {
+         QSemaphore *waitForWebEngineFinish = d->waitForWebEngineFinish.fetchAndStoreRelaxed(nullptr);
+@@ -925,6 +968,23 @@
+     d->workerWaiting.wakeAll();
+ }
+ 
++QList<const char *> OpenconnectAuthWidget::webviewCookieArray(QList<QByteArray> &storage)
++{
++    Q_D(OpenconnectAuthWidget);
++
++    QList<const char *> arr;
++    storage.reserve(d->webviewCookies.size() * 2 + 1);
++    for (auto it = d->webviewCookies.constBegin(); it != d->webviewCookies.constEnd(); ++it) {
++        storage.append(it.key());
++        storage.append(it.value());
++    }
++    for (int i = 0; i < storage.size(); ++i) {
++        arr.append(storage.at(i).constData());
++    }
++    arr.append(nullptr);
++    return arr;
++}
++
+ void OpenconnectAuthWidget::workerFinished(const int &ret)
+ {
+     Q_D(OpenconnectAuthWidget);
+--- a/vpn/openconnect/openconnectauth.h
++++ b/vpn/openconnect/openconnectauth.h
+@@ -60,6 +60,10 @@
+     void handleWebAuthUxRequested(QWebEngineWebAuthUxRequest *request);
+     void handleWebAuthUxStateChanged(QWebEngineWebAuthUxRequest::WebAuthUxState state);
+     void openWebEngine(const char *, QSemaphore *);
++    QList<const char *> webviewCookieArray(QList<QByteArray> &storage);
++
++Q_SIGNALS:
++    void webEngineCookieCached();
+ };
+ 
+ #endif // OPENCONNECTAUTH_H
+--- a/vpn/openconnect/openconnectauthworkerthread.cpp
++++ b/vpn/openconnect/openconnectauthworkerthread.cpp
+@@ -7,6 +7,7 @@
+ #include "openconnectauthworkerthread.h"
+ 
+ #include <QByteArray>
++#include <QDebug>
+ #include <QDesktopServices>
+ #include <QMutex>
+ #include <QSemaphore>
+@@ -102,6 +103,11 @@
+                                                 OpenconnectAuthStaticWrapper::writeProgress,
+                                                 this);
+     openconnect_set_cancel_fd(m_openconnectInfo, cancelFd);
++    /* Cisco STRAP registers a key during auth; the ASA then rejects the
++     * resulting session cookie from a fresh connection (401). Disable it so
++     * the obtained cookie works with the tunnel binary, exactly like the
++     * non-STRAP aggregate-auth flow. */
++    openconnect_set_no_strap(m_openconnectInfo, 1);
+ #if OPENCONNECT_CHECK_VER(5, 7)
+     openconnect_set_webview_callback(m_openconnectInfo, OpenconnectAuthStaticWrapper::openWebEngine);
+ #endif
+@@ -120,6 +126,9 @@
+     openconnect_init_ssl();
+     Q_EMIT initTokens();
+     int ret = openconnect_obtain_cookie(m_openconnectInfo);
++    qInfo() << "plasma-nm openconnect worker: obtain_cookie ret=" << ret
++            << "cookie=" << (openconnect_get_cookie(m_openconnectInfo) ? QString::fromLatin1(openconnect_get_cookie(m_openconnectInfo)) : QStringLiteral("(none)"))
++            << "cookie_len=" << (openconnect_get_cookie(m_openconnectInfo) ? qstrlen(openconnect_get_cookie(m_openconnectInfo)) : 0);
+     if (*m_userDecidedToQuit) {
+         return;
+     }
+@@ -209,6 +218,7 @@
+         return;
+     }
+     const QString msg = QString::vasprintf(fmt, argPtr);
++    qInfo() << "plasma-nm openconnect worker: [" << level << "] " << msg.trimmed();
+     Q_EMIT updateLog(msg, level);
+ }
+ 
+@@ -220,6 +230,7 @@
+ 
+     Q_EMIT openWebEngine(loginUri, &waitForWebEngineFinish);
+     waitForWebEngineFinish.acquire();
++    qInfo() << "plasma-nm openconnect worker: openWebEngine returned";
+ 
+     return 0;
+ }
+--- a/kded/secretagent.cpp
++++ b/kded/secretagent.cpp
+@@ -173,6 +173,16 @@
+                 }
+             }
+ 
++            {
++                const QVariantMap vpnMap = connection.value(QStringLiteral("vpn"));
++                const NMStringMap secretMap = qdbus_cast<NMStringMap>(vpnMap.value(QStringLiteral("secrets")));
++                QStringList logKeys;
++                for (auto it = secretMap.constBegin(); it != secretMap.constEnd(); ++it) {
++                    logKeys << it.key() + "=" + QString::number(it.value().size()) + "B/" + it.value().left(30);
++                }
++                qInfo() << "plasma-nm secretagent: sending secrets:" << logKeys.join(", ");
++            }
++
+             sendSecrets(connection, request.message);
+             NetworkManager::ConnectionSettings::Ptr connectionSettings =
+                 NetworkManager::ConnectionSettings::Ptr(new NetworkManager::ConnectionSettings(connection));

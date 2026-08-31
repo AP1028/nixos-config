@@ -3,6 +3,7 @@
   pkgs,
   ...
 }: let
+  gconf = pkgs.callPackage ./gconf.nix {};
   game-env = pkgs.buildFHSEnv {
     name = "game-env";
     targetPkgs = pkgs: with pkgs; [
@@ -40,6 +41,8 @@
       libXcomposite
       libXdamage
       libXScrnSaver
+      libXtst
+      libnotify
       libxcb
       libxshmfence
       xcbutilkeysyms
@@ -59,6 +62,14 @@
       libpulseaudio
       openal
       libsndfile
+
+      # ── GStreamer (needed by WebKit in webview-based games; without these
+      #    WebKitWebProcess crashes in MediaPlayerPrivateGStreamer::createAudioSink) ──
+      gst_all_1.gstreamer
+      gst_all_1.gst-plugins-base
+      gst_all_1.gst-plugins-good
+      gst_all_1.gst-plugins-bad
+      gst_all_1.gst-plugins-ugly
 
       # ── Input ──
       libinput
@@ -110,6 +121,8 @@
       webkitgtk_4_1
       libavif
       dav1d
+      gconf
+      dbus-glib
 
       # ── Runtimes ──
       dotnet-runtime_9

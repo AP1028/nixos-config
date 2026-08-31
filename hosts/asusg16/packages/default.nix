@@ -114,6 +114,7 @@
     aircrack-ng
     freerdp
     iw
+    openconnect
     openvpn
     usbutils
     wirelesstools
