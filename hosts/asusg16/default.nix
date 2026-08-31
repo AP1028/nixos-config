@@ -56,6 +56,7 @@
 
     ../../modules/env/xilinx-env.nix
     ../../modules/env/synopsys-env.nix
+    ../../modules/env/cadence-env.nix
     ../../modules/env/matlab-env.nix
     ../../modules/env/game-env.nix
     ../../modules/env/common.nix

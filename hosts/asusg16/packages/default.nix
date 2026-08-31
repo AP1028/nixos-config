@@ -189,6 +189,8 @@
 
     speedtest
     speedtest-cli
+
+    tigervnc
   ];
 
   programs.java = {
