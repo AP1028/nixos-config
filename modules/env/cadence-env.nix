@@ -11,20 +11,109 @@
   # eager-relocation path because libapr doesn't list libm in NEEDED.
   # Adding libm.so.6 to NEEDED fixes the crash (no LD_PRELOAD required —
   # Cadence's saSecurity rejects preloads).
-  cds-apr = pkgs.stdenv.mkDerivation {
+  cds-apr = pkg: pkgs.stdenv.mkDerivation {
     pname = "cds-apr-libm";
-    version = pkgs.apr.version;
-    src = pkgs.apr;
+    version = pkg.version;
+    src = pkg;
     nativeBuildInputs = [pkgs.patchelf];
     unpackPhase = "true";
     buildPhase = ''
       mkdir -p $out/lib
       cp -a $src/lib/libapr-1.so.0* $out/lib/
-      chmod +w $out/lib/libapr-1.so.0.7.6
-      patchelf --add-needed libm.so.6 $out/lib/libapr-1.so.0.7.6
+      chmod +w $out/lib/libapr-1.so.0.*
+      patchelf --add-needed libm.so.6 $out/lib/libapr-1.so.0.*
     '';
     installPhase = "true";
   };
+
+  # aarch64 hosts (macbook): Cadence tools are x86_64 binaries, so the FHS env
+  # carries box64 + an x86_64 library tree and cadence entry points are
+  # wrapped in box64 launchers. x86_64 hosts run the tools natively.
+  isAarch64 = pkgs.stdenv.hostPlatform.isAarch64;
+
+  x86 = pkgs.pkgsCross.gnu64;
+
+  # x86_64 counterparts of the libraries the Cadence tools need (subset;
+  # extend after checking `readelf -d` / ldd of the actual install).
+  x86LibPkgs = [
+    x86.glibc
+    x86.zlib
+    x86.zstd
+    x86.pcre2
+    x86.nss
+    x86.nspr
+    x86.gcc-unwrapped.lib
+    x86.openssl
+    x86.expat
+    x86.ncurses
+    x86.sqlite
+    x86.libffi
+    x86.readline
+    x86.bzip2
+    x86.xz
+    x86.krb5.lib
+    x86.e2fsprogs.out
+    x86.alsa-lib
+    x86.libusb1
+    x86.dbus
+    x86.cyrus_sasl
+    x86.openldap
+    x86.file
+    x86.libpciaccess
+    (cds-apr x86.apr)
+    x86.aprutil
+    x86.libX11
+    x86.libXext
+    x86.libXrender
+    x86.libXtst
+    x86.libXi
+    x86.libXrandr
+    x86.libXcursor
+    x86.libXcomposite
+    x86.libXdamage
+    x86.libXfixes
+    x86.libXp
+    x86.libXau
+    x86.libXdmcp
+    x86.libXScrnSaver
+    x86.libxcb
+    x86.libxshmfence
+    x86.libICE
+    x86.libSM
+    x86.libXmu
+    x86.libXt
+    x86.libXft
+    x86.libXinerama
+    x86.libXaw
+    x86.fontconfig
+    x86.freetype
+    x86.libGLU
+    x86.libglvnd
+    x86.motif
+    x86.libpng
+    x86.libjpeg
+    x86.libxml2
+    x86.elfutils.out # default output is "bin" (no lib) — use "out"
+    x86.glib
+    x86.pango
+    x86.gtk2
+    x86.gtk3
+  ];
+
+  # box64 launchers for the Cadence entry points (aarch64 hosts only). They
+  # resolve the real binaries relative to $CDSBASE, which the profile sets.
+  cadence-box64-bins = pkgs.runCommand "cadence-box64-bin" {} ''
+    mkdir -p $out/bin
+    make_launcher() {
+      cat > $out/bin/$1 <<EOF
+    #!/bin/sh
+    exec ${pkgs.box64}/bin/box64 "\$CDSBASE/$2" "\$@"
+    EOF
+      chmod +x $out/bin/$1
+    }
+    make_launcher virtuoso "IC251/tools/dfII/bin/virtuoso"
+    make_launcher spectre "spectre181/bin/spectre"
+  '';
 
   # ── FHS environment ─────────────────────────────────────────────
 
@@ -120,6 +209,14 @@
       sqlite
       xkeyboard_config # Provides the layout data for XKB
       lsb-release
+    ] ++ lib.optionals isAarch64 [
+      box64
+      cadence-box64-bins
+      # box64 wraps these heavy libs NATIVELY (ARM64) when present; the x86_64
+      # virtuoso links them, so supply the aarch64 versions in the env.
+      openssl # libcrypto.so.3
+      openblas # libblas.so / liblapack.so
+      lapack
     ]);
     multiPkgs = pkgs: (with pkgs; [
       libxml2
@@ -146,11 +243,44 @@
       chmod 755 $out/usr/lib64/libc.so.6
       mkdir -p $out/usr/lib64
       # patched apr under the name Cadence's SuSE/SLES12 symlink expects
-      ln -sf ${cds-apr}/lib/libapr-1.so.0.7.6 $out/usr/lib64/libapr-1.so.0.5.1
-      ln -sf ${cds-apr}/lib/libapr-1.so.0.7.6 $out/usr/lib64/libapr-1.so.0
+      ln -sf ${cds-apr pkgs.apr}/lib/libapr-1.so.0.7.6 $out/usr/lib64/libapr-1.so.0.5.1
+      ln -sf ${cds-apr pkgs.apr}/lib/libapr-1.so.0.7.6 $out/usr/lib64/libapr-1.so.0
       # old-SONAME OpenLDAP compat for Cadence's liblog4cxx
       ln -sf ${pkgs.openldap}/lib/libldap.so.2 $out/usr/lib64/libldap_r-2.4.so.2
       ln -sf ${pkgs.openldap}/lib/liblber.so.2 $out/usr/lib64/liblber-2.4.so.2
+    '' + lib.optionalString isAarch64 ''
+      # x86_64 multiarch lib tree for box64 (Cadence tools are x86_64).
+      # NOTE: $out/lib is a usrmerge symlink (-> /usr/lib -> /usr/lib64 on
+      # aarch64), so create the tree under the real directory.
+      mkdir -p $out/usr/lib64/x86_64-linux-gnu
+      for d in ${lib.concatMapStringsSep " " (p: "${p}/lib") x86LibPkgs}; do
+        if [ -d "$d" ]; then
+          cp -a "$d"/. $out/usr/lib64/x86_64-linux-gnu/
+          # cp -a preserves the source dir's (read-only) mode onto the
+          # destination dir; restore write permission for the next copy.
+          chmod -R u+w $out/usr/lib64/x86_64-linux-gnu
+        fi
+      done
+
+      # box64 0.4.2 wraps ANY lib with an ARM64 twin in the env natively, and
+      # native-wrapped libs cannot provide DATA symbols (widget class records,
+      # _XtInheritTranslations, ...) to emulated code — the emulated Motif/Xm
+      # stack needs those. Remove the ARM64 X/UI libs so box64 falls back to
+      # emulating the x86_64 versions from the multiarch tree. (Nix-store
+      # binaries like Xvfb don't use /usr/lib64, so they are unaffected.)
+      rm -f $out/usr/lib64/libX11.so* $out/usr/lib64/libX11-xcb.so* \
+            $out/usr/lib64/libXau.so* $out/usr/lib64/libxcb.so* \
+            $out/usr/lib64/libXdmcp.so* $out/usr/lib64/libXext.so* \
+            $out/usr/lib64/libXft.so* $out/usr/lib64/libXmu.so* \
+            $out/usr/lib64/libXrender.so* $out/usr/lib64/libXss.so* \
+            $out/usr/lib64/libXt.so* $out/usr/lib64/libXtst.so* \
+            $out/usr/lib64/libXi.so* $out/usr/lib64/libXrandr.so* \
+            $out/usr/lib64/libXcursor.so* $out/usr/lib64/libXcomposite.so* \
+            $out/usr/lib64/libXdamage.so* $out/usr/lib64/libXfixes.so* \
+            $out/usr/lib64/libXScrnSaver.so* $out/usr/lib64/libXp.so* \
+            $out/usr/lib64/libXinerama.so* $out/usr/lib64/libXaw.so* \
+            $out/usr/lib64/libXm.so* $out/usr/lib64/libxkbcommon.so* \
+            $out/usr/lib64/libxcb-*.so* 2>/dev/null || true
     '';
 
     profile = ''
@@ -171,6 +301,18 @@
       export VSM_FWK=VSM95011
       export VSM_ITK=VSM12141
       export LD_LIBRARY_PATH="/usr/lib64:/usr/lib:/run/opengl-driver/lib:/run/opengl-driver-32/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      ${lib.optionalString isAarch64 ''
+        # x86_64 Cadence tools run under box64; point it at the multiarch tree.
+        export BOX64_LD_LIBRARY_PATH="/lib/x86_64-linux-gnu''${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+        export BOX64_LOG=0
+        # box64 natively wraps X/GL libs when ARM64 versions are reachable
+        # (they are, via /usr/lib64), but native-wrapped libs cannot provide
+        # DATA symbols (widget class records, _XtInheritTranslations, ...) to
+        # emulated code — the emulated Motif/Xm stack needs those. Keep only
+        # the core runtime + heavy math/crypto libs wrapped; everything else
+        # (X11/Xt/Motif/GL) is emulated from the x86_64 tree.
+        export BOX64_WRAPPED_LIBS="libc.so.6:libm.so.6:libdl.so.2:libpthread.so.0:librt.so.1:libutil.so.1:libgcc_s.so.1:libstdc++.so.6:libcrypto.so.3:libopenblas.so:liblapack.so.3"
+      ''}
       # EE477 environment (equivalent of sourcing setup_ee477_ee577a_v2602.csh)
       export CDSBASE="$HOME/.cadence"
       export CDS_INST_DIR="$CDSBASE/IC251"
@@ -194,16 +336,25 @@
     runScript = "tcsh";
   };
 
-  # ── Wrapper: run as the main user in no-internet group ──────────
+  # ── Wrapper ─────────────────────────────────────────────────────
 
-  cadence-env = pkgs.writeShellScriptBin "cadence-env" ''
-    exec /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${cadence-env-raw}/bin/cadence-env "$@"
-  '';
+  # x86_64 hosts: run as the main user in the no-internet group (license
+  # daemon / firewall isolation). aarch64 hosts: plain invocation.
+  cadence-env =
+    if isAarch64
+    then
+      pkgs.writeShellScriptBin "cadence-env" ''
+        exec ${cadence-env-raw}/bin/cadence-env "$@"
+      ''
+    else
+      pkgs.writeShellScriptBin "cadence-env" ''
+        exec /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${cadence-env-raw}/bin/cadence-env "$@"
+      '';
 in {
   environment.systemPackages = [cadence-env];
 
   # Allow passwordless sudo for the cadence-env wrapper (needed for group switching)
-  security.sudo.extraRules = [
+  security.sudo.extraRules = lib.mkIf (!isAarch64) [
     {
       users = [config.local.username];
       runAs = "ALL";

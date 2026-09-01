@@ -55,5 +55,10 @@
     htop
     killall
     mpv
+
+    openvpn
+    tigervnc
+    box64
+    muvm
   ];
 }
