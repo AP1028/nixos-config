@@ -1,4 +1,15 @@
-{pkgs, ...}: {
+{pkgs, ...}: let
+  wechat-uos-wrapped = pkgs.symlinkJoin {
+    name = "wechat-uos-desktop-fix";
+    paths = [pkgs.wechat-uos];
+    postBuild = ''
+      rm -f $out/share/applications/*.desktop
+      cp ${pkgs.wechat-uos}/share/applications/*.desktop $out/share/applications/
+      chmod +w $out/share/applications/*.desktop
+      sed -i "s|^Exec=.*|Exec=$out/bin/wechat-uos %U|" $out/share/applications/*.desktop
+    '';
+  };
+in {
   imports = [
     ../../../modules/packages/opencode.nix
   ];
@@ -43,7 +54,7 @@
         pygobject3
       ]))
 
-    wechat-uos
+    wechat-uos-wrapped
     go-musicfox
     libreoffice-qt-stable
     kdePackages.okular

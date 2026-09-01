@@ -1,0 +1,45 @@
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher/AVX_128.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher/AVX_128.cpp
+index cfce256..866c27c 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher/AVX_128.cpp
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher/AVX_128.cpp
+@@ -367,7 +367,7 @@ void OpDispatchBuilder::AVX128_MOVVectorNT(OpcodeArgs) {
+     AVX128_StoreResult_WithOpSize(Op, Op->Dest, Src);
+   } else {
+     auto Src = AVX128_LoadSource_WithOpSize(Op, Op->Src[0], Op->Flags, !Is128Bit, MemoryAccessType::STREAM);
+-    Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
++    Ref Dest = AppendSegmentOffset(LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false}), Op->Flags);
+ 
+     if (Is128Bit) {
+       // Single store non-temporal for 128-bit operations.
+@@ -734,7 +734,7 @@ void OpDispatchBuilder::AVX128_MOVBetweenGPR_FPR(OpcodeArgs) {
+       StoreResultGPR(Op, Op->Dest, Src.Low);
+     } else {
+       // Storing first element to memory.
+-      Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
++      Ref Dest = AppendSegmentOffset(LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false}), Op->Flags);
+       _StoreMemFPR(OpSizeFromDst(Op), Dest, Src.Low, OpSize::i8Bit);
+     }
+   }
+diff --git a/FEXCore/Source/Interface/Core/OpcodeDispatcher/Vector.cpp b/FEXCore/Source/Interface/Core/OpcodeDispatcher/Vector.cpp
+index 0f15a36..69a609e 100644
+--- a/FEXCore/Source/Interface/Core/OpcodeDispatcher/Vector.cpp
++++ b/FEXCore/Source/Interface/Core/OpcodeDispatcher/Vector.cpp
+@@ -72,7 +72,7 @@ void OpDispatchBuilder::MOVVectorNTOp(OpcodeArgs, bool IsAVX) {
+       // MMX 64-bit comes from MOVNTQ
+       StoreResultFPR(Op, Src, OpSize::i8Bit, MemoryAccessType::STREAM);
+     } else {
+-      Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
++      Ref Dest = AppendSegmentOffset(LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false}), Op->Flags);
+ 
+       // Single store non-temporal for larger operations.
+       _VStoreNonTemporal(Size, Src, Dest, 0);
+@@ -2869,7 +2869,8 @@ void OpDispatchBuilder::MOVBetweenGPR_FPR(OpcodeArgs, VectorOpType VectorType) {
+       const auto DstSize = std::max(OpSize::i32Bit, OpSizeFromDst(Op));
+ 
+       // Storing first element to memory.
+-      Ref Dest = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false});
++      // Apply the segment base (FS/GS) so TLS accesses resolve correctly.
++      Ref Dest = AppendSegmentOffset(LoadSourceGPR(Op, Op->Dest, Op->Flags, {.LoadData = false}), Op->Flags);
+       _StoreMemFPR(DstSize, Dest, Src, OpSize::i8Bit);
+     }
+   }

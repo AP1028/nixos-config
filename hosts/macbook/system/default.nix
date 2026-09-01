@@ -37,6 +37,13 @@
           leaveDotGit = true;
           postFetch = old.src.postFetch or "";
         };
+        patches = (old.patches or []) ++ [
+          # Fix FEX JIT dropping the FS/GS segment base on vector memory stores
+          # (MOVD/MOVQ/MOVNT*). Cadence's saSecurity/VSM TLS code uses
+          # `%fs:-offset` SSE stores, which faulted because the FS base was
+          # never added. See modules/env/fex-fs-segment-store-fix.patch.
+          /home/tianyixia/nixos-config/modules/env/fex-fs-segment-store-fix.patch
+        ];
         postPatch = (old.postPatch or "") + ''
           # This host runs a 16K-page kernel; jemalloc compiled with the
           # default LG_PAGE=12 (4K) refuses to run ("Unsupported system page

@@ -115,6 +115,120 @@
     make_launcher spectre "spectre181/bin/spectre"
   '';
 
+  # ── FEX (muvm) aarch64 runtime ─────────────────────────────────
+  #
+  # FEX needs a 4K-page kernel, but this host runs a 16K-page kernel, so FEX
+  # runs inside a muvm microVM (whose guest kernel uses 4K pages). muvm's
+  # guest registers a FEX binfmt handler and mounts the erofs rootfs below at
+  # /run/fex-emu/rootfs; x86_64 ELFs exec through FEX transparently.
+
+  # Extra x86_64 libs the real virtuoso binary links that are not already in
+  # x86LibPkgs (lapack/blas/gfortran for the numeric kernels).
+  fexExtraX86LibPkgs = [
+    x86.openblas
+    x86.gfortran.cc.lib
+    x86.libxcrypt-legacy
+    x86.libnsl
+    x86.libuuid
+    x86.libelf
+    x86.systemd
+    x86.libxkbcommon
+    x86.xcbutilwm
+    x86.xcbutilimage
+    x86.xcbutilkeysyms
+    x86.xcbutilrenderutil
+    x86.pciutils
+    x86.libidn2
+    x86.libssh
+    x86.xcbutil
+  ];
+
+  # erofs image of the x86_64 userspace Cadence needs. The SuSE-built Cadence
+  # binaries use a standard /lib64/ld-linux-x86-64.so.2 interpreter and expect
+  # system libs under /usr/lib64; the rootfs provides those as symlinks into
+  # the shared nix store (visible through the muvm guest), plus the aarch64
+  # shells the Cadence ksh/tcsh launcher scripts are written in.
+  fex-cadence-rootfs = pkgs.runCommand "fex-cadence-rootfs" {
+    nativeBuildInputs = [pkgs.erofs-utils];
+  } ''
+    mkdir -p rootfs/lib64 rootfs/usr/lib64 rootfs/bin
+    ln -sf ${x86.glibc}/lib/ld-linux-x86-64.so.2 rootfs/lib64/ld-linux-x86-64.so.2
+    for p in ${lib.concatMapStringsSep " " (p: "${lib.getLib p}") (x86LibPkgs ++ fexExtraX86LibPkgs)}; do
+      if [ -d "$p/lib" ]; then
+        for f in "$p"/lib/*; do
+          [ -e "$f" ] || continue
+          case "$f" in
+            *.a|*.la|*.o|*gconv*) continue ;;
+          esac
+          ln -sf "$f" rootfs/usr/lib64/
+        done
+      fi
+    done
+    # aarch64 shells for the guest (Cadence launchers are ksh/tcsh scripts)
+    ln -sf ${pkgs.ksh}/bin/ksh rootfs/bin/ksh
+    ln -sf ${pkgs.tcsh}/bin/tcsh rootfs/bin/tcsh
+    ln -sf ${pkgs.bash}/bin/bash rootfs/bin/bash
+    ln -sf bash rootfs/bin/sh
+    # Cadence SLES12-era SONAME compat symlinks (mirrors the box64 FHS env)
+    ln -sf libldap.so.2 rootfs/usr/lib64/libldap_r-2.4.so.2
+    ln -sf liblber.so.2 rootfs/usr/lib64/liblber-2.4.so.2
+    ln -sf libapr-1.so.0.7.6 rootfs/usr/lib64/libapr-1.so.0.5.1
+    # saSecurity parses /proc/self/maps and requires the libc mapping to live
+    # under /usr/lib64/libc-* (nix-store paths are treated as tampering). A
+    # symlink resolves to the store path in maps, so copy the real glibc
+    # libc.so.6 over it; LD_LIBRARY_PATH starts with /usr/lib64 so the loader
+    # opens it there and the kernel records /usr/lib64/libc.so.6.
+    rm -f rootfs/usr/lib64/libc.so.6
+    cp ${x86.glibc}/lib/libc.so.6 rootfs/usr/lib64/libc.so.6
+    chmod 755 rootfs/usr/lib64/libc.so.6
+    mkfs.erofs $out rootfs/
+  '';
+
+  # Guest-side script: sets the Cadence environment then execs tcsh (so
+  # `cadence-env -c '...'` behaves exactly like the FHS-env version).
+  cadence-env-guest = pkgs.writeShellScript "cadence-env-guest" ''
+    export XKB_CONFIG_ROOT=/usr/share/X11/xkb
+    export IN_FHS_ENV="cadence-env"
+    unset http_proxy https_proxy ftp_proxy rsync_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY RSYNC_PROXY ALL_PROXY no_proxy NO_PROXY
+    export LANG=C LC_ALL=C
+    export __GLX_VENDOR_LIBRARY_NAME=mesa
+    # saSecurity requires the licensing-agent mode disabled and the VSM
+    # framework vars set before it will attempt the license checkout.
+    export CDS_LIC_USE_AGENT=0
+    export VSM_FWK=VSM95011
+    export VSM_ITK=VSM12141
+    # The x86_64 ld-linux (nixpkgs glibc) only searches its own store lib dir
+    # by default; point it at the rootfs system libs.
+    export LD_LIBRARY_PATH="/usr/lib64:/lib64''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # EE477 environment (equivalent of sourcing setup_ee477_ee577a_v2602.csh)
+    export CDSBASE="$HOME/.cadence"
+    export CDS_INST_DIR="$CDSBASE/IC251"
+    export IC_HOME="$CDS_INST_DIR"
+    export CDSHOME="$CDS_INST_DIR"
+    export SPECTRE_HOME="$CDSBASE/spectre181"
+    export OA_HOME="$CDS_INST_DIR/share/oa"
+    export CDS_AUTO_64BIT=ALL
+    export CDS_Netlisting_Mode=Analog
+    export SPECTRE_DEFAULTS=-E
+    # asusg16 .cshrc sets these too; keep the license + platform vars in sync
+    export CDS_LIC_FILE="$CDSBASE/license/license.dat"
+    export CDS_LIC_ONLY=1
+    export W3264_NO_HOST_CHECK=1
+    export OA_UNSUPPORTED_PLAT=linux_rhel60
+    export CDS_ENABLE_VMS=1
+    export CDS_LOAD_ENV=CWD
+    for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
+      case ":$PATH:" in
+        *":$p:"*) ;;
+        *) PATH="$p:$PATH" ;;
+      esac
+    done
+    # user wrapper dir first: ~/.cadence/bin/virtuoso preloads the PDK libs
+    export PATH="$HOME/.cadence/bin:$PATH"
+    export PATH
+    exec ${pkgs.tcsh}/bin/tcsh "$@"
+  '';
+
   # ── FHS environment ─────────────────────────────────────────────
 
   cadence-env-raw = pkgs.buildFHSEnv {
@@ -339,12 +453,18 @@
   # ── Wrapper ─────────────────────────────────────────────────────
 
   # x86_64 hosts: run as the main user in the no-internet group (license
-  # daemon / firewall isolation). aarch64 hosts: plain invocation.
+  # daemon / firewall isolation). aarch64 hosts: run inside the muvm microVM
+  # under FEX (the 16K-page host kernel cannot run FEX directly).
   cadence-env =
     if isAarch64
     then
       pkgs.writeShellScriptBin "cadence-env" ''
-        exec ${cadence-env-raw}/bin/cadence-env "$@"
+        exec ${pkgs.muvm}/bin/muvm \
+          -f ${fex-cadence-rootfs} \
+          -m \
+          -e DISPLAY \
+          -e XAUTHORITY \
+          -- ${cadence-env-guest} "$@"
       ''
     else
       pkgs.writeShellScriptBin "cadence-env" ''
