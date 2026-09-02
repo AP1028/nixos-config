@@ -187,7 +187,6 @@
   # Guest-side script: sets the Cadence environment then execs tcsh (so
   # `cadence-env -c '...'` behaves exactly like the FHS-env version).
   cadence-env-guest = pkgs.writeShellScript "cadence-env-guest" ''
-    export XKB_CONFIG_ROOT=/usr/share/X11/xkb
     export IN_FHS_ENV="cadence-env"
     unset http_proxy https_proxy ftp_proxy rsync_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY RSYNC_PROXY ALL_PROXY no_proxy NO_PROXY
     export LANG=C LC_ALL=C
@@ -205,7 +204,6 @@
     export CDS_INST_DIR="$CDSBASE/IC251"
     export IC_HOME="$CDS_INST_DIR"
     export CDSHOME="$CDS_INST_DIR"
-    export SPECTRE_HOME="$CDSBASE/spectre181"
     export OA_HOME="$CDS_INST_DIR/share/oa"
     # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
     # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
@@ -214,7 +212,11 @@
     export OA_SYSNAME=linux_rhel80
     export CDS_AUTO_64BIT=ALL
     export CDS_Netlisting_Mode=Analog
-    export SPECTRE_DEFAULTS=-E
+    # NOTE: SPECTRE_DEFAULTS=-E is deliberately NOT set here. Together with
+    # CDS_Netlisting_Mode=Analog it makes virtuoso spin ~120s in "Virtuoso
+    # initialization" probing the (missing) AMS library on this install. The
+    # AMS Unified netlister is unusable here anyway (AMS-2910), so dropping the
+    # Spectre default just avoids the slow probe.
     # asusg16 .cshrc sets these too; keep the license + platform vars in sync
     export CDS_LIC_FILE="$CDSBASE/license/license.dat"
     export CDS_LIC_ONLY=1
@@ -222,7 +224,7 @@
     export OA_UNSUPPORTED_PLAT=linux_rhel80
     export CDS_ENABLE_VMS=1
     export CDS_LOAD_ENV=CWD
-    for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
+    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
       case ":$PATH:" in
         *":$p:"*) ;;
         *) PATH="$p:$PATH" ;;
@@ -259,6 +261,10 @@
     ln -s ${pkgs.ksh}/bin/ksh /usr/bin/ksh
     ln -s ${pkgs.tcsh}/bin/tcsh /usr/bin/tcsh
     ln -s ${pkgs.bash}/bin/bash /usr/bin/bash
+    ln -s ${pkgs.hostname}/bin/hostname /bin/hostname
+    ln -s ${pkgs.hostname}/bin/hostname /usr/bin/hostname
+    ln -s ${pkgs.hostname}/bin/hostname /bin/domainname
+    ln -s ${pkgs.hostname}/bin/hostname /usr/bin/domainname
   '';
 
   # ── FHS environment ─────────────────────────────────────────────
@@ -474,7 +480,7 @@
       export CDS_AUTO_64BIT=ALL
       export CDS_Netlisting_Mode=Analog
       export SPECTRE_DEFAULTS=-E
-      for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
+    for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
         case ":$PATH:" in
           *":$p:"*) ;;
           *) PATH="$p:$PATH" ;;
@@ -496,7 +502,11 @@
     if isAarch64
     then
       pkgs.writeShellScriptBin "cadence-env" ''
-        exec ${pkgs.muvm}/bin/muvm \
+        # Run muvm in the no-internet group (like the x86_64 path), so passt —
+        # which muvm spawns for the VM's networking — inherits the group and the
+        # host iptables `-m owner --gid-owner no-internet` REJECT rule makes any
+        # guest outbound connection fail fast instead of hanging on timeouts.
+        exec /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${pkgs.muvm}/bin/muvm \
           -f ${fex-cadence-rootfs} \
           -m \
           -x ${cadence-env-guest-bin} \
@@ -521,14 +531,18 @@ in {
     "d /usr/lib64 0755 root root -"
   ];
 
-  # Allow passwordless sudo for the cadence-env wrapper (needed for group switching)
-  security.sudo.extraRules = lib.mkIf (!isAarch64) [
+  # Allow passwordless sudo for the cadence-env wrapper (needed for the
+  # no-internet group switch). On aarch64 it runs muvm, on x86_64 the FHS env.
+  security.sudo.extraRules = [
     {
       users = [config.local.username];
       runAs = "ALL";
       commands = [
         {
-          command = "${cadence-env-raw}/bin/cadence-env";
+          command =
+            if isAarch64
+            then "${pkgs.muvm}/bin/muvm"
+            else "${cadence-env-raw}/bin/cadence-env";
           options = ["NOPASSWD" "SETENV"];
         }
       ];

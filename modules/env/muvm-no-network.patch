@@ -1,0 +1,100 @@
+diff --git a/crates/muvm/src/bin/muvm.rs b/crates/muvm/src/bin/muvm.rs
+index 1c9fe28..b07361b 100644
+--- a/crates/muvm/src/bin/muvm.rs
++++ b/crates/muvm/src/bin/muvm.rs
+@@ -272,7 +272,7 @@ fn main() -> Result<ExitCode> {
+         }
+     }
+ 
+-    {
++    if !options.no_network {
+         let passt_fd: OwnedFd = if let Some(passt_socket) = options.passt_socket {
+             connect_to_passt(passt_socket)
+                 .context("Failed to connect to `passt`")?
+@@ -409,6 +409,7 @@ fn main() -> Result<ExitCode> {
+         gid: getgid().as_raw(),
+         host_display: display,
+         merged_rootfs: options.merged_rootfs,
++        no_network: options.no_network,
+         emulator: options.emulator,
+         cwd,
+         init_commands,
+diff --git a/crates/muvm/src/cli_options.rs b/crates/muvm/src/cli_options.rs
+index fc3ccf7..d94787b 100644
+--- a/crates/muvm/src/cli_options.rs
++++ b/crates/muvm/src/cli_options.rs
+@@ -40,6 +40,7 @@ pub struct Options {
+     pub passt_args: Vec<String>,
+     pub fex_images: Vec<String>,
+     pub merged_rootfs: bool,
++    pub no_network: bool,
+     pub interactive: bool,
+     pub tty: bool,
+     pub privileged: bool,
+@@ -132,6 +133,9 @@ pub fn options() -> OptionParser<Options> {
+         .short('m')
+         .help("Use merged rootfs for FEX (experimental)")
+         .switch();
++    let no_network = long("no-network")
++        .help("Do not add a network interface to the microVM (no internet access)")
++        .switch();
+     let passt_socket = long("passt-socket")
+         .help("Instead of starting passt, connect to passt socket at PATH")
+         .argument("PATH")
+@@ -205,6 +209,7 @@ pub fn options() -> OptionParser<Options> {
+         passt_args,
+         fex_images,
+         merged_rootfs,
++        no_network,
+         interactive,
+         tty,
+         privileged,
+diff --git a/crates/muvm/src/guest/bin/muvm-guest.rs b/crates/muvm/src/guest/bin/muvm-guest.rs
+index 6bac183..4a24403 100644
+--- a/crates/muvm/src/guest/bin/muvm-guest.rs
++++ b/crates/muvm/src/guest/bin/muvm-guest.rs
+@@ -120,7 +120,7 @@ fn main() -> Result<ExitCode> {
+         }
+     }
+ 
+-    configure_network()?;
++    configure_network(options.no_network)?;
+ 
+     let run_path = match setup_user(Uid::from(options.uid), Gid::from(options.gid)) {
+         Ok(p) => p,
+diff --git a/crates/muvm/src/guest/net.rs b/crates/muvm/src/guest/net.rs
+index 50c212c..da166a4 100644
+--- a/crates/muvm/src/guest/net.rs
++++ b/crates/muvm/src/guest/net.rs
+@@ -290,7 +290,7 @@ fn wait_for_slaac(rtnl: &NlRouter, if_index: i32) -> Result<()> {
+     Ok(())
+ }
+ 
+-pub fn configure_network() -> Result<()> {
++pub fn configure_network(no_network: bool) -> Result<()> {
+     // Allow unprivileged users to use ping, as most distros do by default.
+     {
+         let mut file = fs::File::options()
+@@ -313,6 +313,10 @@ pub fn configure_network() -> Result<()> {
+         sethostname(hostname.as_bytes()).context("Failed to set hostname")?;
+     }
+ 
++    if no_network {
++        return Ok(());
++    }
++
+     let (rtnl, _) = NlRouter::connect(NlFamily::Route, None, Groups::empty())?;
+     rtnl.enable_strict_checking(true)?;
+ 
+diff --git a/crates/muvm/src/utils/launch.rs b/crates/muvm/src/utils/launch.rs
+index 6a50d5a..9a5ccf9 100644
+--- a/crates/muvm/src/utils/launch.rs
++++ b/crates/muvm/src/utils/launch.rs
+@@ -42,6 +42,7 @@ pub struct GuestConfiguration {
+     pub gid: u32,
+     pub host_display: Option<String>,
+     pub merged_rootfs: bool,
++    pub no_network: bool,
+     pub emulator: Option<Emulator>,
+     pub cwd: PathBuf,
+     pub init_commands: Vec<PathBuf>,

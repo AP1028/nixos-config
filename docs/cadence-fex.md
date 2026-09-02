@@ -1,169 +1,96 @@
 # Cadence (virtuoso) on macbook via FEX-in-muvm — status & handoff
 
 Goal: run Cadence IC25.1 `virtuoso` (x86_64) on the **macbook** (Apple Silicon,
-aarch64, **16K-page kernel**) by emulating x86_64 with FEX.
-
-The host kernel is 16K pages; FEX requires 4K pages, so FEX runs **inside a
-muvm microVM** (whose libkrunfw guest kernel is 4K-page). `box64` is not used
-for Cadence (that was an earlier approach); the current path is FEX.
+aarch64, **16K-page kernel**) by emulating x86_64 with FEX inside a muvm microVM
+(whose libkrunfw guest kernel is 4K-page). `box64` is not used for Cadence.
 
 ## Architecture
 
 ```
 cadence-env -c 'virtuoso'
-  └─ muvm -f <fex-cadence-rootfs> -m -e DISPLAY -e XAUTHORITY -- <cadence-env-guest> "$@"
-       └─ inside VM: guest script sets env → exec tcsh -c 'virtuoso'
-            └─ tcsh runs ~/.cadence/bin/virtuoso (first on PATH)
-                 └─ ~/.cadence/bin/virtuoso sets Cadence LD_LIBRARY_PATH → exec
-                    IC251/tools.lnx86/dfII/bin/64bit/virtuoso  (real x86_64 ELF)
+  └─ muvm -f <fex-cadence-rootfs> -m -x <bin-setup> -e DISPLAY -e XAUTHORITY -- <guest> "$@"
+       └─ guest script sets env → exec tcsh -c 'virtuoso'
+            └─ ~/.cadence/bin/virtuoso sets Cadence LD_LIBRARY_PATH → exec
+               IC251/tools.lnx86/dfII/bin/64bit/virtuoso   (x86_64 ELF)
 ```
 
-Key components (all in `modules/env/cadence-env.nix`):
+Key components (in `modules/env/cadence-env.nix`):
+- `fex-cadence-rootfs` — erofs image of the x86_64 userspace (all system libs
+  symlinked into `/usr/lib64`, `ld-linux-x86-64.so.2` at `/lib64`, aarch64
+  ksh/tcsh/bash in `/bin`, plus SLES12 SONAME compat symlinks). `libc.so.6` is a
+  **real file** (not symlink) so saSecurity sees `/usr/lib64/libc.so.6`.
+- `cadence-env-guest-bin` (muvm `-x`, runs as root) — mounts tmpfs over `/bin`
+  and `/usr/bin` and symlinks in aarch64 coreutils/gnused/gawk/gnugrep/procps +
+  ksh/tcsh/bash/sh + hostname/domainname. (Needed because the VM's `/bin` only
+  has `sh`, and the guest root is read-only for the mapped user.)
+- `cadence-env-guest` — sets the Cadence env, then `exec tcsh "$@"`.
+- `cadence-env` (aarch64 branch) — `sudo -E -u tianyixia -g no-internet muvm -f
+  <rootfs> -m -x <bin-setup> -e DISPLAY -e XAUTHORITY -- <guest> "$@"`.
 
-- `fex-cadence-rootfs` — an erofs image of the x86_64 userspace: all system
-  libs symlinked into `/usr/lib64` (from `x86 = pkgs.pkgsCross.gnu64`),
-  `ld-linux-x86-64.so.2` at `/lib64`, aarch64 `ksh`/`tcsh`/`bash`/`sh` in
-  `/bin`, plus SLES12 SONAME compat symlinks. `libc.so.6` is a **real file**
-  copy (not a symlink) — see "saSecurity" below.
-- `cadence-env-guest` — the in-VM profile script (exports CDSBASE/CDS_INST_DIR/
-  OA_HOME/VSM_* /CDS_LIC_* + `LD_LIBRARY_PATH=/usr/lib64:/lib64`, prepends
-  `~/.cadence/bin` to PATH), then `exec tcsh "$@"`.
-- `cadence-env` (aarch64 branch) — `muvm -f <rootfs> -m -e DISPLAY -e XAUTHORITY
-  -- <guest> "$@"`.
+`hosts/macbook/system/default.nix` pins FEX 2608 (jemalloc 16K fix + `FEXInterpreter`
+symlink) and applies these patches (all in `modules/env/`):
+- `fex-fs-segment-store-fix.patch` — FS/GS segment base on vector stores (Issue 1).
+- `fex-merged-rootfs.patch` — MergedRootFS config option + `/proc/<pid>/maps`
+  rootfs-prefix rewrite + `/proc/<pid>/{statm,status}` vsize rewrite.
+- `fex-tso-disable-gate.patch` — `FEX_DISABLE_HARDWARE_TSO` gate (unused escape hatch).
+- `fex-crash-diag.patch` — dump guest registers on SIGSEGV/SIGBUS/SIGILL (debug).
+- `muvm-no-network.patch` — adds a `--no-network` flag to muvm (currently unused;
+  internet is blocked via the `no-internet` group instead).
 
-Overlay in `hosts/macbook/system/default.nix` pins FEX 2608 (jemalloc LG_PAGE
-16K fix + `FEXInterpreter` symlink) and applies
-`modules/env/fex-fs-segment-store-fix.patch`.
+## What is FIXED
 
-`~/.cadence/bin/virtuoso` (user file, not in repo) was rewritten to run the
-real 64-bit binary directly (the ksh `cdnWrapperWithOA` launcher can't run in
-the VM: `/bin` is read-only there, no `/bin/ksh`).
+1. **saSecurity "Failed to initialize"** — implemented MergedRootFS: muvm writes
+   `MergedRootFS: "1"` into FEX's Config.json but FEX 2608 ignored it. Now FEX
+   accepts it and rewrites `/proc/<pid>/{maps,smaps,smaps_rollup,numa_maps}` to
+   strip the `/run/fex-emu/rootfs` prefix, so libc maps as `/usr/lib64/libc.so.6`.
+2. **Library-manager launchers / 32-vs-64-bit** — the `/bin`+`/usr/bin` tmpfs and
+   `/lib64`+`/usr/lib64` (host tmpfiles) fixed `#!/bin/ksh` "bad interpreter",
+   `readlink not found`, and the `[ -r /lib64/. ]` 64-bit check.
+3. **OA platform** — `OA_SYSNAME=linux_rhel80` fixes `lna64_rhel80` vs
+   `linux_rhel80_64`. (`cds_root`/`cdsGetInstallRoot` themselves work fine under FEX.)
+4. **Internet blocked** — `no-internet` group (import `modules/env/no-internet.nix`;
+   run muvm via `sudo -g no-internet`) so passt's outbound is REJECTed fast.
+5. **"Low Memory" / process size** — FEX now rewrites `/proc/<pid>/statm` +
+   `/proc/<pid>/status` to report the resident size (647 MB) instead of its huge
+   virtual reservation (131 TB). This killed the `Low Memory` spam but was **not**
+   the launch-slowness cause.
 
-## What already works
+## REMAINING BLOCKER: ~135s launch (`Virtuoso initialization`)
 
-1. FEX runs x86_64 inside muvm (validated with an x86_64 bash printing a string).
-2. The real `virtuoso` binary **fully loads** every library under FEX — all
-   Cadence libs + system libs resolve. This required the exact asusg16
-   `LD_LIBRARY_PATH` (below) plus adding missing x86_64 system libs to the
-   rootfs (libxcrypt-legacy/libcrypt.so.1, libuuid, libelf, systemd,
-   libxkbcommon, xcbutil*, pciutils, libidn2, libssh, openblas/lapack/blas/
-   gfortran — see `fexExtraX86LibPkgs`).
-3. The FS/GS segment bug is **fixed** (patch below).
+`cadence-env -c 'virtuoso'` still takes ~135s. Breakdown is consistently
+`Virtuoso initialization ~135s + Custom initialization ~2.5s`.
 
-## Issue 1 (FIXED): FEX dropped FS/GS base on vector memory stores
+What's actually happening (verified by sampling `/proc/<pid>` of the FEX process):
+- virtuoso does only ~8.7s of CPU (`utime`), then **blocks in `ppoll`/`do_poll`
+  for ~126s** (`utime` stops advancing). It is a **wait, not translation**.
+- During that window the MPS daemons **never come up**: no `cdsNameServer`,
+  `cdsMsgServer`, `cdsServIpc`. `clsbd` IS running; `cds_root` spawns and exits
+  (a zombie — that part is normal, `cds_root virtuoso` prints the install root
+  and returns 0).
+- The daemon **binaries/wrappers work when invoked directly**:
+  `cdsMsgServer -V`, `cdsNameServer -V`, `cdsServIpc -V`, `cds_root virtuoso` all
+  succeed (also via the rootfs-prefixed path). So it's the **spawn path from
+  virtuoso**, not the daemons themselves.
+- `cdsMsgServer`/`cdsServIpc` link `libmpsc_sh.so`/`libsman_sh.so`
+  (in `tools.lnx86/lib/64bit`) — present, and load fine via the wrapper's
+  computed `LIBDIR_PATH`.
+- virtuoso's own environment is **correct** (CDSBASE/CDS_INST_DIR/OA_HOME/PATH all
+  point at `/home/tianyixia/.cadence/IC251/...`).
 
-Symptom: virtuoso segfaulted (SIGSEGV) during startup, `si_addr=-0x2ae0`
-(a NULL-ish negative address), inside Cadence's obfuscated saSecurity/VSM TLS
-code (`movd %xmm0, %fs:-0x2ae0`).
+So the open question is **why virtuoso spawns the MPS daemons but they don't
+stay up, and what it is `poll`ing on for 126s**. Not yet identified.
 
-Root cause: `OpDispatchBuilder::MOVBetweenGPR_FPR` (and the MOVNT/AVX-128
-equivalents) computed a memory-store address with
-`LoadSourceGPR(..., {.LoadData=false})`, which returns the address **without**
-the segment base (`LoadEffectiveAddress` is called with `AddSegmentBase=false`).
-FS-relative stores therefore ignored `fs_cached` → `0 - 0x2ae0`.
+### Test-harness gotcha (important — do NOT repeat this)
 
-Fix (`modules/env/fex-fs-segment-store-fix.patch`): wrap the address with
-`AppendSegmentOffset(..., Op->Flags)` in 4 sites:
-- `Vector.cpp` `MOVVectorNTOp` (MOVNT*)
-- `Vector.cpp` `MOVBetweenGPR_FPR` (MOVD/MOVQ)
-- `AVX_128.cpp` `AVX128_MOVVectorNT`
-- `AVX_128.cpp` `AVX128_MOVBetweenGPR_FPR`
-
-(The load path already goes through `LoadSourceFPR → DecodeAddress → A.Segment`,
-so only stores were wrong. XADD already does `AppendSegmentOffset`.)
-
-## Issue 2 (FIXED): saSecurity "Failed to initialize"
-
-Symptom (was): `cadence-env -c 'virtuoso'` printed
-`Error: Received an unexpected system exception: Failed to initialize saSecurity.`
-
-This is **not** the license checkout — it's saSecurity's anti-tamper env check,
-reverse-engineered by a previous agent (quoted below):
-
-> saSecurity opens `/proc/self/maps`, parses every line, and requires the libc
-> mapping's path to **start with** `/usr/lib64/libc-` or `/lib64/libc-*`. On
-> NixOS the loader resolves libc to a `/nix/store/...` path → treated as
-> tampering → throw. Fix on box64: copy the real glibc `libc.so.6` as a real
-> file over `/usr/lib64/libc.so.6` (a symlink resolves to the store path in
-> maps; a real file records `/usr/lib64/libc.so.6`), and start LD_LIBRARY_PATH
-> with `/usr/lib64`.
-
-The env-vars gate (`CDS_LIC_USE_AGENT=0`, `VSM_FWK=VSM95011`, `VSM_ITK=VSM12141`)
-is already set in the guest script, and the `cds-apr` libm fix is already in the
-rootfs. The remaining blocker is the libc path.
-
-**Why the box64 fix doesn't carry over:** under FEX the rootfs is mounted at
-`/run/fex-emu/rootfs` and FEX **prefixes** guest paths with it. The libc maps as:
-
-```
-/run/fex-emu/rootfs/usr/lib64/libc.so.6     (after copying real libc.so.6)
-```
-
-not `/usr/lib64/libc.so.6`. The `/run/fex-emu/rootfs` prefix breaks saSecurity's
-`/usr/lib64/libc-` prefix check. (I copied the real `libc.so.6` into the rootfs
-already; it changes the maps from `/nix/store/...` to the erofs path, which is
-closer but still prefixed.)
-
-**Fix direction:** make the libc path in `/proc/self/maps` be `/usr/lib64/...`.
-muvm's `-m` merged-rootfs mode writes `{"Config":{"RootFS":..., "MergedRootFS":"1"}}`
-into FEX's Config.json, but **FEX 2608 does not implement `MergedRootFS`** (it
-logs `Unknown configuration option 'MergedRootFS'` and ignores it). So FEX treats
-the overlay as a normal prefix rootfs.
-
-**Implemented (in `modules/env/fex-merged-rootfs.patch`):**
-1. Add a `MergedRootFS` bool config option (`Config.json.in`), so FEX accepts
-   muvm's `"MergedRootFS": "1"` key instead of ignoring it.
-2. When `MergedRootFS` is set, rewrite `/proc/<pid>/{maps,smaps,smaps_rollup,
-   numa_maps}` on open (in `FileManager::ReplaceEmuFd`) so every
-   `<RootFS>/` occurrence (e.g. `/run/fex-emu/rootfs/`) is replaced with `/`.
-   Note: in merged-rootfs mode FEX opens proc files *through the rootfs path*
-   (`/run/fex-emu/rootfs/proc/<pid>/maps`), so `get_fdpath()` returns the
-   prefixed path; the matcher strips the RootFS prefix before comparing.
-
-Result: the libc mapping now reads `/usr/lib64/libc.so.6` in `/proc/self/maps`
-and saSecurity passes (virtuoso proceeds past it). Verified with
-`FEX_SILENTLOG=0` — the `Unknown configuration option 'MergedRootFS'` message is
-gone and the maps content is rewritten.
-
-## Issue 3 (NOT REPRODUCED — appears fixed): boost::serialization spin
-
-When running the binary **directly** (not via `~/.cadence/bin/virtuoso`), with
-`LD_LIBRARY_PATH` starting with `/usr/lib64:/lib64`, virtuoso was reported to get
-**past** saSecurity and then **spin** (State=R, wchan=0, userspace busy-loop) in
-`boost::serialization::typeid_system::extended_type_info_typeid_0` at guest
-`rip=0xd0d1f60` (offset `0xccd1f60` in the binary) — C++ static-init
-(`type_register` walking a `std::multiset`, uses `__cxa_guard_acquire` atomics).
-Untested hypothesis was broken hardware TSO in the muvm guest
-(`PR_SET_MEM_MODEL_TSO`).
-
-**Re-test (after Issue 2 fix):** with the crash-diag patch applied and
-`kill -11` to dump the guest RIP, **both** the wrapper run and the direct run now
-reach the normal Qt event loop: state=S, `wchan=do_poll`, utime stops advancing
-(~8.9 s of startup JIT then idle), guest `rip=0x7fff…` (blocked in libc `poll`),
-**not** `0xd0d1f60`. No busy-loop spin observed. So the boost static-init spin
-is either already fixed by the FS/GS segment fix (Issue 1) or no longer
-reproducible.
-
-The `FEX_DISABLE_HARDWARE_TSO` escape hatch is kept as
-`modules/env/fex-tso-disable-gate.patch` (gate the `SetHardwareTSOSupport(true)`
-call behind `!getenv("FEX_DISABLE_HARDWARE_TSO")`), but the hypothesis is
-unconfirmed and no longer the suspected blocker.
-
-**Next unknown:** the do_poll wait. It could be the license checkout
-(`CDS_LIC_FILE` + `CDS_LIC_ONLY=1`) or the X11 event loop; CDS.log is not yet
-written, so virtuoso likely stalls at license checkout or display setup, not
-static init. This is the next thing to investigate (not a FEX rootfs/segment
-issue).
+My earlier "~17s launch" claims were **bogus**: several of my scripts did
+`export CDSBASE="$HOME/.cadence" CDS_INST_DIR="$CDSBASE/IC251" ...` in a **single**
+`export` statement. In POSIX shell the `$CDSBASE` in `CDS_INST_DIR` is expanded
+*before* the assignment, so `CDS_INST_DIR=/IC251` (empty `CDSBASE`). That makes
+virtuoso fail to find its install (`CMGR-7001`) and **skip the full init**, which
+is why those runs were fast. Always use **separate `export` statements**. The
+real `cadence-env` sets them separately and is correct.
 
 ## Key facts / reproduction
-
-Exact asusg16 Cadence `LD_LIBRARY_PATH` (from `virtuoso -debug3264`):
-
-```
-$IC/share/oa/lib/lnx86/opt:$IC/tools.lnx86/lib/64bit:$IC/tools.lnx86/lib:$IC/tools.lnx86/sev/lib/64bit:$IC/tools.lnx86/hdf5/lib/64bit:$IC/tools.lnx86/lz4/lib/64bit:$IC/tools.lnx86/python/64bit/lib:$IC/tools.lnx86/TPtools/grpc/lib64:$IC/tools.lnx86/TPtools/boost/lib/64bit:$IC/tools.lnx86/extraction/lib/64bit:$IC/tools.lnx86/leveldb/lib/64bit:$IC/tools.lnx86/Qt/v5/64bit/lib
-```
-(plus `/usr/lib64:/lib64` for the FEX system libs). `IC = ~/.cadence/IC251`;
-`share/oa -> ../oa_v22.62.009`.
 
 Build (no system rebuild needed):
 ```
@@ -171,68 +98,61 @@ nix eval --impure --accept-flake-config ~/nixos-config#nixosConfigurations.macbo
   | grep -oE '/nix/store/[a-z0-9]+-cadence-env\.drv' | head -1   # then
 nix-store --realise <that .drv>
 ```
+Rebuild/install: `sudo-env -c 'nixos-rebuild switch --impure --accept-flake-config
+--flake /home/tianyixia/nixos-config#macbook'`.
 
-Run:
-```
-cadence-env -c 'virtuoso'
-```
-Expected now: gets past saSecurity (no `Failed to initialize saSecurity.`),
-reaches the Qt event loop (state=S, `do_poll`). See Issue 2/3 above.
+Run: `cadence-env -c 'virtuoso'` → currently ~135s, then the GUI works (library
+manager still fails with `OA_HOME=/IC251/share/oa` in some runs — related, the
+sub-process spawn loses the install root).
 
-Debug FEX via a signal dump (guest RIP on SIGSEGV): `modules/env/fex-crash-diag.patch`
-patches `SignalDelegator.cpp` `HandleSignal` to call `SpillSRA(...)` then
-`LogMan::Msg::EFmt("[FEX-CRASH] ... rip=... host_pc=...")`; run with
-`-e FEX_SILENTLOG=0 -e FEX_OUTPUTLOG=/run/muvm-host/tmp/opencode/fex.log`, let it
-spin, then `kill -11 <pid>`. (The guest is FEX's process; `/tmp` is shared.)
+Debug tools:
+- `fex-crash-diag.patch` + `-e FEX_SILENTLOG=0 -e FEX_OUTPUTLOG=/run/muvm-host/tmp/opencode/fex.log`
+  then `kill -11 <pid>` dumps the guest RIP.
+- Sample the hang with `/proc/<pid>/stat` (`utime` = CPU), `/proc/<pid>/wchan`,
+  `/proc/<pid>/syscall`, and the `comm` of all `/proc/*/` to see which daemons
+  are up.
 
-## Files touched (uncommitted as of handoff)
+## Files touched (uncommitted)
 
-- `modules/env/cadence-env.nix` — FEX rootfs + guest script + muvm wrapper
-- `modules/env/fex-fs-segment-store-fix.patch` — Issue 1 fix
-- `modules/env/fex-merged-rootfs.patch` — Issue 2 fix (MergedRootFS + maps rewrite)
-- `modules/env/fex-tso-disable-gate.patch` — FEX_DISABLE_HARDWARE_TSO escape hatch
-- `modules/env/fex-crash-diag.patch` — SIGSEGV register dump for debugging
-- `hosts/macbook/system/default.nix` — fex overlay (FEX 2608 + the above patches)
-- `hosts/macbook/packages/default.nix` — unrelated wechat-uos desktop-fix wrap
-  (keep; from another agent)
+- `modules/env/cadence-env.nix` — FEX rootfs + `/bin`/`/usr/bin` setup + guest
+  script + `sudo -g no-internet` wrapper + `/lib64` tmpfiles + sudo rule.
+- `modules/env/fex-fs-segment-store-fix.patch` — Issue 1 fix.
+- `modules/env/fex-merged-rootfs.patch` — MergedRootFS + maps + statm/status rewrite.
+- `modules/env/fex-tso-disable-gate.patch`, `modules/env/fex-crash-diag.patch`.
+- `modules/env/muvm-no-network.patch` — muvm `--no-network` option.
+- `hosts/macbook/system/default.nix` — FEX overlay + patches + muvm patch.
+- `hosts/macbook/default.nix` — imported `modules/env/no-internet.nix`.
 - `~/.cadence/bin/virtuoso` (not in repo) — user wrapper that runs the real
-  binary directly
+  64-bit binary directly.
 
-## Notes
-
-- The overlay `patches` uses an **absolute** path
-  `/home/tianyixia/nixos-config/modules/env/fex-fs-segment-store-fix.patch`
-  because a relative `../` path resolved against the FEX source, not the nix
-  file. Fragile if the repo moves.
-- `muvm` bundles `fex` in its wrapper PATH; rebuilding `fex` rebuilds `muvm` +
-  `cadence-env`.
-- The VM's `/bin` is read-only (only `sh -> bash-interactive`), so Cadence's ksh
-  launchers (`#!/bin/ksh`) and its crash tools (`cdsPstack` needs
-  `/bin/ls`,`/usr/bin/wc`,`/bin/sed`; `cdsCrashReport` needs `/bin/ksh`) can't
-  run there. The real binary runs directly, so this is only cosmetic for the
-  crash-report tooling.
+NOTE: there are **unrelated concurrent changes** from another agent
+(`packages/steam-arm64*`, `modules/packages/steam-arm64.nix`, and the
+`steam-arm64` lines in `hosts/macbook/packages/default.nix`) — leave them alone.
 
 ## Handoff prompt
 
 ```
-Continue the Cadence-on-macbook FEX work in ~/nixos-config (docs/cadence-fex.md
-has the full writeup). Two open items:
+Continue the Cadence-on-macbook FEX work in ~/nixos-config. Read docs/cadence-fex.md
+first. ONE remaining blocker: `cadence-env -c 'virtuoso'` takes ~135s
+("Virtuoso initialization ~135s" in the GUI/CDS.log).
 
-1. saSecurity "Failed to initialize saSecurity" (the blocker): saSecurity
-   requires the libc mapping in /proc/self/maps to start with /usr/lib64/libc-
-   or /lib64/libc-*. Under FEX it maps as /run/fex-emu/rootfs/usr/lib64/libc.so.6
-   (FEX prefixes guest paths with the rootfs). muvm writes a MergedRootFS config
-   but FEX 2608 ignores it ("Unknown configuration option 'MergedRootFS'").
-   Implement/backport MergedRootFS in FEX (chroot/pivot into the overlay) so the
-   libc path becomes /usr/lib64/libc.so.6, or bump FEX past 2608 if main has it.
+Already confirmed (see doc): it is NOT translation — virtuoso does ~8.7s CPU then
+blocks in ppoll/do_poll for ~126s; during that window the MPS daemons
+(cdsNameServer/cdsMsgServer/cdsServIpc) never come up (clsbd is up; cds_root
+spawns+exits normally). The daemon binaries/wrappers themselves work when invoked
+directly (cdsMsgServer -V etc.), so the bug is in how virtuoso spawns them.
 
-2. boost::serialization spin (when running the binary directly): guest
-   rip=0xd0d1f60, static-init type_register. Try re-testing the
-   FEX_DISABLE_HARDWARE_TSO=1 hypothesis (hardware TSO in the muvm guest may be
-   broken); the env var gate exists in FEXInterpreter.cpp SetupTSOEmulation but
-   needs to reach FEX inside the VM.
+Next steps:
+1. Trace the exact spawn command virtuoso issues for the MPS daemons (instrument
+   FEX's ExecveHandler to log path+argv for cds* executables, or run virtuoso with
+   FEX_SILENTLOG=0 and grep the fex log). Find why the daemon exits immediately.
+2. Identify what virtuoso is poll()ing on (capture /proc/<pid>/syscall args incl.
+   the ppoll timeout, and /proc/net/unix + /proc/net/tcp to map the socket peers).
+3. Fix the spawn/timeout; re-test with the REAL `cadence-env -c 'virtuoso'` (do not
+   trust sh-script measurements — see the test-harness gotcha in the doc: use
+   separate `export` statements or the actual cadence-env).
 
-Build with: nix eval …#nixosConfigurations.macbook.config.environment.systemPackages
-| grep cadence-env.drv, then nix-store --realise. Run: cadence-env -c 'virtuoso'.
-Use the SIGSEGV signal-dump trick in the doc for FEX debugging.
+Build/rebuild commands are in the doc. The repo has unrelated steam-arm64 changes
+from another agent — leave those files alone. Uncommitted changes are the cadence
+work; don't lose them.
 ```

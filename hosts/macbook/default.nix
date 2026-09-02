@@ -29,6 +29,7 @@
     ../../modules/env/common.nix
     ../../modules/env/box64-env.nix
     ../../modules/env/cadence-env.nix
+    ../../modules/env/no-internet.nix
     ../../modules/system/sudo-env.nix
   ];
 

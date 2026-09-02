@@ -70,6 +70,15 @@
           ln -sf FEX $out/bin/FEXInterpreter
         '';
       });
+
+      # Add a `--no-network` flag so cadence-env can run the VM without any
+      # network interface (Cadence phones home and otherwise hangs on connect
+      # timeouts). See modules/env/muvm-no-network.patch.
+      muvm = prev.muvm.overrideAttrs (old: {
+        patches = (old.patches or []) ++ [
+          /home/tianyixia/nixos-config/modules/env/muvm-no-network.patch
+        ];
+      });
     })
   ];
 
