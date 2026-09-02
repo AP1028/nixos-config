@@ -17,6 +17,7 @@
     ../../../modules/packages/flatpak-baidunetdisk.nix
     ../../../modules/packages/flatpak-flatseal.nix
     ../../../modules/packages/flatpak-netease.nix
+    ../../../modules/packages/r2modman.nix
     ../../../modules/packages/electron-hide-nvidia.nix
     ../../../modules/packages/davinci.nix
     ../../../modules/packages/opencode.nix
