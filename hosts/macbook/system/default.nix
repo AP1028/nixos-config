@@ -43,6 +43,19 @@
           # `%fs:-offset` SSE stores, which faulted because the FS base was
           # never added. See modules/env/fex-fs-segment-store-fix.patch.
           /home/tianyixia/nixos-config/modules/env/fex-fs-segment-store-fix.patch
+          # Implement muvm's MergedRootFS option: hide the RootFS prefix from
+          # /proc/<pid>/maps so the guest sees /usr/lib64/libc.so.6 (not
+          # /run/fex-emu/rootfs/usr/lib64/libc.so.6). saSecurity parses maps
+          # and rejects the prefixed path. See modules/env/fex-merged-rootfs.patch.
+          /home/tianyixia/nixos-config/modules/env/fex-merged-rootfs.patch
+          # Gate hardware-TSO usage behind FEX_DISABLE_HARDWARE_TSO so we can
+          # test whether the muvm guest's PR_SET_MEM_MODEL_TSO is broken (see
+          # the boost::serialization static-init spin). modules/env/fex-tso-disable-gate.patch
+          /home/tianyixia/nixos-config/modules/env/fex-tso-disable-gate.patch
+          # Diagnostic: dump the guest register state (SpillSRA) on SIGSEGV/
+          # SIGBUS/SIGILL so a spinning/crashing process can be inspected with
+          # `kill -11 <pid>`. modules/env/fex-crash-diag.patch
+          /home/tianyixia/nixos-config/modules/env/fex-crash-diag.patch
         ];
         postPatch = (old.postPatch or "") + ''
           # This host runs a 16K-page kernel; jemalloc compiled with the

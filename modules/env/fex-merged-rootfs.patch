@@ -1,0 +1,187 @@
+diff --git a/FEXCore/Source/Interface/Config/Config.json.in b/FEXCore/Source/Interface/Config/Config.json.in
+index fa56db4..8f7f41d 100644
+--- a/FEXCore/Source/Interface/Config/Config.json.in
++++ b/FEXCore/Source/Interface/Config/Config.json.in
+@@ -149,6 +149,17 @@
+           "\teg: $HOME/.local/share/fex-emu/RootFS/<RootFS name>/"
+         ]
+       },
++      "MergedRootFS": {
++        "Type": "bool",
++        "Default": "false",
++        "Desc": [
++          "Treat the RootFS as a merged overlay of the host filesystem",
++          "When enabled, FEX hides the RootFS prefix from guest-visible paths",
++          "(e.g. /proc/self/maps, readlink of /proc/self/fd/*) so that the",
++          "guest sees the merged filesystem at its natural paths.",
++          "This is used by muvm's --merged-rootfs mode."
++        ]
++      },
+       "ThunkHostLibs": {
+         "Type": "str",
+         "Default": "@CMAKE_INSTALL_FULL_LIBDIR@/fex-emu/HostThunks",
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
+index 41e5d30..7949e88 100644
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
+@@ -34,6 +34,7 @@ $end_info$
+ #include <filesystem>
+ #include <optional>
+ #include <stdio.h>
++#include <sys/mman.h>
+ #include <sys/stat.h>
+ #include <sys/statfs.h>
+ #include <sys/xattr.h>
+@@ -623,6 +624,112 @@ static bool ShouldSkipOpenInEmu(int flags) {
+   return false;
+ }
+ 
++bool FileManager::IsProcMapsFile(const char* Pathname) const {
++  if (!Pathname) {
++    return false;
++  }
++
++  // In merged-rootfs mode FEX opens proc files through the rootfs path
++  // (e.g. /run/fex-emu/rootfs/proc/<pid>/maps), so strip that prefix first.
++  const auto& RootFS = LDPath();
++  if (!RootFS.empty()) {
++    size_t RootFSLen = RootFS.size();
++    if (RootFSLen != 0 && RootFS[RootFSLen - 1] == '/') {
++      RootFSLen -= 1;
++    }
++    if (strncmp(Pathname, RootFS.c_str(), RootFSLen) == 0 && (Pathname[RootFSLen] == '/' || Pathname[RootFSLen] == '\0')) {
++      Pathname += RootFSLen;
++    }
++  }
++
++  if (strncmp(Pathname, "/proc/", 6) != 0) {
++    return false;
++  }
++
++  const char* Base = strrchr(Pathname, '/');
++  if (!Base) {
++    return false;
++  }
++  ++Base;
++
++  return strcmp(Base, "maps") == 0 || strcmp(Base, "smaps") == 0 || strcmp(Base, "smaps_rollup") == 0 || strcmp(Base, "numa_maps") == 0;
++}
++
++bool FileManager::RewriteProcMapsFD(int FD) const {
++  const auto& RootFS = LDPath();
++  if (RootFS.empty()) {
++    return false;
++  }
++
++  fextl::string Prefix = RootFS;
++  while (!Prefix.empty() && Prefix.back() == '/') {
++    Prefix.pop_back();
++  }
++  if (Prefix.empty()) {
++    return false;
++  }
++
++  // Read the entire file (maps files are finite and bounded).
++  fextl::string Content;
++  char Buffer[16384];
++  lseek(FD, 0, SEEK_SET);
++  for (;;) {
++    auto Read = ::read(FD, Buffer, sizeof(Buffer));
++    if (Read > 0) {
++      Content.append(Buffer, Read);
++    } else if (Read == 0) {
++      break;
++    } else if (errno == EINTR) {
++      continue;
++    } else {
++      return false;
++    }
++  }
++  lseek(FD, 0, SEEK_SET);
++
++  // Replace every "<RootFS>/" occurrence with "/" so that the merged rootfs
++  // prefix is hidden from the guest (e.g. "/run/fex-emu/rootfs/usr/lib64/libc.so.6"
++  // becomes "/usr/lib64/libc.so.6").
++  fextl::string Needle = Prefix + "/";
++  fextl::string Out;
++  Out.reserve(Content.size());
++
++  size_t Pos = 0;
++  for (;;) {
++    auto Found = Content.find(Needle, Pos);
++    if (Found == fextl::string::npos) {
++      Out.append(Content, Pos, fextl::string::npos);
++      break;
++    }
++    Out.append(Content, Pos, Found - Pos);
++    Out += '/';
++    Pos = Found + Needle.size();
++  }
++
++  int MemFD = memfd_create("fex-maps", MFD_CLOEXEC);
++  if (MemFD == -1) {
++    return false;
++  }
++
++  size_t Written = 0;
++  while (Written < Out.size()) {
++    auto W = ::write(MemFD, Out.data() + Written, Out.size() - Written);
++    if (W > 0) {
++      Written += W;
++    } else if (W < 0 && errno == EINTR) {
++      continue;
++    } else {
++      ::close(MemFD);
++      return false;
++    }
++  }
++
++  lseek(MemFD, 0, SEEK_SET);
++  ::dup2(MemFD, FD);
++  ::close(MemFD);
++  return true;
++}
++
+ bool FileManager::ReplaceEmuFd(int fd, int flags, uint32_t mode) {
+   char Tmp[PATH_MAX + 1];
+ 
+@@ -637,6 +744,14 @@ bool FileManager::ReplaceEmuFd(int fd, int flags, uint32_t mode) {
+   }
+   Tmp[PathLength] = '\0';
+ 
++  // MergedRootFS: hide the RootFS prefix from /proc/<pid>/maps (and friends)
++  // so anti-tamper checks that parse these files see the guest paths.
++  if (MergedRootFS() && IsProcMapsFile(Tmp)) {
++    if (RewriteProcMapsFD(fd)) {
++      return true;
++    }
++  }
++
+   // And try to open via EmuFD
+   auto EmuFd = EmuFD.Open(Tmp, flags, mode);
+   if (EmuFd == -1) {
+diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h
+index b11f096..bcb874f 100644
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h
+@@ -169,6 +169,12 @@ private:
+   size_t GetRootFSPrefixLen(const char* pathname, size_t len, bool AliasedOnly) const;
+   ssize_t StripRootFSPrefix(char* pathname, ssize_t len, bool leaky) const;
+ 
++  // MergedRootFS support: hide the RootFS prefix from proc files that expose
++  // host paths (e.g. /proc/<pid>/maps). saSecurity and other anti-tamper code
++  // parse these and expect the guest-visible paths (e.g. /usr/lib64/libc.so.6).
++  bool IsProcMapsFile(const char* Pathname) const;
++  bool RewriteProcMapsFD(int FD) const;
++
+   struct ThunkDBObject {
+     fextl::string LibraryName;
+     fextl::unordered_set<fextl::string> Depends;
+@@ -182,6 +188,7 @@ private:
+ 
+   FEX_CONFIG_OPT(Filename, APP_FILENAME);
+   FEX_CONFIG_OPT(LDPath, ROOTFS);
++  FEX_CONFIG_OPT(MergedRootFS, MERGEDROOTFS);
+   FEX_CONFIG_OPT(ThunkGuestLibs, THUNKGUESTLIBS);
+   FEX_CONFIG_OPT(ThunkConfig, THUNKCONFIG);
+   FEX_CONFIG_OPT(AppConfigName, APP_CONFIG_NAME);

@@ -72,9 +72,9 @@ Fix (`modules/env/fex-fs-segment-store-fix.patch`): wrap the address with
 (The load path already goes through `LoadSourceFPR → DecodeAddress → A.Segment`,
 so only stores were wrong. XADD already does `AppendSegmentOffset`.)
 
-## Issue 2 (ROOT CAUSE KNOWN, NOT FIXED): saSecurity "Failed to initialize"
+## Issue 2 (FIXED): saSecurity "Failed to initialize"
 
-Symptom (current): `cadence-env -c 'virtuoso'` prints
+Symptom (was): `cadence-env -c 'virtuoso'` printed
 `Error: Received an unexpected system exception: Failed to initialize saSecurity.`
 
 This is **not** the license checkout — it's saSecurity's anti-tamper env check,
@@ -108,26 +108,52 @@ closer but still prefixed.)
 muvm's `-m` merged-rootfs mode writes `{"Config":{"RootFS":..., "MergedRootFS":"1"}}`
 into FEX's Config.json, but **FEX 2608 does not implement `MergedRootFS`** (it
 logs `Unknown configuration option 'MergedRootFS'` and ignores it). So FEX treats
-the overlay as a normal prefix rootfs. Options:
-- Backport `MergedRootFS` into FEX 2608 (chroot/pivot into `/run/fex-emu/rootfs`
-  instead of prefixing), or
-- Bump FEX to a version that has it (2608 is the latest tag; check `main`).
+the overlay as a normal prefix rootfs.
 
-## Issue 3 (UNRESOLVED): boost::serialization spin
+**Implemented (in `modules/env/fex-merged-rootfs.patch`):**
+1. Add a `MergedRootFS` bool config option (`Config.json.in`), so FEX accepts
+   muvm's `"MergedRootFS": "1"` key instead of ignoring it.
+2. When `MergedRootFS` is set, rewrite `/proc/<pid>/{maps,smaps,smaps_rollup,
+   numa_maps}` on open (in `FileManager::ReplaceEmuFd`) so every
+   `<RootFS>/` occurrence (e.g. `/run/fex-emu/rootfs/`) is replaced with `/`.
+   Note: in merged-rootfs mode FEX opens proc files *through the rootfs path*
+   (`/run/fex-emu/rootfs/proc/<pid>/maps`), so `get_fdpath()` returns the
+   prefixed path; the matcher strips the RootFS prefix before comparing.
+
+Result: the libc mapping now reads `/usr/lib64/libc.so.6` in `/proc/self/maps`
+and saSecurity passes (virtuoso proceeds past it). Verified with
+`FEX_SILENTLOG=0` — the `Unknown configuration option 'MergedRootFS'` message is
+gone and the maps content is rewritten.
+
+## Issue 3 (NOT REPRODUCED — appears fixed): boost::serialization spin
 
 When running the binary **directly** (not via `~/.cadence/bin/virtuoso`), with
-`LD_LIBRARY_PATH` starting with `/usr/lib64:/lib64`, virtuoso gets **past**
-saSecurity and then **spins** (State=R, wchan=0, userspace busy-loop) in
+`LD_LIBRARY_PATH` starting with `/usr/lib64:/lib64`, virtuoso was reported to get
+**past** saSecurity and then **spin** (State=R, wchan=0, userspace busy-loop) in
 `boost::serialization::typeid_system::extended_type_info_typeid_0` at guest
 `rip=0xd0d1f60` (offset `0xccd1f60` in the binary) — C++ static-init
 (`type_register` walking a `std::multiset`, uses `__cxa_guard_acquire` atomics).
-This is a FEX bug (the box64 path completed static init and reached the license
-checkout). Untested hypothesis: the muvm guest's hardware TSO
-(`PR_SET_MEM_MODEL_TSO`) is accepted but broken, corrupting the guard atomics
-(FEX then disables its software TSO atomics). I added an
-`FEX_DISABLE_HARDWARE_TSO` gate in `FEXInterpreter.cpp` `SetupTSOEmulation` to
-force software TSO but the test was inconclusive (the env var may not have
-reached FEX). Worth re-testing cleanly.
+Untested hypothesis was broken hardware TSO in the muvm guest
+(`PR_SET_MEM_MODEL_TSO`).
+
+**Re-test (after Issue 2 fix):** with the crash-diag patch applied and
+`kill -11` to dump the guest RIP, **both** the wrapper run and the direct run now
+reach the normal Qt event loop: state=S, `wchan=do_poll`, utime stops advancing
+(~8.9 s of startup JIT then idle), guest `rip=0x7fff…` (blocked in libc `poll`),
+**not** `0xd0d1f60`. No busy-loop spin observed. So the boost static-init spin
+is either already fixed by the FS/GS segment fix (Issue 1) or no longer
+reproducible.
+
+The `FEX_DISABLE_HARDWARE_TSO` escape hatch is kept as
+`modules/env/fex-tso-disable-gate.patch` (gate the `SetHardwareTSOSupport(true)`
+call behind `!getenv("FEX_DISABLE_HARDWARE_TSO")`), but the hypothesis is
+unconfirmed and no longer the suspected blocker.
+
+**Next unknown:** the do_poll wait. It could be the license checkout
+(`CDS_LIC_FILE` + `CDS_LIC_ONLY=1`) or the X11 event loop; CDS.log is not yet
+written, so virtuoso likely stalls at license checkout or display setup, not
+static init. This is the next thing to investigate (not a FEX rootfs/segment
+issue).
 
 ## Key facts / reproduction
 
@@ -150,10 +176,11 @@ Run:
 ```
 cadence-env -c 'virtuoso'
 ```
-Expected today: `Failed to initialize saSecurity.` (Issue 2).
+Expected now: gets past saSecurity (no `Failed to initialize saSecurity.`),
+reaches the Qt event loop (state=S, `do_poll`). See Issue 2/3 above.
 
-Debug FEX via a signal dump (guest RIP on SIGSEGV): the earlier diagnostic was a
-patch to `SignalDelegator.cpp` `HandleSignal` calling `SpillSRA(...)` then
+Debug FEX via a signal dump (guest RIP on SIGSEGV): `modules/env/fex-crash-diag.patch`
+patches `SignalDelegator.cpp` `HandleSignal` to call `SpillSRA(...)` then
 `LogMan::Msg::EFmt("[FEX-CRASH] ... rip=... host_pc=...")`; run with
 `-e FEX_SILENTLOG=0 -e FEX_OUTPUTLOG=/run/muvm-host/tmp/opencode/fex.log`, let it
 spin, then `kill -11 <pid>`. (The guest is FEX's process; `/tmp` is shared.)
@@ -162,7 +189,10 @@ spin, then `kill -11 <pid>`. (The guest is FEX's process; `/tmp` is shared.)
 
 - `modules/env/cadence-env.nix` — FEX rootfs + guest script + muvm wrapper
 - `modules/env/fex-fs-segment-store-fix.patch` — Issue 1 fix
-- `hosts/macbook/system/default.nix` — fex overlay (FEX 2608 + patch)
+- `modules/env/fex-merged-rootfs.patch` — Issue 2 fix (MergedRootFS + maps rewrite)
+- `modules/env/fex-tso-disable-gate.patch` — FEX_DISABLE_HARDWARE_TSO escape hatch
+- `modules/env/fex-crash-diag.patch` — SIGSEGV register dump for debugging
+- `hosts/macbook/system/default.nix` — fex overlay (FEX 2608 + the above patches)
 - `hosts/macbook/packages/default.nix` — unrelated wechat-uos desktop-fix wrap
   (keep; from another agent)
 - `~/.cadence/bin/virtuoso` (not in repo) — user wrapper that runs the real

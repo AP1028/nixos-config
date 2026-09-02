@@ -207,6 +207,11 @@
     export CDSHOME="$CDS_INST_DIR"
     export SPECTRE_HOME="$CDSBASE/spectre181"
     export OA_HOME="$CDS_INST_DIR/share/oa"
+    # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
+    # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
+    # oaGetLibPath/sysname pick the aarch64 OA platform "lna64_rhel80" instead.
+    # Pin the OA platform name to the x86_64 one.
+    export OA_SYSNAME=linux_rhel80
     export CDS_AUTO_64BIT=ALL
     export CDS_Netlisting_Mode=Analog
     export SPECTRE_DEFAULTS=-E
@@ -214,7 +219,7 @@
     export CDS_LIC_FILE="$CDSBASE/license/license.dat"
     export CDS_LIC_ONLY=1
     export W3264_NO_HOST_CHECK=1
-    export OA_UNSUPPORTED_PLAT=linux_rhel60
+    export OA_UNSUPPORTED_PLAT=linux_rhel80
     export CDS_ENABLE_VMS=1
     export CDS_LOAD_ENV=CWD
     for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
@@ -227,6 +232,33 @@
     export PATH="$HOME/.cadence/bin:$PATH"
     export PATH
     exec ${pkgs.tcsh}/bin/tcsh "$@"
+  '';
+
+  # Guest-side root setup script (run via muvm `-x` before the user command).
+  # Cadence's ksh/tcsh launcher scripts (libManager, libSelect, cdsPstack, ...)
+  # have `#!/bin/ksh`/`#!/bin/tcsh` shebangs and call common POSIX tools, but
+  # the VM's /bin only has `sh -> bash` (it mirrors the host NixOS /bin). Mount
+  # a tmpfs over /bin and link in the aarch64 shells + tools the launchers need.
+  cadence-env-guest-bin = pkgs.writeShellScript "cadence-env-guest-bin" ''
+    mount -t tmpfs tmpfs /bin
+    mount -t tmpfs tmpfs /usr/bin
+
+    for tool in ${pkgs.coreutils}/bin/*; do
+      [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
+      [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
+    done
+    for tool in ${pkgs.gnused}/bin/* ${pkgs.gawk}/bin/* ${pkgs.gnugrep}/bin/* ${pkgs.procps}/bin/*; do
+      [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
+      [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
+    done
+
+    ln -s ${pkgs.ksh}/bin/ksh /bin/ksh
+    ln -s ${pkgs.tcsh}/bin/tcsh /bin/tcsh
+    ln -s ${pkgs.bash}/bin/bash /bin/bash
+    ln -s ${pkgs.bash}/bin/bash /bin/sh
+    ln -s ${pkgs.ksh}/bin/ksh /usr/bin/ksh
+    ln -s ${pkgs.tcsh}/bin/tcsh /usr/bin/tcsh
+    ln -s ${pkgs.bash}/bin/bash /usr/bin/bash
   '';
 
   # ── FHS environment ─────────────────────────────────────────────
@@ -433,7 +465,12 @@
       export IC_HOME="$CDS_INST_DIR"
       export CDSHOME="$CDS_INST_DIR"
       export SPECTRE_HOME="$CDSBASE/spectre181"
-      export OA_HOME="$CDS_INST_DIR/share/oa"
+    export OA_HOME="$CDS_INST_DIR/share/oa"
+    # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
+    # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
+    # oaGetLibPath/sysname pick the aarch64 OA platform "lna64_rhel80" instead.
+    # Pin the OA platform name to the x86_64 one.
+    export OA_SYSNAME=linux_rhel80
       export CDS_AUTO_64BIT=ALL
       export CDS_Netlisting_Mode=Analog
       export SPECTRE_DEFAULTS=-E
@@ -462,6 +499,7 @@
         exec ${pkgs.muvm}/bin/muvm \
           -f ${fex-cadence-rootfs} \
           -m \
+          -x ${cadence-env-guest-bin} \
           -e DISPLAY \
           -e XAUTHORITY \
           -- ${cadence-env-guest} "$@"
@@ -472,6 +510,16 @@
       '';
 in {
   environment.systemPackages = [cadence-env];
+
+  # Cadence's ksh/tcsh launcher scripts probe `[ -r /lib64/. ]` (and some check
+  # /usr/lib64) to decide 32-vs-64-bit. NixOS is not usr-merged, so neither
+  # exists; the muvm guest mirrors the host / via virtiofs (read-only for the
+  # mapped user), so these must be created on the host. The empty dirs make the
+  # "64-bit host" check pass (the real x86_64 libs come from the FEX rootfs).
+  systemd.tmpfiles.rules = lib.mkIf isAarch64 [
+    "d /lib64 0755 root root -"
+    "d /usr/lib64 0755 root root -"
+  ];
 
   # Allow passwordless sudo for the cadence-env wrapper (needed for group switching)
   security.sudo.extraRules = lib.mkIf (!isAarch64) [

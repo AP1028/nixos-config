@@ -12,9 +12,11 @@
 in {
   imports = [
     ../../../modules/packages/opencode.nix
+    ../../../modules/packages/steam-arm64.nix
   ];
 
   programs.nix-ld.enable = true;
+  programs.steam-arm64.enable = true;
 
   environment.systemPackages = with pkgs; [
     wget
