@@ -103,7 +103,8 @@ never connected) or the OA platform init.
    user wrapper `~/.cadence/bin/virtuoso` was **first in PATH** (outside the
    install tree), so `cds_root` found it and failed. Fix: the wrapper now
    re-orders `PATH` to put the install-tree bins first before exec'ing the
-   64-bit binary. (`~/.cadence/bin/virtuoso`, not in repo.)
+   64-bit binary. Tracked as `scripts/virtuoso-wrapper.sh` (install it at
+   `~/.cadence/bin/virtuoso`).
 2. **`cds_plat` reports the wrong platform** — it spawns `/bin/uname -m` (a
    native aarch64 binary) which returns `aarch64`, so `cds_plat` says `lna64`
    and `cds_root` prints `running cross platform: 'lnx86' on 'lna64'`. Fix:
@@ -173,6 +174,53 @@ Note: this patch is to the **installed Cadence tree** (`~/.cadence/IC251`), whic
 is not managed by Nix. A reinstall/re-extract of the Cadence install would undo
 it — re-run the script after reinstalls (it recreates its own backups).
 
+### How to (re)apply the fix — from git-tracked content only
+
+Everything needed is in this repo; the only non-repo input is the Cadence
+install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
+
+1. **Build/rebuild the environment** (one-off; installs `cadence-env` + FEX +
+   muvm with the guest scripts and the FEX patches in `modules/env/`):
+   ```
+   sudo-env -c 'nixos-rebuild switch --impure --accept-flake-config \
+     --flake /home/tianyixia/nixos-config#macbook'
+   ```
+
+2. **Install the virtuoso wrapper** — fixes `cds_root` "can't determine
+   installation root" (the cadence-env guest PATH puts `~/.cadence/bin` first,
+   so this wrapper is what `cadence-env -c 'virtuoso'` runs):
+   ```
+   install -m755 scripts/virtuoso-wrapper.sh ~/.cadence/bin/virtuoso
+   ```
+
+3. **Apply the launch-delay binary patches** (idempotent; backs each file up to
+   `<name>.pre-qprocess-timeout` on first change):
+   ```
+   python3 scripts/patch-cadence-qprocess-timeout.py            # apply
+   python3 scripts/patch-cadence-qprocess-timeout.py --check    # expect 11+3+1 OK
+   ```
+   Patches `tools.lnx86/dfII/bin/64bit/virtuoso` (11 sites),
+   `tools/dfII/bin/64bit/libManager` (3 sites), and
+   `tools.lnx86/Qt/v5/64bit/lib/libcdsQt5Core.so.5.15.9` (1 site) under
+   `~/.cadence/IC251`: each `QProcess::waitForStarted/Finished(30000)` immediate
+   `0x7530` → `0x7d0` (2000 ms). `--revert` undoes it.
+
+4. **Verify** (use the real `cadence-env`, not hand-rolled env — see gotcha below):
+   ```
+   cadence-env -c 'virtuoso'              # "Virtuoso has launched" at ~26s
+   libManager -unmapped -log /tmp/lm.log  # cds_root re-spawn at ~6s
+   ```
+   Timing: `cds_root` re-spawn at t≈15s (was t≈71s), `cdsNameServer` at t≈20s
+   (was t≈132s). The ~11s before the first `cds_root` is FEX loading the 818 MB
+   binary + libs — not part of the stall.
+
+5. **Re-diagnose a stall if it regresses** (the interposer that found this bug):
+   build it (cross-compiles the x86_64 `.so` from the aarch64 host), run the tool
+   under `LD_PRELOAD`, and resolve the logged backtraces — see
+   `scripts/qtimer-preload/README.md`. The stall signature is a `ppoll` with
+   `tv_sec >= 20`; resolve the logged addresses with the nixpkgs
+   `x86_64-unknown-linux-gnu-addr2line` against the tool's binary/libs.
+
 ### Test-harness gotcha (important — do NOT repeat this)
 
 My earlier "~17s launch" claims were **bogus**: several of my scripts did
@@ -194,9 +242,9 @@ nix-store --realise <that .drv>
 Rebuild/install: `sudo-env -c 'nixos-rebuild switch --impure --accept-flake-config
 --flake /home/tianyixia/nixos-config#macbook'`.
 
-Run: `cadence-env -c 'virtuoso'` → currently ~135s, then the GUI works (library
-manager still fails with `OA_HOME=/IC251/share/oa` in some runs — related, the
-sub-process spawn loses the install root).
+Run: `cadence-env -c 'virtuoso'` → "Virtuoso has launched" at ~26s (was ~135s);
+the Library Manager (`libManager`) is fast now too. See "How to (re)apply the fix"
+above for the exact recreate steps.
 
 Debug tools:
 - `fex-crash-diag.patch` + `-e FEX_SILENTLOG=0 -e FEX_OUTPUTLOG=/run/muvm-host/tmp/opencode/fex.log`
@@ -205,53 +253,48 @@ Debug tools:
   `/proc/<pid>/syscall`, and the `comm` of all `/proc/*/` to see which daemons
   are up.
 
-## Files touched (uncommitted)
+## Files in repo (all git-tracked)
 
-- `modules/env/cadence-env.nix` — FEX rootfs + `/bin`/`/usr/bin` setup + guest
-  script + `sudo -g no-internet` wrapper + `/lib64` tmpfiles + sudo rule.
-- `modules/env/fex-fs-segment-store-fix.patch` — Issue 1 fix.
-- `modules/env/fex-merged-rootfs.patch` — MergedRootFS + maps + statm/status rewrite.
-- `modules/env/fex-tso-disable-gate.patch`, `modules/env/fex-crash-diag.patch`.
-- `modules/env/muvm-no-network.patch` — muvm `--no-network` option.
-- `modules/env/fex-execve-log.patch` — NEW: guest-execve tracing via
-  `FEX_EXECVE_LOG` (append path+argv per execve), used to trace the daemon
-  spawn order.
-- `hosts/macbook/system/default.nix` — FEX overlay + patches (incl.
-  `fex-execve-log.patch`) + muvm patch.
-- `hosts/macbook/default.nix` — imported `modules/env/no-internet.nix`.
-- `modules/env/cadence-env.nix` — also now: `strace` in the guest-bin tool
-  list, and a `/bin/uname` wrapper that reports `x86_64` for `-m` (see fix #2).
-- `~/.cadence/bin/virtuoso` (not in repo) — user wrapper; now re-orders `PATH`
-  so the install tree precedes it (fix #1). Backups: `virtuoso.fex-direct`.
+Runtime env (nix):
+- `modules/env/cadence-env.nix` — the `cadence-env` env: FEX rootfs +
+  `/bin`/`/usr/bin` guest setup (+ strace/gdb), the `/bin/uname` x86_64 wrapper,
+  the guest script (Cadence env + `QT_SCALE_FACTOR=2` HiDPI, aarch64-only),
+  the `sudo -g no-internet` muvm wrapper, and the `/lib64` tmpfiles.
+- `hosts/macbook/system/default.nix` — FEX 2608 overlay + patch list.
+- FEX patches under `modules/env/`: `fex-fs-segment-store-fix.patch`,
+  `fex-merged-rootfs.patch`, `fex-tso-disable-gate.patch`, `fex-crash-diag.patch`
+  (SIGSEGV/BUS/ILL/USR1 register + frame-walk dump), `fex-execve-log.patch`
+  (guest-execve tracing via `FEX_EXECVE_LOG`), `muvm-no-network.patch`.
+- `hosts/macbook/default.nix` / `modules/env/no-internet.nix` — the
+  `no-internet` group (guest outbound REJECTed fast).
 
-NOTE: there are **unrelated concurrent changes** from another agent
-(`packages/steam-arm64*`, `modules/packages/steam-arm64.nix`, and the
-`steam-arm64` lines in `hosts/macbook/packages/default.nix`) — leave them alone.
+The launch-delay fix (binary patches, applied to the install tree by a script):
+- `scripts/patch-cadence-qprocess-timeout.py` — apply/check/revert the
+  `0x7530`→`0x7d0` patches (virtuoso 11 sites, libManager 3, libcdsQt5Core 1).
+- `scripts/virtuoso-wrapper.sh` — installed at `~/.cadence/bin/virtuoso`
+  (LD_LIBRARY_PATH + PATH reorder; see fix #1).
 
-## Handoff prompt
+Diagnostic tooling:
+- `scripts/qtimer-preload/` — x86_64 `LD_PRELOAD` interposer (`qtimer_preload.c`
+  + `qtimer.map` + `build.nix` + `README.md`) that dumps a backtrace on a
+  `ppoll` ≥20s; used to pin the stall to `QProcess::waitFor*`.
 
-```
-Continue the Cadence-on-macbook FEX work in ~/nixos-config. Read docs/cadence-fex.md
-first. ONE remaining blocker: `cadence-env -c 'virtuoso'` takes ~135s
-("Virtuoso initialization ~135s" in the GUI/CDS.log).
+Docs: `docs/cadence-fex.md` (this file).
 
-Already confirmed (see doc): it is NOT translation — virtuoso does ~8.7s CPU then
-blocks in ppoll/do_poll for ~126s; during that window the MPS daemons
-(cdsNameServer/cdsMsgServer/cdsServIpc) never come up (clsbd is up; cds_root
-spawns+exits normally). The daemon binaries/wrappers themselves work when invoked
-directly (cdsMsgServer -V etc.), so the bug is in how virtuoso spawns them.
+NOTE: **unrelated concurrent changes** from another agent (`packages/steam-arm64*`,
+`modules/packages/steam-arm64.nix`, and the `steam-arm64` lines in
+`hosts/macbook/packages/default.nix`) — leave them alone.
 
-Next steps:
-1. Trace the exact spawn command virtuoso issues for the MPS daemons (instrument
-   FEX's ExecveHandler to log path+argv for cds* executables, or run virtuoso with
-   FEX_SILENTLOG=0 and grep the fex log). Find why the daemon exits immediately.
-2. Identify what virtuoso is poll()ing on (capture /proc/<pid>/syscall args incl.
-   the ppoll timeout, and /proc/net/unix + /proc/net/tcp to map the socket peers).
-3. Fix the spawn/timeout; re-test with the REAL `cadence-env -c 'virtuoso'` (do not
-   trust sh-script measurements — see the test-harness gotcha in the doc: use
-   separate `export` statements or the actual cadence-env).
+## Handoff
 
-Build/rebuild commands are in the doc. The repo has unrelated steam-arm64 changes
-from another agent — leave those files alone. Uncommitted changes are the cadence
-work; don't lose them.
-```
+The launch delay is SOLVED (see "How to (re)apply the fix" above): the ~135s
+stall was `QCadenceStyle::cdsRoot()` → `QProcess::waitForStarted/Finished(30000)`
+blocking ~4×30s under FEX. Patched to 2s via
+`scripts/patch-cadence-qprocess-timeout.py` (virtuoso + libManager +
+libcdsQt5Core). `cadence-env -c 'virtuoso'` launches in ~26s.
+
+If a new/regressed stall appears, build + run `scripts/qtimer-preload/` and
+resolve the `ppoll` backtrace (see its README). The same `QCadenceStyle::cdsRoot`
+pattern is compiled into other Cadence Qt tools (libSelect, layout, dashboard, …)
+— patch them the same way if they load slowly (add their `0x7530` `waitFor*`
+sites to the patch script).

@@ -1,0 +1,9 @@
+GLIBC_2.4 { global: ppoll; };
+Qt_5 {
+  global:
+    _ZN6QTimer5startEi;
+    _ZN6QTimer11setIntervalEi;
+    _ZN6QTimer5startEv;
+    _ZN7QObject10startTimerEi;
+  local: *;
+};
