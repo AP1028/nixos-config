@@ -336,6 +336,40 @@ capture tooling must be single-shot / delayed, never polling.
 - Manual equivalent: `sudo-env -c 'gdb -q -batch -p <kwin> -ex bt -ex
   "thread apply all bt"'` and the same for `Xwayland` (`pgrep -x Xwayland`).
 
+### Root cause (captured)
+
+The freeze is a **busy-loop in Xwayland's damage/composite extension**; kwin is
+just a victim. Captured backtraces (saved in `docs/freeze-dump.log`):
+
+Xwayland main thread (spinning, `Rl`, wchan empty):
+```
+damageRegionProcessPending()  (miext/damage/damage.c)
+damageCopyArea()              (miext/damage/damage.c)
+compRestoreWindow()           (composite/compalloc.c)
+compCheckRedirect()           (composite/compwindow.c)
+compUnrealizeWindow()         (composite/compwindow.c)
+UnrealizeTree() -> UnmapWindow() -> ProcUnmapWindow() -> Dispatch() -> dix_main()
+```
+
+kwin main thread (blocked in `xcb_wait_for_reply`):
+```
+xcb_wait_for_reply <- NETWinInfo::update <- KWin::X11Window::windowEvent
+  <- Workspace::workspaceEvent <- Xwayland::dispatchEvents
+```
+
+Mechanism: closing the libManager window → `UnmapWindow` → the composite
+extension unredirects the window (`compCheckRedirect` → `compRestoreWindow`),
+copying the saved pixmap back via the damage-wrapped `CopyArea`
+(`damageCopyArea`), which then spins in `damageRegionProcessPending` — the
+damage extension's pending-damage list becomes circular when a window is
+damaged and then unrealized before the damage is processed. kwin blocks forever
+waiting for Xwayland's reply.
+
+Note: the 2018 xorg-server fix "xwayland: remove dirty window unconditionally
+on unrealize" (the `xorg_list_del(&xwl_window->link_damage)` in
+`xwl_window_dispose`) is **already present** in xwayland 24.1.13 — this is the
+*other* (core `miext/damage`) list, so a further fix is still needed.
+
 ### Next step
 
 Reproduce with the single-shot method, capture the **Xwayland** (and kwin)
