@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fix the ~135s `virtuoso` launch stall on the macbook FEX setup.
+"""Fix the ~135s `virtuoso` launch stall (and slow tool startup) on the
+macbook FEX setup.
 
 Root cause: during the Cadence Qt style init, `QCadenceStyle::cdsRoot()`
 runs `cds_root` through `QProcess` and calls `waitForStarted(30000)` /
@@ -9,18 +10,25 @@ observe the child process as ready, so each blocks the full 30s (~4x =
 ~120s). Patching the 30000 (0x7530) timeout immediate down to 2000 (0x7d0)
 drops the launch to ~26s.
 
+The same `QCadenceStyle::cdsRoot` pattern is compiled into every Cadence Qt
+tool, so `libManager` (Library Manager) etc. had the same stall; each such
+binary needs its own sites patched.
+
 The patches are to the *installed* Cadence tree (`~/.cadence/IC251`), which
 is user data not managed by Nix, so they must be (re-)applied after a
 reinstall/re-extract of the install. Each site is a x86_64 `mov $0x7530,%esi`
 (`be 30 75 00 00`) — the timeout argument to `QProcess::waitForStarted/Finished`.
 
-Sites (file offsets in the ELF, equal to VMA because the binaries are non-PIE):
+Sites (file offsets in the ELF; equal to VMA because the binaries are non-PIE):
   tools.lnx86/dfII/bin/64bit/virtuoso
       QCadenceStyle::cdsRoot  waitForStarted / waitForFinished
           0x1e9611fb / 0x1e961248
       9 further QProcess::waitForStarted/Finished(30000) call sites
           0x11f9d078 0x11fe9447 0x120ca32f 0x120cacf6 0x121db625   (waitForStarted)
           0xc167401  0x120ca350 0x120cad18 0x121db8d0              (waitForFinished)
+  tools/dfII/bin/64bit/libManager          (hardlinked from tools.lnx86/...)
+      waitForStarted (a further site) / QCadenceStyle::cdsRoot waitForStarted+waitForFinished
+          0x2131c6 / 0x95fe3b / 0x95fe88
   tools.lnx86/Qt/v5/64bit/lib/libcdsQt5Core.so.5.15.9
       QProcess::~QProcess  waitForFinished
           0x252688
@@ -40,6 +48,7 @@ OLD = b"\xbe\x30\x75\x00\x00"  # mov $0x7530,%esi  (30000 ms)
 NEW = b"\xbe\xd0\x07\x00\x00"  # mov $0x7d0,%esi   (2000 ms)
 
 VIRTUOSO = "tools.lnx86/dfII/bin/64bit/virtuoso"
+LIBMANAGER = "tools/dfII/bin/64bit/libManager"
 QTCORE = "tools.lnx86/Qt/v5/64bit/lib/libcdsQt5Core.so.5.15.9"
 
 SITES = {
@@ -47,6 +56,10 @@ SITES = {
         0x1E9611FB, 0x1E961248,  # QCadenceStyle::cdsRoot waitForStarted/Finished
         0x11F9D078, 0x11FE9447, 0x120CA32F, 0x120CACF6, 0x121DB625,  # waitForStarted
         0x0C167401, 0x120CA350, 0x120CAD18, 0x121DB8D0,  # waitForFinished
+    ],
+    LIBMANAGER: [
+        0x2131C6,  # a further QProcess::waitForStarted
+        0x95FE3B, 0x95FE88,  # QCadenceStyle::cdsRoot waitForStarted/Finished
     ],
     QTCORE: [0x252688],
 }

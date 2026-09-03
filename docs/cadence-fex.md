@@ -139,6 +139,7 @@ also a third 30s wait: `QProcess::~QProcess()` (in `libcdsQt5Core.so`) does
 |---|---|---|
 | `dfII/bin/64bit/virtuoso` | `QCadenceStyle::cdsRoot` `waitForStarted`/`waitForFinished` (VA 0x1ed611fb / 0x1ed61248 = file 0x1e9611fb / 0x1e961248) | `0x7530`→`0x7d0` (2000 ms) |
 | `dfII/bin/64bit/virtuoso` | 9 other `QProcess::waitForStarted/Finished(30000)` sites (file 0x11f9d078, 0x11fe9447, 0x120ca32f, 0x120cacf6, 0x121db625, 0xc167401, 0x120ca350, 0x120cad18, 0x121db8d0) | `0x7530`→`0x7d0` |
+| `dfII/bin/64bit/libManager` | `QCadenceStyle::cdsRoot` `waitForStarted`/`waitForFinished` + one more `waitForStarted` (file 0x95fe3b / 0x95fe88 / 0x2131c6) | `0x7530`→`0x7d0` |
 | `Qt/v5/64bit/lib/libcdsQt5Core.so` | `QProcess::~QProcess` `waitForFinished(30000)` (VA/file 0x252688) | `0x7530`→`0x7d0` |
 
 The patch is automated by `scripts/patch-cadence-qprocess-timeout.py` (checked
@@ -160,6 +161,13 @@ t≈132s), "Virtuoso has launched" at t≈26s. The ~11s startup is FEX loading t
 818 MB binary + libraries (not part of the stall). Could go lower (e.g. 500 ms)
 if the remaining ~4s of `cdsRoot` wait is worth shaving; 2000 ms is chosen as a
 safe margin over the FEX fork/exec latency of `cds_root`.
+
+The **Library Manager (`libManager`) had the same stall** (its own copy of
+`QCadenceStyle::cdsRoot`), reproduced standalone with
+`libManager -unmapped -log …` (its `cds_root` re-spawn was at t≈34s). Patched
+the same way — now `cds_root` re-spawns at t≈6s and `cdsNameServer` at t≈10s.
+Other Cadence Qt tools (libSelect, layout, etc.) carry the same pattern and can
+be patched the same way if they also load slowly.
 
 Note: this patch is to the **installed Cadence tree** (`~/.cadence/IC251`), which
 is not managed by Nix. A reinstall/re-extract of the Cadence install would undo
