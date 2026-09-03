@@ -191,6 +191,11 @@
     unset http_proxy https_proxy ftp_proxy rsync_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY RSYNC_PROXY ALL_PROXY no_proxy NO_PROXY
     export LANG=C LC_ALL=C
     export __GLX_VENDOR_LIBRARY_NAME=mesa
+    # HiDPI: the guest X server (host Xwayland) reports 96 DPI on the 2560x1600
+    # physical display, so Qt renders at 1x and the UI is tiny. Scale it up.
+    # (aarch64/FEX guest only; the x86_64 native path is unaffected.)
+    export QT_ENABLE_HIGHDPI_SCALING=1
+    export QT_SCALE_FACTOR=2
     # saSecurity requires the licensing-agent mode disabled and the VSM
     # framework vars set before it will attempt the license checkout.
     export CDS_LIC_USE_AGENT=0
