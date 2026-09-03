@@ -249,10 +249,28 @@
       [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
       [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
     done
-    for tool in ${pkgs.gnused}/bin/* ${pkgs.gawk}/bin/* ${pkgs.gnugrep}/bin/* ${pkgs.procps}/bin/*; do
+    for tool in ${pkgs.gnused}/bin/* ${pkgs.gawk}/bin/* ${pkgs.gnugrep}/bin/* ${pkgs.procps}/bin/* ${pkgs.strace}/bin/* ${pkgs.gdb}/bin/*; do
       [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
       [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
     done
+
+    # Replace `uname` with a wrapper that reports x86_64 for `-m`. cds_plat /
+    # cds_root spawn `/bin/uname -m` (a native aarch64 binary) to detect the
+    # host platform; the real "aarch64" answer makes them report "lna64" and
+    # virtuoso treats the run as "cross platform" ("lnx86" on "lna64"), which
+    # makes it retry for ~120s in "Virtuoso initialization". Everything else
+    # (the OS name etc.) is identical between the two arches.
+    rm -f /bin/uname /usr/bin/uname
+    cat > /bin/uname <<UN
+    #!/bin/sh
+    if [ "\$1" = "-m" ]; then
+      echo x86_64
+    else
+      exec ${pkgs.coreutils}/bin/uname "\$@"
+    fi
+    UN
+    chmod +x /bin/uname
+    ln -sf /bin/uname /usr/bin/uname
 
     ln -s ${pkgs.ksh}/bin/ksh /bin/ksh
     ln -s ${pkgs.tcsh}/bin/tcsh /bin/tcsh

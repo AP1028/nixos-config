@@ -2,11 +2,11 @@ diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator.cpp b/Sou
 index 6d6c899..f9fc695 100644
 --- a/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator.cpp
 +++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/SignalDelegator.cpp
-@@ -80,6 +80,28 @@ void SignalDelegator::HandleSignal(FEX::HLE::ThreadStateObject* Thread, int Sign
+@@ -86,6 +86,42 @@
      LogMan::Msg::AFmt("Thread {} has received a signal and hasn't registered itself with the delegate! Programming error!",
                        FHU::Syscalls::gettid());
    } else {
-+    if (Signal == SIGSEGV || Signal == SIGBUS || Signal == SIGILL) {
++    if (Signal == SIGSEGV || Signal == SIGBUS || Signal == SIGILL || Signal == SIGUSR1) {
 +      auto* SigInfo = static_cast<siginfo_t*>(Info);
 +      SpillSRA(Thread->Thread, UContext, 0);
 +      auto* S = &Thread->Thread->CurrentFrame->State;
@@ -27,6 +27,20 @@ index 6d6c899..f9fc695 100644
 +        S->gregs[FEXCore::X86State::REG_R10], S->gregs[FEXCore::X86State::REG_R11],
 +        S->gregs[FEXCore::X86State::REG_R12], S->gregs[FEXCore::X86State::REG_R13],
 +        S->gregs[FEXCore::X86State::REG_R14], S->gregs[FEXCore::X86State::REG_R15]);
++      // Best-effort frame-pointer walk (guest memory is mapped 1:1).
++      uint64_t Frame = S->gregs[FEXCore::X86State::REG_RBP];
++      uint64_t PC = S->rip;
++      for (int i = 0; i < 48 && Frame != 0; i++) {
++        uint64_t SavedRBP = 0, RetAddr = 0;
++        memcpy(&SavedRBP, reinterpret_cast<void*>(Frame), 8);
++        memcpy(&RetAddr, reinterpret_cast<void*>(Frame + 8), 8);
++        LogMan::Msg::EFmt("[FEX-BT] #{:d} rip=0x{:x} rbp=0x{:x}", i, PC, Frame);
++        PC = RetAddr;
++        Frame = SavedRBP;
++        if (RetAddr == 0 || SavedRBP <= Frame) {
++          break;
++        }
++      }
 +    }
      SignalHandler& Handler = HostHandlers[Signal];
      for (auto& HandlerFunc : Handler.Handlers) {
