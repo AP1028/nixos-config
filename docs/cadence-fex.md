@@ -188,7 +188,10 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
 
 2. **Install the virtuoso wrapper** — fixes `cds_root` "can't determine
    installation root" (the cadence-env guest PATH puts `~/.cadence/bin` first,
-   so this wrapper is what `cadence-env -c 'virtuoso'` runs):
+   so this wrapper is what `cadence-env -c 'virtuoso'` runs), and on exit kills
+   the detached daemons virtuoso leaves behind (`dashboard -runAsDaemon`, MPS
+   `cdsNameServer`/`cdsMsgServer`/`cdsServIpc`, `clsbd`, …) so the stale
+   `dashboard` tray icon doesn't block the next launch:
    ```
    install -m755 scripts/virtuoso-wrapper.sh ~/.cadence/bin/virtuoso
    ```
