@@ -194,9 +194,9 @@
     # HiDPI: the guest X server (host Xwayland) reports 96 DPI on the 2560x1600
     # physical display, so Qt renders at 1x and the UI is tiny. Scale it up.
     # (aarch64/FEX guest only; the x86_64 native path is unaffected.)
-    # 1.5 is the sweet spot here (2 was too large); tune if needed.
+    # 1.3 is the sweet spot here (2 was too large, 1.5 still too large); tune if needed.
     export QT_ENABLE_HIGHDPI_SCALING=1
-    export QT_SCALE_FACTOR=1.5
+    export QT_SCALE_FACTOR=1.3
     export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
     # saSecurity requires the licensing-agent mode disabled and the VSM
     # framework vars set before it will attempt the license checkout.

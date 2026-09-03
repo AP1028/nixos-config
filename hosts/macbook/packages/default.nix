@@ -73,5 +73,7 @@ in {
     tigervnc
     box64
     muvm
+    gamescope
+    gdb
   ];
 }
