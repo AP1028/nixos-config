@@ -288,6 +288,62 @@ NOTE: **unrelated concurrent changes** from another agent (`packages/steam-arm64
 `modules/packages/steam-arm64.nix`, and the `steam-arm64` lines in
 `hosts/macbook/packages/default.nix`) — leave them alone.
 
+## UNRESOLVED: DE freeze on closing Library Manager (Xwayland)
+
+### Symptom
+
+`cadence-env -c 'virtuoso'` → open Library Manager (`libManager`) → hit
+close/exit on the libManager window → the **whole KDE desktop freezes**
+(kwin/Xwayland hang, not a SIGSEGV — no coredump entry). Requires a hard reset.
+Also reproduced on **asusg16 (x86_64, native virtuoso)** — so it is **not**
+FEX/muvm-specific.
+
+### What it is NOT
+
+- The close button **minimizing** the libManager window is its **normal**
+  behaviour — identical on X11 and Wayland. It is *not* the bug.
+- X11: clean (closing libManager on an X11 session does not hang).
+
+### What it IS
+
+- A **Wayland/Xwayland-specific hang**, triggered *intermittently* (not every
+  close), on closing the libManager window.
+- It is a **hang** (freeze), not a crash: kwin's main thread stays in its idle
+  `ppoll` (QEventDispatcherUNIX::processEvents) — so the stuck component is
+  likely **Xwayland** or a kwin worker/GPU path, not kwin's main loop.
+
+### Debugging gotcha (Heisenbug — do NOT repeat)
+
+Any **continuous** observation perturbs the race and makes the close *minimize*
+instead of freeze:
+- a watchdog polling kwin CPU every 1s (`ps`) → minimize;
+- a periodic gdb attach every 15s → minimize.
+
+The one method that reproduces the freeze is a **single-shot**: leave the
+process completely alone for ~10s while the user closes the window, then attach
+gdb **once** (`sleep 10; gdb -p <pid> -ex bt -ex "thread apply all bt"`). So any
+capture tooling must be single-shot / delayed, never polling.
+
+### Capture setup
+
+- `sshd` is enabled on macbook (`ssh tianyixia@192.168.1.91`, password auth) so
+  the machine can be reached while the DE is frozen (the frozen DE kills the
+  local terminal).
+- Single-shot capture helper (tracked): `scripts/capture-kwin-xwayland.sh`
+  (sleeps `DELAY` s, then one gdb attach to kwin + Xwayland → `~/.cadence/freeze_dump.log`).
+  Run as root with `sudo-env -c 'setsid -f bash scripts/capture-kwin-xwayland.sh 10'`
+  (needs `sudo-lock` armed).
+- Manual equivalent: `sudo-env -c 'gdb -q -batch -p <kwin> -ex bt -ex
+  "thread apply all bt"'` and the same for `Xwayland` (`pgrep -x Xwayland`).
+
+### Next step
+
+Reproduce with the single-shot method, capture the **Xwayland** (and kwin)
+backtrace at the freeze, and find where Xwayland is stuck. The fix is then
+expected to be either an Xwayland patch or a Cadence-side workaround (env var /
+launcher flag) — matching the preference order cadence-env → xwayland →
+virtuoso binary.
+
 ## Handoff
 
 The launch delay is SOLVED (see "How to (re)apply the fix" above): the ~135s
