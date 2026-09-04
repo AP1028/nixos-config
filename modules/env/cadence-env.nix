@@ -543,6 +543,16 @@
     if isAarch64
     then
       pkgs.writeShellScriptBin "cadence-env" ''
+        # Nuke a lingering previous session before starting a fresh VM. muvm is
+        # single-instanced here, and a prior run's guest VM can fail to shut down
+        # (the dashboard daemon holds the session lock), leaving muvm + its sudo
+        # parent + the wrapper + poller behind. Kill them all (never this shell).
+        pkill -9 -f "${pkgs.muvm}/bin/muvm" 2>/dev/null
+        for pid in $(pgrep -f "/bin/cadence-env" 2>/dev/null); do
+          [ "$pid" = "$$" ] && continue
+          kill -9 "$pid" 2>/dev/null
+        done
+        sleep 1
         ${poller}
         # Run muvm in the no-internet group (like the x86_64 path), so passt —
         # which muvm spawns for the VM's networking — inherits the group and the
