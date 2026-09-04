@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Make libManager's close (X) button EXIT instead of hide/minimize.
+"""Make libManager's close (X) button behave like File→Exit (quit) instead of
+minimizing to the taskbar.
 
-By default `cdsLibManager::closeEvent` only quits when `mpsOpWaiting == 0`;
-when an MPS operation is pending (the normal case under FEX/box64, where the
-MPS daemons are always busy) it instead calls `QWidget::hide()` — the
-"pseudo-minimize" — which unmaps the window and, on Xwayland, can hit the
-damage-extension busy loop that freezes the whole DE (see docs/cadence-fex.md
-"UNRESOLVED"). Patch the branch so close always quits:
+The Library Manager does NOT use `QWidget::closeEvent` for the X button.
+`cdsLibManager` installs a `_qtWinCloser` event filter that intercepts
+`QEvent::Close` and, when `haveMPSClients()` is true and `cdsProcessExiting`
+is clear, calls `QWidget::showMinimized()` — the "pseudo-minimize" that unmaps
+the window and, on Xwayland, can hit the damage-extension busy loop that
+freezes the whole DE (see docs/cadence-fex.md "UNRESOLVED"). The other branch
+of that same filter does `hide()` + `cdsLibManager::fileExit()` (the File→Exit
+handler). Patch the `je` that selects the minimize branch into NOPs so the
+Close event always falls through to the hide+fileExit path:
 
-    cdsLibManager::closeEvent   vaddr 0x603e3a  (file offset 0x203e3a)
-      85 c0        test %eax,%eax      ; mpsOpWaiting
-      74 1c        je   +0x1c          ;  ->  eb 1c  (jmp, always quit)
-      48 89 df     mov  %rbx,%rdi
-      e8 ...       call QWidget::hide  ;  (dead after patch)
+    _qtWinCloser::eventFilter   vaddr 0x71c24c  (file offset 0x31c24c)
+      74 2c        je   +0x2c     ; -> 90 90  (nop; fall through)
+      4c 89 e7     mov  %r12,%rdi ; hide() + fileExit() follows
 
 Only valid for the exact IC25.1 `libManager` (16,440,520 bytes, non-PIE ELF);
 re-verify the offset if the install is updated. Idempotent; backs the file up
@@ -31,7 +33,7 @@ ROOT = os.path.expanduser("~/.cadence/IC251")
 
 # rel path -> [(file offset, expected old bytes, new bytes)]
 SITES = {
-    "tools/dfII/bin/64bit/libManager": [(0x203E3A, b"\x74\x1c", b"\xeb\x1c")],
+    "tools/dfII/bin/64bit/libManager": [(0x31C24C, b"\x74\x2c", b"\x90\x90")],
 }
 
 BACKUP_SUFFIX = ".pre-close-exit"
