@@ -208,16 +208,28 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
    `~/.cadence/IC251`: each `QProcess::waitForStarted/Finished(30000)` immediate
    `0x7530` → `0x7d0` (2000 ms). `--revert` undoes it.
 
-4. **Verify** (use the real `cadence-env`, not hand-rolled env — see gotcha below):
-   ```
-   cadence-env -c 'virtuoso'              # "Virtuoso has launched" at ~26s
-   libManager -unmapped -log /tmp/lm.log  # cds_root re-spawn at ~6s
-   ```
-   Timing: `cds_root` re-spawn at t≈15s (was t≈71s), `cdsNameServer` at t≈20s
-   (was t≈132s). The ~11s before the first `cds_root` is FEX loading the 818 MB
-   binary + libs — not part of the stall.
+4. **Make libManager's close (X) button exit instead of minimize** (idempotent;
+    backs up to `<name>.pre-close-exit`):
+    ```
+    python3 scripts/patch-libmanager-close-exit.py          # apply
+    python3 scripts/patch-libmanager-close-exit.py --check  # expect 1/1 OK
+    ```
+    `cdsLibManager::closeEvent` only quits when `mpsOpWaiting == 0`; otherwise it
+    `QWidget::hide()`s — the "pseudo-minimize" that unmaps the window and can hit
+    the Xwayland damage busy-loop (see "UNRESOLVED" below). Patch the `je`→`jmp`
+    at vaddr `0x603e3a` (file off `0x203e3a`) so close always quits. `--revert`
+    undoes it.
 
-5. **Re-diagnose a stall if it regresses** (the interposer that found this bug):
+5. **Verify** (use the real `cadence-env`, not hand-rolled env — see gotcha below):
+    ```
+    cadence-env -c 'virtuoso'              # "Virtuoso has launched" at ~26s
+    libManager -unmapped -log /tmp/lm.log  # cds_root re-spawn at ~6s
+    ```
+    Timing: `cds_root` re-spawn at t≈15s (was t≈71s), `cdsNameServer` at t≈20s
+    (was t≈132s). The ~11s before the first `cds_root` is FEX loading the 818 MB
+    binary + libs — not part of the stall.
+
+6. **Re-diagnose a stall if it regresses** (the interposer that found this bug):
    build it (cross-compiles the x86_64 `.so` from the aarch64 host), run the tool
    under `LD_PRELOAD`, and resolve the logged backtraces — see
    `scripts/qtimer-preload/README.md`. The stall signature is a `ppoll` with
@@ -381,6 +393,18 @@ above, turned into a fix). `modules/env/cadence-env.nix` now starts, in the
 kills it when the session ends (on x86 the FHS env does not destroy a VM, so the
 explicit trap is what reaps the poller there). One poller per session is
 negligible. This mirrors the watchdog that first made the crash disappear.
+
+### Additional mitigation (landed): libManager close = exit, not minimize
+
+The trigger is libManager's "pseudo-minimize": `cdsLibManager::closeEvent` only
+calls `QCoreApplication::quit()` when `mpsOpWaiting == 0`; otherwise it
+`QWidget::hide()`s the window — an unmap (not a destroy) that goes through
+`compUnrealizeWindow`/`compRestoreWindow` and can hit the damage spin.
+`scripts/patch-libmanager-close-exit.py` patches the `je`→`jmp` at vaddr
+`0x603e3a` (file off `0x203e3a`) so the close (X) button always quits and the
+window is destroyed rather than merely unmapped — a cleaner bypass than the
+poller, pending verification. Idempotent + revertible (backup
+`<name>.pre-close-exit`).
 
 ### Not done (deferred): the real Xwayland fix
 
