@@ -527,11 +527,15 @@
   # enough that the close minimizes instead of hanging. Mirrors the watchdog
   # used to diagnose the bug. One poller per cadence-env session is negligible.
   poller = ''
-    ( while :; do
-        KPID=$(pgrep -f "kwin_wayland --wayland-fd" | head -1)
-        [ -n "$KPID" ] && ps -o pcpu= -p "$KPID" >/dev/null 2>&1
-        sleep 1
-      done ) &
+    # Poll once synchronously so the timing perturbation is established before
+    # the env (muvm / FHS env) actually launches, then keep polling once a
+    # second in the background.
+    poll_once() {
+      KPID=$(pgrep -f "kwin_wayland --wayland-fd" | head -1)
+      [ -n "$KPID" ] && ps -o pcpu= -p "$KPID" >/dev/null 2>&1
+    }
+    poll_once
+    ( while :; do poll_once; sleep 1; done ) &
     poller_pid=$!
     trap 'kill $poller_pid 2>/dev/null' EXIT
   '';
