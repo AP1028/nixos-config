@@ -525,25 +525,10 @@
 
   # ── Wrapper ─────────────────────────────────────────────────────
 
-  # Background poller that reads the compositor's CPU once a second. This is a
-  # deliberate timing perturbation: closing a window can hang the compositor
-  # (an Xwayland damage-extension race — see docs/cadence-fex.md "UNRESOLVED"),
-  # and a per-second fork/exec of `ps` against kwin changes the scheduling
-  # enough that the close minimizes instead of hanging. Mirrors the watchdog
-  # used to diagnose the bug. One poller per cadence-env session is negligible.
-  poller = ''
-    # Poll once synchronously so the timing perturbation is established before
-    # the env (muvm / FHS env) actually launches, then keep polling once a
-    # second in the background.
-    poll_once() {
-      KPID=$(pgrep -f "kwin_wayland --wayland-fd" | head -1)
-      [ -n "$KPID" ] && ps -o pcpu= -p "$KPID" >/dev/null 2>&1
-    }
-    poll_once
-    ( while :; do poll_once; sleep 1; done ) &
-    poller_pid=$!
-    trap 'kill $poller_pid 2>/dev/null' EXIT
-  '';
+  # Timing-perturbation poller. DISABLED while testing the libManager
+  # close-exit binary patch; restore the poll_once body (see git history) and
+  # keep the ${poller} refs in the wrapper to re-enable it.
+  poller = "";
 
   # x86_64 hosts: run as the main user in the no-internet group (license
   # daemon / firewall isolation). aarch64 hosts: run inside the muvm microVM
