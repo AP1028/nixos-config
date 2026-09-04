@@ -60,6 +60,7 @@
     owmods-cli
     owmods-gui
     steam-run
+    gamescope
     (prismlauncher.override {
       jdks = with pkgs; [
         temurin-bin-8
