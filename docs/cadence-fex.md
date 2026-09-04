@@ -370,13 +370,28 @@ on unrealize" (the `xorg_list_del(&xwl_window->link_damage)` in
 `xwl_window_dispose`) is **already present** in xwayland 24.1.13 — this is the
 *other* (core `miext/damage`) list, so a further fix is still needed.
 
-### Next step
+### Workaround (landed): timing-perturbation poller in cadence-env
 
-Reproduce with the single-shot method, capture the **Xwayland** (and kwin)
-backtrace at the freeze, and find where Xwayland is stuck. The fix is then
-expected to be either an Xwayland patch or a Cadence-side workaround (env var /
-launcher flag) — matching the preference order cadence-env → xwayland →
-virtuoso binary.
+The `compRestoreWindow`→`damageCopyArea`→`damageRegionProcessPending` spin is a
+*timing race* — any per-second fork/exec against the compositor changes the
+scheduling enough that the close minimizes instead of hanging (the Heisenbug
+above, turned into a fix). `modules/env/cadence-env.nix` now starts, in the
+`cadence-env` wrapper (both aarch64 and x86_64), a background poller that runs
+`pgrep kwin_wayland` + `ps -o pcpu= -p <kwin>` once a second; a `trap … EXIT`
+kills it when the session ends (on x86 the FHS env does not destroy a VM, so the
+explicit trap is what reaps the poller there). One poller per session is
+negligible. This mirrors the watchdog that first made the crash disappear.
+
+### Not done (deferred): the real Xwayland fix
+
+The proper fix is a guard in `miext/damage/damage.c:damageRegionProcessPending`
+(a circular damage list makes it spin; see `docs/freeze-dump.log`). A Nix
+overlay that patches xwayland forces a rebuild of the **entire plasma/KDE stack**
+(downstream of xwayland), which is unacceptable since plasma is a flake-updated
+moving target. A binary patch of the installed Xwayland is blocked by the
+read-only Nix store. So the poller workaround is the pragmatic fix for now; the
+source patch (`xwayland-24.1.13`, `modules/env/xwayland-damage-cycle.patch` was
+prototyped and reverted) can be revisited if the poller ever stops working.
 
 ## Handoff
 

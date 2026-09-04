@@ -21,4 +21,4 @@ XPID=$(pgrep -x Xwayland | head -1)
   gdb -q -batch -p "$KPID" -ex "set pagination off" -ex "bt" -ex "thread apply all bt" 2>&1
   echo "--- Xwayland (pid $XPID) ---"
   gdb -q -batch -p "$XPID" -ex "set pagination off" -ex "bt" -ex "thread apply all bt" 2>&1
-} > "${HOME}/.cadence/freeze_dump.log" 2>&1
+} > "/home/tianyixia/.cadence/freeze_dump.log" 2>&1

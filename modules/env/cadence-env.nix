@@ -520,6 +520,22 @@
 
   # ── Wrapper ─────────────────────────────────────────────────────
 
+  # Background poller that reads the compositor's CPU once a second. This is a
+  # deliberate timing perturbation: closing a window can hang the compositor
+  # (an Xwayland damage-extension race — see docs/cadence-fex.md "UNRESOLVED"),
+  # and a per-second fork/exec of `ps` against kwin changes the scheduling
+  # enough that the close minimizes instead of hanging. Mirrors the watchdog
+  # used to diagnose the bug. One poller per cadence-env session is negligible.
+  poller = ''
+    ( while :; do
+        KPID=$(pgrep -f "kwin_wayland --wayland-fd" | head -1)
+        [ -n "$KPID" ] && ps -o pcpu= -p "$KPID" >/dev/null 2>&1
+        sleep 1
+      done ) &
+    poller_pid=$!
+    trap 'kill $poller_pid 2>/dev/null' EXIT
+  '';
+
   # x86_64 hosts: run as the main user in the no-internet group (license
   # daemon / firewall isolation). aarch64 hosts: run inside the muvm microVM
   # under FEX (the 16K-page host kernel cannot run FEX directly).
@@ -527,11 +543,12 @@
     if isAarch64
     then
       pkgs.writeShellScriptBin "cadence-env" ''
+        ${poller}
         # Run muvm in the no-internet group (like the x86_64 path), so passt —
         # which muvm spawns for the VM's networking — inherits the group and the
         # host iptables `-m owner --gid-owner no-internet` REJECT rule makes any
         # guest outbound connection fail fast instead of hanging on timeouts.
-        exec /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${pkgs.muvm}/bin/muvm \
+        /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${pkgs.muvm}/bin/muvm \
           -f ${fex-cadence-rootfs} \
           -m \
           -x ${cadence-env-guest-bin} \
@@ -541,7 +558,8 @@
       ''
     else
       pkgs.writeShellScriptBin "cadence-env" ''
-        exec /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${cadence-env-raw}/bin/cadence-env "$@"
+        ${poller}
+        /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${cadence-env-raw}/bin/cadence-env "$@"
       '';
 in {
   environment.systemPackages = [cadence-env];
