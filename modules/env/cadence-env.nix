@@ -473,9 +473,9 @@
       fi
       export XLIB_SKIP_ARGB_VISUALS="1"
       # HiDPI: the Cadence tools are X11 apps shown through Xwayland; scale the
-      # Qt UI by 1.2 (the asusg16 panel DPI) instead of the default 1x.
+      # Qt UI by 1.3 (the asusg16 panel DPI) instead of the default 1x.
       export QT_ENABLE_HIGHDPI_SCALING=1
-      export QT_SCALE_FACTOR=1.2
+      export QT_SCALE_FACTOR=1.3
       export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
       # saSecurity requires the licensing-agent mode disabled and the VSM
       # framework vars set before it will attempt the license checkout.
