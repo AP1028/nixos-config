@@ -248,6 +248,49 @@ virtuoso fail to find its install (`CMGR-7001`) and **skip the full init**, whic
 is why those runs were fast. Always use **separate `export` statements**. The
 real `cadence-env` sets them separately and is correct.
 
+## HiDPI scaling (QT_SCALE_FACTOR)
+
+The Cadence tools (virtuoso, libManager, …) are X11/Qt5 apps shown through
+Xwayland; on HiDPI panels they render at 1× (too small), so we scale the Qt UI
+by 1.3. The vars live in `modules/env/cadence-env.nix`, in two places:
+
+- **aarch64** — `cadence-env-guest` (the muvm guest script):
+  ```
+  export QT_ENABLE_HIGHDPI_SCALING=1
+  export QT_SCALE_FACTOR=1.3
+  export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
+  ```
+- **x86_64** — `cadence-env-raw` (the `buildFHSEnv` `profile`):
+  ```
+  unset QT_AUTO_SCREEN_SCALE_FACTOR
+  unset QT_SCREEN_SCALE_FACTORS
+  unset QT_DEVICE_PIXEL_RATIO
+  export QT_ENABLE_HIGHDPI_SCALING=1
+  export QT_SCALE_FACTOR=1.3
+  export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
+  ```
+
+Why the x86 side `unset`s three extra vars: the x86 `cadence-env` is a
+`buildFHSEnv` run under **bubblewrap**, which inherits the host's Plasma session
+environment (bwrap isolates the filesystem, not env vars). That session can
+carry Qt per-screen/auto-scale vars — `QT_SCREEN_SCALE_FACTORS`,
+`QT_AUTO_SCREEN_SCALE_FACTOR`, `QT_DEVICE_PIXEL_RATIO` — which take precedence
+over `QT_SCALE_FACTOR` and turn it into a silent no-op. The muvm guest on
+aarch64 starts with a **clean** env (only `DISPLAY`/`XAUTHORITY` are passed
+through, plus what the guest script sets), so it needs no unsets.
+
+Qt 5.15 scale precedence (highest first): `QT_DEVICE_PIXEL_RATIO` >
+`QT_SCREEN_SCALE_FACTORS` > `QT_SCALE_FACTOR` > `QT_AUTO_SCREEN_SCALE_FACTOR`.
+We pin the global 1.3 and clear everything above it. (`QT_ENABLE_HIGHDPI_SCALING`
+is a legacy Qt 5.0–5.5 knob — harmless, kept for consistency. The Cadence tools
+use their own Qt 5.15.9 under `~/.cadence/IC251/tools.lnx86/Qt/v5/64bit`, but
+`QT_SCALE_FACTOR` is honored by the xcb platform plugin regardless.)
+
+Verify inside the env:
+```
+cat /proc/$(pgrep -x virtuoso | head -1)/environ | tr '\0' '\n' | grep QT_
+```
+
 ## Key facts / reproduction
 
 Build (no system rebuild needed):
@@ -275,7 +318,9 @@ Debug tools:
 Runtime env (nix):
 - `modules/env/cadence-env.nix` — the `cadence-env` env: FEX rootfs +
   `/bin`/`/usr/bin` guest setup (+ strace/gdb), the `/bin/uname` x86_64 wrapper,
-  the guest script (Cadence env + `QT_SCALE_FACTOR=2` HiDPI, aarch64-only),
+  the guest script (Cadence env + HiDPI `QT_SCALE_FACTOR=1.3`, aarch64; the
+  x86 `buildFHSEnv` `profile` carries the same vars plus `unset`s for the host's
+  auto-scale vars — see "HiDPI scaling" above),
   the `sudo -g no-internet` muvm wrapper, and the `/lib64` tmpfiles.
 - `hosts/macbook/system/default.nix` — FEX 2608 overlay + patch list.
 - FEX patches under `modules/env/`: `fex-fs-segment-store-fix.patch`,
