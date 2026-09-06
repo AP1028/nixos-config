@@ -531,21 +531,10 @@
 
   # ── Wrapper ─────────────────────────────────────────────────────
 
-  # Timing-perturbation poller. The Xwayland damage-extension freeze is a
-  # launch-time race (the circular damage list is created or not at startup,
-  # ~50/50 per session), so a per-second fork/exec against kwin perturbs the
-  # host scheduling enough to keep the session on the "good" side. Run one
-  # poller per cadence-env session; it is reaped on exit.
-  poller = ''
-    poll_once() {
-      KPID=$(pgrep -f "kwin_wayland --wayland-fd" | head -1)
-      [ -n "$KPID" ] && ps -o pcpu= -p "$KPID" >/dev/null 2>&1
-    }
-    poll_once
-    ( while :; do poll_once; sleep 1; done ) &
-    poller_pid=$!
-    trap 'kill $poller_pid 2>/dev/null' EXIT
-  '';
+  # Timing-perturbation poller. DISABLED: it only perturbs timing (works "by
+  # chance"), which is not a reliable fix. The real issue is Xwayland's
+  # damage-extension circular list — see docs/cadence-fex.md.
+  poller = "";
 
   # x86_64 hosts: run as the main user in the no-internet group (license
   # daemon / firewall isolation). aarch64 hosts: run inside the muvm microVM
