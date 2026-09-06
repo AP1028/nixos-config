@@ -219,11 +219,15 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
     — both unmap/destroy the window and can hit the Xwayland damage busy-loop
     (and the exit path also hangs the parent CIW; see "UNRESOLVED" below). Three
     patches:
-    - **close (X)** on `libManager` (= `libSelect`, same inode) and `cdsLibEditor`:
-      overwrite the filter entry with `mov $1,%eax; ret` (libManager vaddr
-      `0x71c150`/off `0x31c150`; cdsLibEditor vaddr `0x557230`/off `0x157230`) so
-      it returns true, consumes the Close event, and — since `QCloseEvent` defaults
-      to accepted — Qt closes the window via its native path (no crash).
+    - **close (X)** on `libManager` (= `libSelect`, same inode): overwrite the
+      `_qtWinCloser::eventFilter` entry with `mov $1,%eax; ret` (vaddr `0x71c150`,
+      off `0x31c150`) so it returns true, consumes the Close event, and — since
+      `QCloseEvent` defaults to accepted — Qt closes via its native path (no crash).
+    - **close (X)** on `cdsLibEditor`: it has its own `cdsLibEditor::closeEvent`
+      (not the filter) which disables widgets, runs the exit callback, then
+      `hide()`+`closeAllWindows()`. NOP the `doingExit`-guard `je` (vaddr
+      `0x539221`, off `0x139221`) so closeEvent returns immediately and Qt closes
+      via its native path.
     - **File→Exit** on `libManager`: `fileExit()` does `mpsOpWaiting ? hide() :
       quit()`; NOP the `jne` (vaddr `0x5fb508`, off `0x1fb508`) so it always quits
       via the native path instead of `hide()`-ing. `--revert` undoes all three.
@@ -451,15 +455,16 @@ negligible. This mirrors the watchdog that first made the crash disappear.
 
 ### Additional mitigation (landed): lib tools close cleanly
 
-The X button is not handled by `closeEvent`; a `_qtWinCloser` event filter
-intercepts `QEvent::Close` and either `showMinimized()` or `hide()`+`fileExit()`.
-Both unmap/destroy the window and can hit the damage spin, and the exit path also
-hangs the parent Virtuoso CIW (see "UNRESOLVED"). `scripts/patch-libmanager-close-exit.py`
-does three patches: (1) overwrites the filter entry with `mov $1,%eax; ret` on
-`libManager` (= `libSelect`, same inode) and `cdsLibEditor`, so the Close event is
-consumed and Qt closes via its native path — the X button no longer crashes;
-(2) NOPs `fileExit()`'s `jne` on `libManager` so File→Exit always `quit()`s
-instead of `hide()`-ing. Idempotent + revertible (backups `<name>.pre-close-exit`).
+The X button / File→Exit can crash: the close path either `showMinimized()`s or
+`hide()`+`fileExit()`s, both of which unmap the window (damage spin → DE freeze),
+and the exit path also hangs the parent CIW (see "UNRESOLVED").
+`scripts/patch-libmanager-close-exit.py` does three patches: (1) `libManager`
+(= `libSelect`, same inode) — overwrite `_qtWinCloser::eventFilter`'s entry with
+`mov $1,%eax; ret` so the Close event is consumed and Qt closes via its native
+path; (2) `cdsLibEditor` — NOP its own `cdsLibEditor::closeEvent`'s `doingExit`
+guard `je` so closeEvent returns immediately and Qt closes natively; (3) `libManager`
+File→Exit — NOP `fileExit()`'s `jne` so it always `quit()`s instead of `hide()`-ing.
+Idempotent + revertible (backups `<name>.pre-close-exit`).
 
 ### Not done (deferred): the real Xwayland fix
 

@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """Make Cadence lib tools close cleanly instead of crashing the DE / CIW.
 
-The X (close) button is not handled by `QWidget::closeEvent`; a `_qtWinCloser`
-event filter intercepts `QEvent::Close` and either calls `showMinimized()` or
-`hide()`+`fileExit()`. Both unmap/destroy the window and can hit the Xwayland
-damage busy-loop that freezes the DE, and the exit path also hangs the parent
-Virtuoso CIW. Two patches fix this:
+The X (close) button and File→Exit can crash/hang: the close path either
+`showMinimized()`s or `hide()`+`fileExit()`s, both of which unmap the window
+(damage busy-loop → DE freeze) and the exit path also hangs the parent CIW.
+Three patches fix this:
 
-1. close (X) = do nothing cleanly: overwrite the filter's entry with
-   `mov $1,%eax; ret` so it returns true immediately (consumes the Close event).
-   Because `QCloseEvent` defaults to accepted, Qt then closes the window via its
-   native path (hide+destroy) — no `showMinimized`/`fileExit`, so no crash.
-2. File→Exit = native path: `cdsLibManager::fileExit()` normally does
+1. libManager close (X): its `_qtWinCloser` event filter intercepts
+   `QEvent::Close`; overwrite the filter entry with `mov $1,%eax; ret` so it
+   returns true (consumes the event). `QCloseEvent` defaults to accepted, so Qt
+   closes via its native path (hide+destroy) — no crash.
+2. libManager File→Exit: `cdsLibManager::fileExit()` does
    `mpsOpWaiting ? QWidget::hide() : quit()`; the hide branch is the crash
    trigger. NOP the `jne` so it always quits cleanly.
+3. cdsLibEditor close (X): it has its own `cdsLibEditor::closeEvent` (not the
+   `_qtWinCloser` filter), which disables widgets, runs the exit callback, and
+   `hide()`s+`closeAllWindows()`. NOP the `doingExit`-guard `je` so closeEvent
+   returns immediately and Qt closes via its native path — no crash.
 
 Targets (all under ~/.cadence/IC251):
   tools/dfII/bin/64bit/libManager     # == libSelect (same inode), "Library Manager"
@@ -23,8 +26,8 @@ Targets (all under ~/.cadence/IC251):
                55 bf e0 c8 ed 00  ->  b8 01 00 00 00 c3   (return true)
   libManager   cdsLibManager::fileExit    vaddr 0x5fb508  off 0x1fb508
                75 0e              ->  90 90               (always quit)
-  cdsLibEditor _qtWinCloser::eventFilter  vaddr 0x557230  off 0x157230
-               55 bf 20 59 c4 00  ->  b8 01 00 00 00 c3   (return true)
+  cdsLibEditor cdsLibEditor::closeEvent   vaddr 0x539221  off 0x139221
+               74 05              ->  90 90               (always return -> native close)
 
 Offsets are only valid for the exact IC25.1 binaries (libManager 16,440,520 B,
 cdsLibEditor 12,600,720 B); re-verify if the install is updated. Idempotent;
@@ -48,7 +51,7 @@ SITES = {
         (0x1FB508, b"\x75\x0e", b"\x90\x90"),
     ],
     "tools/dfII/bin/64bit/cdsLibEditor": [
-        (0x157230, b"\x55\xbf\x20\x59\xc4\x00", b"\xb8\x01\x00\x00\x00\xc3"),
+        (0x139221, b"\x74\x05", b"\x90\x90"),
     ],
 }
 
