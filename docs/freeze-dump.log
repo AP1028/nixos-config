@@ -1,0 +1,250 @@
+=== 2026年 09月 03日 星期四 16:35:41 PDT ===
+=== CPU state (busy loop vs deadlock) ===
+    PID %CPU STAT WCHAN                COMMAND
+   1188  0.7 Sl   poll_schedule_timeou .kwin_wayland-w
+   1231  4.8 Rl   -                    Xwayland
+
+=== kwin (pid 1188) ===
+0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+"Auto-loading safe path" section in the GDB manual.  E.g., run from the shell:
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaed10 in __syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbe1631c in poll () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fe0098d8d0 in _xcb_conn_wait () from /nix/store/0fc8ib0xkkqk0bd6m10mmhlq1qnqxr41-libxcb-1.17.0/lib/libxcb.so.1
+#5  0x000070fe0098f88c in wait_for_reply () from /nix/store/0fc8ib0xkkqk0bd6m10mmhlq1qnqxr41-libxcb-1.17.0/lib/libxcb.so.1
+#6  0x000070fe0098f9cc in xcb_wait_for_reply () from /nix/store/0fc8ib0xkkqk0bd6m10mmhlq1qnqxr41-libxcb-1.17.0/lib/libxcb.so.1
+#7  0x000070fdfe3a7ba4 in NETWinInfo::update(QFlags<NET::Property>, QFlags<NET::Property2>) () from /nix/store/9bqpgycrfladzp49l7ai4w17lwyns4m9-kwindowsystem-6.29.0/lib/libKF6WindowSystem.so.6
+#8  0x000070fdfe3aa0b4 in NETWinInfo::event(xcb_generic_event_t*, QFlags<NET::Property>*, QFlags<NET::Property2>*) () from /nix/store/9bqpgycrfladzp49l7ai4w17lwyns4m9-kwindowsystem-6.29.0/lib/libKF6WindowSystem.so.6
+#9  0x000070fe003a6184 in KWin::X11Window::windowEvent(xcb_generic_event_t*) () from /nix/store/xzgafwssycybw975pa68hfa0aq3qd281-kwin-6.7.4/lib/libkwin.so.6
+#10 0x000070fe003a6714 in KWin::Workspace::workspaceEvent(xcb_generic_event_t*) () from /nix/store/xzgafwssycybw975pa68hfa0aq3qd281-kwin-6.7.4/lib/libkwin.so.6
+#11 0x00006ffe63e814c8 in KWin::Xwl::Xwayland::dispatchEvents(KWin::Xwl::Xwayland::DispatchEventsMode) ()
+#12 0x000070fdfc4c0990 in void doActivate<false>(QObject*, int, void**) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#13 0x000070fdfc4d0b2c in QSocketNotifier::activated(QSocketDescriptor, QSocketNotifier::Type, QSocketNotifier::QPrivateSignal) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#14 0x000070fdfc4d1580 in QSocketNotifier::event(QEvent*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#15 0x000070fdfdaf5bcc in QApplicationPrivate::notify_helper(QObject*, QEvent*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Widgets.so.6
+#16 0x000070fdfc447018 in QCoreApplication::notifyInternal2(QObject*, QEvent*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#17 0x000070fdfc64da80 in QEventDispatcherUNIXPrivate::activateSocketNotifiers() () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#18 0x000070fdfc64e178 in QEventDispatcherUNIX::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#19 0x000070fdfd55aa94 in ?? () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Gui.so.6
+#20 0x000070fdfc455fac in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#21 0x000070fdfc450608 in QCoreApplication::exec() () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#22 0x00006ffe63e6965c in main ()
+
+Thread 10 (Thread 0x70fdf272eb20 (LWP 1204) "QDBusConnection"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaed10 in __syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbe16988 in ppoll () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fdfaa06c68 in g_main_context_iterate_unlocked.isra () from /nix/store/z90qxq32ss488dazcqwvnjq7sgabqcxs-glib-2.88.3/lib/libglib-2.0.so.0
+#5  0x000070fdfaa0759c in g_main_context_iteration () from /nix/store/z90qxq32ss488dazcqwvnjq7sgabqcxs-glib-2.88.3/lib/libglib-2.0.so.0
+#6  0x000070fdfc799964 in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#7  0x000070fdfc455fac in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#8  0x000070fdfc598134 in QThread::exec() () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#9  0x000070fdfca053e4 in QDBusConnectionManager::run() () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6DBus.so.6
+#10 0x000070fdfc64b100 in QThreadPrivate::start(void*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#11 0x000070fdfbdb2d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#12 0x000070fdfbe2215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 9 (Thread 0x70fdee34ab20 (LWP 1205) "kwin_wa:disk$0"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaf1e4 in __futex_abstimed_wait_cancelable64 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbdb20fc in pthread_cond_wait@@GLIBC_2.17 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fdeef312cc in cnd_wait () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#5  0x000070fdeef01cc8 in util_queue_thread_func () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#6  0x000070fdeef3113c in impl_thrd_routine () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#7  0x000070fdfbdb2d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#8  0x000070fdfbe2215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 8 (Thread 0x70fded8bab20 (LWP 1207) "kwin_wa:disk$0"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaf1e4 in __futex_abstimed_wait_cancelable64 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbdb20fc in pthread_cond_wait@@GLIBC_2.17 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fdec3dd84c in cnd_wait () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libvulkan_asahi.so
+#5  0x000070fdec3aa428 in util_queue_thread_func () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libvulkan_asahi.so
+#6  0x000070fdec3dd6bc in impl_thrd_routine () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libvulkan_asahi.so
+#7  0x000070fdfbdb2d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#8  0x000070fdfbe2215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 7 (Thread 0x70fddc84ab20 (LWP 1210) "kwin_wa:disk$0"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaf1e4 in __futex_abstimed_wait_cancelable64 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbdb20fc in pthread_cond_wait@@GLIBC_2.17 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fdeef312cc in cnd_wait () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#5  0x000070fdeef01cc8 in util_queue_thread_func () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#6  0x000070fdeef3113c in impl_thrd_routine () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#7  0x000070fdfbdb2d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#8  0x000070fdfbe2215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 6 (Thread 0x70fdd7ffeb20 (LWP 1211) "eDP-1"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaf1e4 in __futex_abstimed_wait_cancelable64 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbdb20fc in pthread_cond_wait@@GLIBC_2.17 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fe003fd4cc in KWin::DrmCommitThread::DrmCommitThread(KWin::DrmGpu*, QString const&)::{lambda()#1}::operator()() const () from /nix/store/xzgafwssycybw975pa68hfa0aq3qd281-kwin-6.7.4/lib/libkwin.so.6
+#5  0x000070fe003fda84 in std::_Function_handler<std::unique_ptr<std::__future_base::_Result_base, std::__future_base::_Result_base::_Deleter> (), std::__future_base::_Task_setter<std::unique_ptr<std::__future_base::_Result<void>, std::__future_base::_Result_base::_Deleter>, std::thread::_Invoker<std::tuple<QThread::create<KWin::DrmCommitThread::DrmCommitThread(KWin::DrmGpu*, QString const&)::{lambda()#1}>(KWin::DrmCommitThread::DrmCommitThread(KWin::DrmGpu*, QString const&)::{lambda()#1}&&)::{lambda((auto:1&&)...)#1}> >, void> >::_M_invoke(std::_Any_data const&) () from /nix/store/xzgafwssycybw975pa68hfa0aq3qd281-kwin-6.7.4/lib/libkwin.so.6
+#6  0x000070fe003fde04 in std::__future_base::_State_baseV2::_M_do_set(std::function<std::unique_ptr<std::__future_base::_Result_base, std::__future_base::_Result_base::_Deleter> ()>*, bool*) () from /nix/store/xzgafwssycybw975pa68hfa0aq3qd281-kwin-6.7.4/lib/libkwin.so.6
+#7  0x000070fdfbdb8938 in __pthread_once_slow.isra.0 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#8  0x000070fdfbdb89f8 in pthread_once@GLIBC_2.17 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#9  0x000070fe003fad34 in std::__future_base::_Deferred_state<std::thread::_Invoker<std::tuple<QThread::create<KWin::DrmCommitThread::DrmCommitThread(KWin::DrmGpu*, QString const&)::{lambda()#1}>(KWin::DrmCommitThread::DrmCommitThread(KWin::DrmGpu*, QString const&)::{lambda()#1}&&)::{lambda((auto:1&&)...)#1}> >, void>::_M_complete_async() () from /nix/store/xzgafwssycybw975pa68hfa0aq3qd281-kwin-6.7.4/lib/libkwin.so.6
+#10 0x000070fdfc598a6c in QThreadCreateThread::run() () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#11 0x000070fdfc64b100 in QThreadPrivate::start(void*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#12 0x000070fdfbdb2d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#13 0x000070fdfbe2215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 5 (Thread 0x70fdd77eeb20 (LWP 1214) "libinput-connec"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaed10 in __syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbe16988 in ppoll () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fdfaa06c68 in g_main_context_iterate_unlocked.isra () from /nix/store/z90qxq32ss488dazcqwvnjq7sgabqcxs-glib-2.88.3/lib/libglib-2.0.so.0
+#5  0x000070fdfaa0759c in g_main_context_iteration () from /nix/store/z90qxq32ss488dazcqwvnjq7sgabqcxs-glib-2.88.3/lib/libglib-2.0.so.0
+#6  0x000070fdfc799964 in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#7  0x000070fdfc455fac in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#8  0x000070fdfc598134 in QThread::exec() () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#9  0x000070fdfc64b100 in QThreadPrivate::start(void*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#10 0x000070fdfbdb2d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#11 0x000070fdfbe2215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 4 (Thread 0x70fdd550eb20 (LWP 1223) "kwin_wa:disk$1"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaf1e4 in __futex_abstimed_wait_cancelable64 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbdb20fc in pthread_cond_wait@@GLIBC_2.17 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fdeef312cc in cnd_wait () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#5  0x000070fdeef01cc8 in util_queue_thread_func () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#6  0x000070fdeef3113c in impl_thrd_routine () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#7  0x000070fdfbdb2d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#8  0x000070fdfbe2215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 3 (Thread 0x70fdd368eb20 (LWP 1224) "QQmlThread"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaed10 in __syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbe16988 in ppoll () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fdfaa06c68 in g_main_context_iterate_unlocked.isra () from /nix/store/z90qxq32ss488dazcqwvnjq7sgabqcxs-glib-2.88.3/lib/libglib-2.0.so.0
+#5  0x000070fdfaa0759c in g_main_context_iteration () from /nix/store/z90qxq32ss488dazcqwvnjq7sgabqcxs-glib-2.88.3/lib/libglib-2.0.so.0
+#6  0x000070fdfc799964 in QEventDispatcherGlib::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#7  0x000070fdfc455fac in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#8  0x000070fdfc598134 in QThread::exec() () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#9  0x000070fdfc64b100 in QThreadPrivate::start(void*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#10 0x000070fdfbdb2d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#11 0x000070fdfbe2215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 2 (Thread 0x70fd83c7eb20 (LWP 5318) "threaded-ml"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaed10 in __syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbe1631c in poll () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fd983a6ab8 in poll_func () from /nix/store/y0lzb3i94s8j0nki46cp8wmkcqsclczc-libpulseaudio-17.0/lib/libpulse.so.0
+#5  0x000070fd98397c3c in pa_mainloop_poll () from /nix/store/y0lzb3i94s8j0nki46cp8wmkcqsclczc-libpulseaudio-17.0/lib/libpulse.so.0
+#6  0x000070fd9839831c in pa_mainloop_iterate () from /nix/store/y0lzb3i94s8j0nki46cp8wmkcqsclczc-libpulseaudio-17.0/lib/libpulse.so.0
+#7  0x000070fd98398430 in pa_mainloop_run () from /nix/store/y0lzb3i94s8j0nki46cp8wmkcqsclczc-libpulseaudio-17.0/lib/libpulse.so.0
+#8  0x000070fd983a6bac in thread () from /nix/store/y0lzb3i94s8j0nki46cp8wmkcqsclczc-libpulseaudio-17.0/lib/libpulse.so.0
+#9  0x000070fd87e21c84 in internal_thread_func () from /nix/store/y0lzb3i94s8j0nki46cp8wmkcqsclczc-libpulseaudio-17.0/lib/pulseaudio/libpulsecommon-17.0.so
+#10 0x000070fdfbdb2d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#11 0x000070fdfbe2215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 1 (Thread 0x70fe008cb860 (LWP 1188) ".kwin_wayland-w"):
+#0  0x000070fdfbdbcc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x000070fdfbdaec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x000070fdfbdaed10 in __syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x000070fdfbe1631c in poll () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x000070fe0098d8d0 in _xcb_conn_wait () from /nix/store/0fc8ib0xkkqk0bd6m10mmhlq1qnqxr41-libxcb-1.17.0/lib/libxcb.so.1
+#5  0x000070fe0098f88c in wait_for_reply () from /nix/store/0fc8ib0xkkqk0bd6m10mmhlq1qnqxr41-libxcb-1.17.0/lib/libxcb.so.1
+#6  0x000070fe0098f9cc in xcb_wait_for_reply () from /nix/store/0fc8ib0xkkqk0bd6m10mmhlq1qnqxr41-libxcb-1.17.0/lib/libxcb.so.1
+#7  0x000070fdfe3a7ba4 in NETWinInfo::update(QFlags<NET::Property>, QFlags<NET::Property2>) () from /nix/store/9bqpgycrfladzp49l7ai4w17lwyns4m9-kwindowsystem-6.29.0/lib/libKF6WindowSystem.so.6
+#8  0x000070fdfe3aa0b4 in NETWinInfo::event(xcb_generic_event_t*, QFlags<NET::Property>*, QFlags<NET::Property2>*) () from /nix/store/9bqpgycrfladzp49l7ai4w17lwyns4m9-kwindowsystem-6.29.0/lib/libKF6WindowSystem.so.6
+#9  0x000070fe003a6184 in KWin::X11Window::windowEvent(xcb_generic_event_t*) () from /nix/store/xzgafwssycybw975pa68hfa0aq3qd281-kwin-6.7.4/lib/libkwin.so.6
+#10 0x000070fe003a6714 in KWin::Workspace::workspaceEvent(xcb_generic_event_t*) () from /nix/store/xzgafwssycybw975pa68hfa0aq3qd281-kwin-6.7.4/lib/libkwin.so.6
+#11 0x00006ffe63e814c8 in KWin::Xwl::Xwayland::dispatchEvents(KWin::Xwl::Xwayland::DispatchEventsMode) ()
+#12 0x000070fdfc4c0990 in void doActivate<false>(QObject*, int, void**) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#13 0x000070fdfc4d0b2c in QSocketNotifier::activated(QSocketDescriptor, QSocketNotifier::Type, QSocketNotifier::QPrivateSignal) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#14 0x000070fdfc4d1580 in QSocketNotifier::event(QEvent*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#15 0x000070fdfdaf5bcc in QApplicationPrivate::notify_helper(QObject*, QEvent*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Widgets.so.6
+#16 0x000070fdfc447018 in QCoreApplication::notifyInternal2(QObject*, QEvent*) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#17 0x000070fdfc64da80 in QEventDispatcherUNIXPrivate::activateSocketNotifiers() () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#18 0x000070fdfc64e178 in QEventDispatcherUNIX::processEvents(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#19 0x000070fdfd55aa94 in ?? () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Gui.so.6
+#20 0x000070fdfc455fac in QEventLoop::exec(QFlags<QEventLoop::ProcessEventsFlag>) () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#21 0x000070fdfc450608 in QCoreApplication::exec() () from /nix/store/n33gqqsgqsq0xciqhz750s01xxfs3371-qtbase-6.11.1/lib/libQt6Core.so.6
+#22 0x00006ffe63e6965c in main ()
+[Inferior 1 (process 1188) detached]
+
+=== Xwayland (pid 1231) ===
+0x00007266d2eaaa5c in damageRegionProcessPending ()
+#0  0x00007266d2eaaa5c in damageRegionProcessPending ()
+#1  0x00007266d2eae258 in damageCopyArea ()
+#2  0x00007266d2e8c5c8 in compRestoreWindow ()
+#3  0x00007266d2e90fa0 in compCheckRedirect ()
+#4  0x00007266d2e91148 in compUnrealizeWindow ()
+#5  0x00007266d2e84054 in UnrealizeTree ()
+#6  0x00007266d2e875a4 in UnmapWindow ()
+#7  0x00007266d2e4d600 in ProcUnmapWindow ()
+#8  0x00007266d2e54b9c in Dispatch ()
+#9  0x00007266d2e5942c in dix_main ()
+#10 0x00007cd4a7be6574 in __libc_start_call_main () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#11 0x00007cd4a7be6658 in __libc_start_main_impl () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#12 0x00007266d2dd5270 in _start ()
+
+Thread 2 (Thread 0x7cd49929aee0 (LWP 1238) "Xwaylan:disk$0"):
+#0  0x00007cd4a7c5cc28 in __syscall_cancel_arch () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#1  0x00007cd4a7c4ec74 in __internal_syscall_cancel () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#2  0x00007cd4a7c4f1e4 in __futex_abstimed_wait_cancelable64 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#3  0x00007cd4a7c520fc in pthread_cond_wait@@GLIBC_2.17 () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#4  0x00007cd4a3f512cc in cnd_wait () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#5  0x00007cd4a3f21cc8 in util_queue_thread_func () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#6  0x00007cd4a3f5113c in impl_thrd_routine () from /nix/store/a3ylw6xr7sqvkg7k588yz38vjnxv4qbb-mesa-26.2.1/lib/libgallium-26.2.1.so
+#7  0x00007cd4a7c52d40 in start_thread () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#8  0x00007cd4a7cc215c in thread_start () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+
+Thread 1 (Thread 0x7cd4a8b102a0 (LWP 1231) "Xwayland"):
+#0  0x00007266d2eaaa5c in damageRegionProcessPending ()
+#1  0x00007266d2eae258 in damageCopyArea ()
+#2  0x00007266d2e8c5c8 in compRestoreWindow ()
+#3  0x00007266d2e90fa0 in compCheckRedirect ()
+#4  0x00007266d2e91148 in compUnrealizeWindow ()
+#5  0x00007266d2e84054 in UnrealizeTree ()
+#6  0x00007266d2e875a4 in UnmapWindow ()
+#7  0x00007266d2e4d600 in ProcUnmapWindow ()
+#8  0x00007266d2e54b9c in Dispatch ()
+#9  0x00007266d2e5942c in dix_main ()
+#10 0x00007cd4a7be6574 in __libc_start_call_main () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#11 0x00007cd4a7be6658 in __libc_start_main_impl () from /nix/store/f8q4w2hbjvwy7qqwpnvbf5f4qwyww6cp-glibc-2.42-67/lib/libc.so.6
+#12 0x00007266d2dd5270 in _start ()
+[Inferior 1 (process 1231) detached]
+
+=== dmesg (last 30 lines) ===
+[  218.084677] apple-dcp 231c00000.dcp: RTKit: syslog message: nifiedPipeline.cpp:7465: set_digital_out_mode returned 8000000b
+[  218.084683] apple-dcp 231c00000.dcp: set_digital_out_mode finished:2125
+[  218.276224] apple-dcp 231c00000.dcp: RTKit: syslog message: ileCDIDPDisplay.cpp:119: [AFK]SAC enable: DP=1 CDI=1
+[  218.276235] apple-dcp 231c00000.dcp: RTKit: syslog message: DCPDP13Service.cpp:60: [AFK]version: 13
+[  218.276239] apple-dcp 231c00000.dcp: RTKit: syslog message: DCPDPService.cpp:76: [AFK]version: 13
+[  218.302649] apple-dcp 231c00000.dcp: RTKit: syslog message: eoInterfaceIOAV.cpp:135: IOMFB: IOAVVideoInterface published
+[  218.302695] apple-dcp 231c00000.dcp: RTKit: syslog message: eoInterfaceIOAV.cpp:714: IOMFBStatus VideoInterfaceIOAV::plug_gated(IOAVVideoInterface *, bool): display HPD asserted
+[  218.306339] apple-dcp 231c00000.dcp: RTKit: syslog message: PPipeDCP_H13P.cpp:10490: set_run_mode_safe: deferring: 2 -> 4
+[  218.306346] apple-dcp 231c00000.dcp: RTKit: syslog message: PPipeDCP_H13P.cpp:10395: virtual IOMFBStatus IOMFB::UPPipeDCP_H13P::ready_for_run_mode_change(IOMFB::AppleRegisterStream *): initiating deferred run mod
+[  218.306413] apple-dcp 231c00000.dcp: RTKit: syslog message: M3Hal_v1.cpp:197: IOMFB: load APT M3 IMem : size 0x7918
+[  218.306594] apple-dcp 231c00000.dcp: RTKit: syslog message: M3Hal_v1.cpp:197: IOMFB: load APT M3 DMem : size 0x6f60
+[  218.306773] apple-dcp 231c00000.dcp: RTKit: syslog message: CAHandler.cpp:188: IOMFB load_ca_data: Unrecognized data version 0 (expected 1 or 2)
+[  218.307082] apple-dcp 231c00000.dcp: RTKit: syslog message: UPPipe.cpp:3767: IOMFB read_pmu_data_sync: pmu ram read error (e00800d8)
+[  218.307225] apple-dcp 231c00000.dcp: RTKit: syslog message: PPipeDCP_H13P.cpp:14085: IOMFB Int RTBandwidth: program_M3_rt_config: Using Dashboard 23b3d05d8
+[  218.307231] apple-dcp 231c00000.dcp: RTKit: syslog message: UPTSQManager.cpp:133: IOMFB: clearing M3 reset
+[  218.307310] apple-dcp 231c00000.dcp: RTKit: syslog message: UPTSQ_Hal_v1.cpp:349: IOMFB: timebase_offset = 4
+[  218.323592] apple-dcp 231c00000.dcp: RTKit: syslog message: UPTSQManager.cpp:105: IOMFB: switch to normal mode succeeded
+[  218.325575] apple-dcp 231c00000.dcp: RTKit: syslog message: ock_PCC2DLTM_v1.cpp:910: IOMFBStatus IOMFB::UPBlock_PCC2DLTM_v1::set_mcpu_power(IOMFB::AppleRegisterStream *, bool) Loading M3 Hal
+[  218.325583] apple-dcp 231c00000.dcp: RTKit: syslog message: M3Hal_v1.cpp:197: IOMFB: load LTM M3 IMem : size 0x8e70
+[  218.326104] apple-dcp 231c00000.dcp: RTKit: syslog message: M3Hal_v1.cpp:197: IOMFB: load LTM M3 DMem : size 0xedd8
+[  218.350824] apple-dcp 231c00000.dcp: RTKit: syslog message: PPipeDCP_H13P.cpp:17179: handle_stage1_enable blm_en 0 ltm_en 1
+[  229.491094] macsmc 23e400000.smc: RTKit: syslog message: aceElec.cpp:1151: 	Elec: Elec Cause 0x0
+[  229.677789] macsmc 23e400000.smc: RTKit: syslog message: aceElec.cpp:1151: 	Elec: Elec Cause 0x200000
+[  230.070728] macsmc 23e400000.smc: RTKit: syslog message: aceElec.cpp:1151: 	Elec: Elec Cause 0x8020
+[  230.117555] macsmc 23e400000.smc: RTKit: syslog message: charger.cpp:3203: Not charging:0
+[  230.175490] macsmc 23e400000.smc: RTKit: syslog message: aceElec.cpp:1151: 	Elec: Elec Cause 0x0
+[  236.029232] macsmc 23e400000.smc: RTKit: syslog message: aceElec.cpp:1151: 	Elec: Elec Cause 0x1000
+[  334.642289] systemd[1]: systemd 261.1 running in system mode (+PAM +AUDIT -SELINUX +APPARMOR +IMA +IPE +SMACK +SECCOMP +GCRYPT -GNUTLS +OPENSSL +ACL +BLKID +CURL +ELFUTILS +FIDO2 +IDN2 +KMOD +LIBCRYPTSETUP +LIBCRYPTSETUP_PLUGINS +LIBFDISK +PCRE2 +PWQUALITY +P11KIT +QRENCODE +TPM2 +BZIP2 +LZ4 +XZ +ZLIB +ZSTD +BPF_FRAMEWORK -BTF -XKBCOMMON +UTMP +LIBARCHIVE)
+[  334.642828] systemd[1]: Detected architecture arm64.
+[  335.133739] systemd[1]: bpf-restrict-fs: LSM BPF program attached

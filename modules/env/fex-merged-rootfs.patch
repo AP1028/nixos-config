@@ -21,7 +21,7 @@ index fa56db4..8f7f41d 100644
          "Type": "str",
          "Default": "@CMAKE_INSTALL_FULL_LIBDIR@/fex-emu/HostThunks",
 diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
-index 41e5d30..7949e88 100644
+index 41e5d30..b7645e9 100644
 --- a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
 +++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
 @@ -34,6 +34,7 @@ $end_info$
@@ -32,7 +32,7 @@ index 41e5d30..7949e88 100644
  #include <sys/stat.h>
  #include <sys/statfs.h>
  #include <sys/xattr.h>
-@@ -623,6 +624,112 @@ static bool ShouldSkipOpenInEmu(int flags) {
+@@ -623,6 +624,311 @@ static bool ShouldSkipOpenInEmu(int flags) {
    return false;
  }
  
@@ -142,10 +142,209 @@ index 41e5d30..7949e88 100644
 +  return true;
 +}
 +
++bool FileManager::IsProcStatmFile(const char* Pathname) const {
++  if (!Pathname) {
++    return false;
++  }
++
++  const auto& RootFS = LDPath();
++  if (!RootFS.empty()) {
++    size_t RootFSLen = RootFS.size();
++    if (RootFSLen != 0 && RootFS[RootFSLen - 1] == '/') {
++      RootFSLen -= 1;
++    }
++    if (strncmp(Pathname, RootFS.c_str(), RootFSLen) == 0 && (Pathname[RootFSLen] == '/' || Pathname[RootFSLen] == '\0')) {
++      Pathname += RootFSLen;
++    }
++  }
++
++  if (strncmp(Pathname, "/proc/", 6) != 0) {
++    return false;
++  }
++
++  const char* Base = strrchr(Pathname, '/');
++  if (!Base) {
++    return false;
++  }
++  ++Base;
++
++  return strcmp(Base, "statm") == 0;
++}
++
++bool FileManager::IsProcStatusFile(const char* Pathname) const {
++  if (!Pathname) {
++    return false;
++  }
++
++  const auto& RootFS = LDPath();
++  if (!RootFS.empty()) {
++    size_t RootFSLen = RootFS.size();
++    if (RootFSLen != 0 && RootFS[RootFSLen - 1] == '/') {
++      RootFSLen -= 1;
++    }
++    if (strncmp(Pathname, RootFS.c_str(), RootFSLen) == 0 && (Pathname[RootFSLen] == '/' || Pathname[RootFSLen] == '\0')) {
++      Pathname += RootFSLen;
++    }
++  }
++
++  if (strncmp(Pathname, "/proc/", 6) != 0) {
++    return false;
++  }
++
++  const char* Base = strrchr(Pathname, '/');
++  if (!Base) {
++    return false;
++  }
++  ++Base;
++
++  return strcmp(Base, "status") == 0;
++}
++
++bool FileManager::RewriteProcStatmFD(int FD) const {
++  fextl::string Content;
++  char Buffer[16384];
++  lseek(FD, 0, SEEK_SET);
++  for (;;) {
++    auto Read = ::read(FD, Buffer, sizeof(Buffer));
++    if (Read > 0) {
++      Content.append(Buffer, Read);
++    } else if (Read == 0) {
++      break;
++    } else if (errno == EINTR) {
++      continue;
++    } else {
++      return false;
++    }
++  }
++  lseek(FD, 0, SEEK_SET);
++
++  // statm format: "size resident shared text lib data dt" (all in pages).
++  // FEX reserves a huge virtual range so "size" is ~131 TB; report the
++  // resident size instead so guests don't think they are out of memory.
++  size_t EndSize = 0;
++  while (EndSize < Content.size() && Content[EndSize] != ' ' && Content[EndSize] != '\t' && Content[EndSize] != '\n') {
++    EndSize++;
++  }
++  if (EndSize == 0) {
++    return false;
++  }
++
++  size_t ResStart = EndSize;
++  while (ResStart < Content.size() && (Content[ResStart] == ' ' || Content[ResStart] == '\t')) {
++    ResStart++;
++  }
++  size_t ResEnd = ResStart;
++  while (ResEnd < Content.size() && Content[ResEnd] != ' ' && Content[ResEnd] != '\t' && Content[ResEnd] != '\n') {
++    ResEnd++;
++  }
++  if (ResEnd <= ResStart) {
++    return false;
++  }
++
++  fextl::string Out;
++  Out.append(Content, ResStart, ResEnd - ResStart); // resident size replaces "size"
++  Out.append(Content, EndSize, fextl::string::npos); // keep " resident ..." onwards
++
++  int MemFD = memfd_create("fex-statm", MFD_CLOEXEC);
++  if (MemFD == -1) {
++    return false;
++  }
++
++  size_t Written = 0;
++  while (Written < Out.size()) {
++    auto W = ::write(MemFD, Out.data() + Written, Out.size() - Written);
++    if (W > 0) {
++      Written += W;
++    } else if (W < 0 && errno == EINTR) {
++      continue;
++    } else {
++      ::close(MemFD);
++      return false;
++    }
++  }
++
++  lseek(MemFD, 0, SEEK_SET);
++  ::dup2(MemFD, FD);
++  ::close(MemFD);
++  return true;
++}
++
++bool FileManager::RewriteProcStatusFD(int FD) const {
++  fextl::string Content;
++  char Buffer[16384];
++  lseek(FD, 0, SEEK_SET);
++  for (;;) {
++    auto Read = ::read(FD, Buffer, sizeof(Buffer));
++    if (Read > 0) {
++      Content.append(Buffer, Read);
++    } else if (Read == 0) {
++      break;
++    } else if (errno == EINTR) {
++      continue;
++    } else {
++      return false;
++    }
++  }
++  lseek(FD, 0, SEEK_SET);
++
++  // status has "VmSize: <n> kB" and "VmRSS: <m> kB". Replace VmSize with VmRSS.
++  auto VmSizePos = Content.find("VmSize:");
++  auto VmRSSPos = Content.find("VmRSS:");
++  if (VmSizePos == fextl::string::npos || VmRSSPos == fextl::string::npos) {
++    return false;
++  }
++
++  auto ParseValue = [&](size_t Pos, size_t& ValStart, size_t& ValEnd) -> bool {
++    Pos += 7; // skip "VmSize:" / "VmRSS:"
++    while (Pos < Content.size() && (Content[Pos] == ' ' || Content[Pos] == '\t')) {
++      Pos++;
++    }
++    ValStart = Pos;
++    while (Pos < Content.size() && Content[Pos] >= '0' && Content[Pos] <= '9') {
++      Pos++;
++    }
++    ValEnd = Pos;
++    return ValEnd > ValStart;
++  };
++
++  size_t SizeStart, SizeEnd, RSSStart, RSSEnd;
++  if (!ParseValue(VmSizePos, SizeStart, SizeEnd) || !ParseValue(VmRSSPos, RSSStart, RSSEnd)) {
++    return false;
++  }
++
++  fextl::string Out;
++  Out.append(Content, 0, SizeStart);
++  Out.append(Content, RSSStart, RSSEnd - RSSStart);
++  Out.append(Content, SizeEnd, fextl::string::npos);
++
++  int MemFD = memfd_create("fex-status", MFD_CLOEXEC);
++  if (MemFD == -1) {
++    return false;
++  }
++
++  size_t Written = 0;
++  while (Written < Out.size()) {
++    auto W = ::write(MemFD, Out.data() + Written, Out.size() - Written);
++    if (W > 0) {
++      Written += W;
++    } else if (W < 0 && errno == EINTR) {
++      continue;
++    } else {
++      ::close(MemFD);
++      return false;
++    }
++  }
++
++  lseek(MemFD, 0, SEEK_SET);
++  ::dup2(MemFD, FD);
++  ::close(MemFD);
++  return true;
++}
++
  bool FileManager::ReplaceEmuFd(int fd, int flags, uint32_t mode) {
    char Tmp[PATH_MAX + 1];
  
-@@ -637,6 +744,14 @@ bool FileManager::ReplaceEmuFd(int fd, int flags, uint32_t mode) {
+@@ -637,6 +943,28 @@ bool FileManager::ReplaceEmuFd(int fd, int flags, uint32_t mode) {
    }
    Tmp[PathLength] = '\0';
  
@@ -157,14 +356,28 @@ index 41e5d30..7949e88 100644
 +    }
 +  }
 +
++  // FEX reserves a huge virtual address range, so /proc/<pid>/statm (and
++  // /proc/<pid>/status) report an enormous process size that makes guests
++  // think they are nearly out of memory. Rewrite to the resident size.
++  if (MergedRootFS() && IsProcStatmFile(Tmp)) {
++    if (RewriteProcStatmFD(fd)) {
++      return true;
++    }
++  }
++  if (MergedRootFS() && IsProcStatusFile(Tmp)) {
++    if (RewriteProcStatusFD(fd)) {
++      return true;
++    }
++  }
++
    // And try to open via EmuFD
    auto EmuFd = EmuFD.Open(Tmp, flags, mode);
    if (EmuFd == -1) {
 diff --git a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h
-index b11f096..bcb874f 100644
+index b11f096..42e1d25 100644
 --- a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h
 +++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h
-@@ -169,6 +169,12 @@ private:
+@@ -169,6 +169,20 @@ private:
    size_t GetRootFSPrefixLen(const char* pathname, size_t len, bool AliasedOnly) const;
    ssize_t StripRootFSPrefix(char* pathname, ssize_t len, bool leaky) const;
  
@@ -174,10 +387,18 @@ index b11f096..bcb874f 100644
 +  bool IsProcMapsFile(const char* Pathname) const;
 +  bool RewriteProcMapsFD(int FD) const;
 +
++  // FEX reserves a huge virtual address range, so /proc/<pid>/statm reports an
++  // enormous total size (131 TB); guests (e.g. virtuoso) read that and think
++  // they are nearly out of memory. Rewrite it to report the resident size.
++  bool IsProcStatmFile(const char* Pathname) const;
++  bool RewriteProcStatmFD(int FD) const;
++  bool IsProcStatusFile(const char* Pathname) const;
++  bool RewriteProcStatusFD(int FD) const;
++
    struct ThunkDBObject {
      fextl::string LibraryName;
      fextl::unordered_set<fextl::string> Depends;
-@@ -182,6 +188,7 @@ private:
+@@ -182,6 +196,7 @@ private:
  
    FEX_CONFIG_OPT(Filename, APP_FILENAME);
    FEX_CONFIG_OPT(LDPath, ROOTFS);

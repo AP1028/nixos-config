@@ -21,6 +21,7 @@
     ../../modules/system/substituters.nix
 
     ../../modules/services/audio.nix
+    ../../modules/services/openssh.nix
     ../../modules/services/clash-verge.nix
     (import ../../modules/services/iptables-clash-openwrt.nix {interface = "wlan0";})
 
@@ -29,6 +30,7 @@
     ../../modules/env/common.nix
     ../../modules/env/box64-env.nix
     ../../modules/env/cadence-env.nix
+    ../../modules/env/no-internet.nix
     ../../modules/system/sudo-env.nix
   ];
 

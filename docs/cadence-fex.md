@@ -1,169 +1,297 @@
 # Cadence (virtuoso) on macbook via FEX-in-muvm — status & handoff
 
 Goal: run Cadence IC25.1 `virtuoso` (x86_64) on the **macbook** (Apple Silicon,
-aarch64, **16K-page kernel**) by emulating x86_64 with FEX.
-
-The host kernel is 16K pages; FEX requires 4K pages, so FEX runs **inside a
-muvm microVM** (whose libkrunfw guest kernel is 4K-page). `box64` is not used
-for Cadence (that was an earlier approach); the current path is FEX.
+aarch64, **16K-page kernel**) by emulating x86_64 with FEX inside a muvm microVM
+(whose libkrunfw guest kernel is 4K-page). `box64` is not used for Cadence.
 
 ## Architecture
 
 ```
 cadence-env -c 'virtuoso'
-  └─ muvm -f <fex-cadence-rootfs> -m -e DISPLAY -e XAUTHORITY -- <cadence-env-guest> "$@"
-       └─ inside VM: guest script sets env → exec tcsh -c 'virtuoso'
-            └─ tcsh runs ~/.cadence/bin/virtuoso (first on PATH)
-                 └─ ~/.cadence/bin/virtuoso sets Cadence LD_LIBRARY_PATH → exec
-                    IC251/tools.lnx86/dfII/bin/64bit/virtuoso  (real x86_64 ELF)
+  └─ muvm -f <fex-cadence-rootfs> -m -x <bin-setup> -e DISPLAY -e XAUTHORITY -- <guest> "$@"
+       └─ guest script sets env → exec tcsh -c 'virtuoso'
+            └─ ~/.cadence/bin/virtuoso sets Cadence LD_LIBRARY_PATH → exec
+               IC251/tools.lnx86/dfII/bin/64bit/virtuoso   (x86_64 ELF)
 ```
 
-Key components (all in `modules/env/cadence-env.nix`):
+Key components (in `modules/env/cadence-env.nix`):
+- `fex-cadence-rootfs` — erofs image of the x86_64 userspace (all system libs
+  symlinked into `/usr/lib64`, `ld-linux-x86-64.so.2` at `/lib64`, aarch64
+  ksh/tcsh/bash in `/bin`, plus SLES12 SONAME compat symlinks). `libc.so.6` is a
+  **real file** (not symlink) so saSecurity sees `/usr/lib64/libc.so.6`.
+- `cadence-env-guest-bin` (muvm `-x`, runs as root) — mounts tmpfs over `/bin`
+  and `/usr/bin` and symlinks in aarch64 coreutils/gnused/gawk/gnugrep/procps +
+  ksh/tcsh/bash/sh + hostname/domainname. (Needed because the VM's `/bin` only
+  has `sh`, and the guest root is read-only for the mapped user.)
+- `cadence-env-guest` — sets the Cadence env, then `exec tcsh "$@"`.
+- `cadence-env` (aarch64 branch) — `sudo -E -u tianyixia -g no-internet muvm -f
+  <rootfs> -m -x <bin-setup> -e DISPLAY -e XAUTHORITY -- <guest> "$@"`.
 
-- `fex-cadence-rootfs` — an erofs image of the x86_64 userspace: all system
-  libs symlinked into `/usr/lib64` (from `x86 = pkgs.pkgsCross.gnu64`),
-  `ld-linux-x86-64.so.2` at `/lib64`, aarch64 `ksh`/`tcsh`/`bash`/`sh` in
-  `/bin`, plus SLES12 SONAME compat symlinks. `libc.so.6` is a **real file**
-  copy (not a symlink) — see "saSecurity" below.
-- `cadence-env-guest` — the in-VM profile script (exports CDSBASE/CDS_INST_DIR/
-  OA_HOME/VSM_* /CDS_LIC_* + `LD_LIBRARY_PATH=/usr/lib64:/lib64`, prepends
-  `~/.cadence/bin` to PATH), then `exec tcsh "$@"`.
-- `cadence-env` (aarch64 branch) — `muvm -f <rootfs> -m -e DISPLAY -e XAUTHORITY
-  -- <guest> "$@"`.
+`hosts/macbook/system/default.nix` pins FEX 2608 (jemalloc 16K fix + `FEXInterpreter`
+symlink) and applies these patches (all in `modules/env/`):
+- `fex-fs-segment-store-fix.patch` — FS/GS segment base on vector stores (Issue 1).
+- `fex-merged-rootfs.patch` — MergedRootFS config option + `/proc/<pid>/maps`
+  rootfs-prefix rewrite + `/proc/<pid>/{statm,status}` vsize rewrite.
+- `fex-tso-disable-gate.patch` — `FEX_DISABLE_HARDWARE_TSO` gate (unused escape hatch).
+- `fex-crash-diag.patch` — dump guest registers on SIGSEGV/SIGBUS/SIGILL (debug).
+- `muvm-no-network.patch` — adds a `--no-network` flag to muvm (currently unused;
+  internet is blocked via the `no-internet` group instead).
 
-Overlay in `hosts/macbook/system/default.nix` pins FEX 2608 (jemalloc LG_PAGE
-16K fix + `FEXInterpreter` symlink) and applies
-`modules/env/fex-fs-segment-store-fix.patch`.
+## What is FIXED
 
-`~/.cadence/bin/virtuoso` (user file, not in repo) was rewritten to run the
-real 64-bit binary directly (the ksh `cdnWrapperWithOA` launcher can't run in
-the VM: `/bin` is read-only there, no `/bin/ksh`).
+1. **saSecurity "Failed to initialize"** — implemented MergedRootFS: muvm writes
+   `MergedRootFS: "1"` into FEX's Config.json but FEX 2608 ignored it. Now FEX
+   accepts it and rewrites `/proc/<pid>/{maps,smaps,smaps_rollup,numa_maps}` to
+   strip the `/run/fex-emu/rootfs` prefix, so libc maps as `/usr/lib64/libc.so.6`.
+2. **Library-manager launchers / 32-vs-64-bit** — the `/bin`+`/usr/bin` tmpfs and
+   `/lib64`+`/usr/lib64` (host tmpfiles) fixed `#!/bin/ksh` "bad interpreter",
+   `readlink not found`, and the `[ -r /lib64/. ]` 64-bit check.
+3. **OA platform** — `OA_SYSNAME=linux_rhel80` fixes `lna64_rhel80` vs
+   `linux_rhel80_64`. (`cds_root`/`cdsGetInstallRoot` themselves work fine under FEX.)
+4. **Internet blocked** — `no-internet` group (import `modules/env/no-internet.nix`;
+   run muvm via `sudo -g no-internet`) so passt's outbound is REJECTed fast.
+5. **"Low Memory" / process size** — FEX now rewrites `/proc/<pid>/statm` +
+   `/proc/<pid>/status` to report the resident size (647 MB) instead of its huge
+   virtual reservation (131 TB). This killed the `Low Memory` spam but was **not**
+   the launch-slowness cause.
 
-## What already works
+## SOLVED: ~135s launch (`Virtuoso initialization`) → ~26s
 
-1. FEX runs x86_64 inside muvm (validated with an x86_64 bash printing a string).
-2. The real `virtuoso` binary **fully loads** every library under FEX — all
-   Cadence libs + system libs resolve. This required the exact asusg16
-   `LD_LIBRARY_PATH` (below) plus adding missing x86_64 system libs to the
-   rootfs (libxcrypt-legacy/libcrypt.so.1, libuuid, libelf, systemd,
-   libxkbcommon, xcbutil*, pciutils, libidn2, libssh, openblas/lapack/blas/
-   gfortran — see `fexExtraX86LibPkgs`).
-3. The FS/GS segment bug is **fixed** (patch below).
+`cadence-env -c 'virtuoso'` used to take ~135s. Root cause and fix are in
+[ROOT CAUSE + FIX](#root-cause--fix-landed-the-30s-poll-is-qprocesswaitfor)
+below. The historical investigation follows.
 
-## Issue 1 (FIXED): FEX dropped FS/GS base on vector memory stores
+Corrected understanding (via FEX guest-execve tracing + strace of the FEX
+process + `/proc/<pid>` sampling). The original "daemons spawn but exit"
+theory was **wrong**:
 
-Symptom: virtuoso segfaulted (SIGSEGV) during startup, `si_addr=-0x2ae0`
-(a NULL-ish negative address), inside Cadence's obfuscated saSecurity/VSM TLS
-code (`movd %xmm0, %fs:-0x2ae0`).
+- virtuoso's main thread does ~8.7s of CPU, then loops in `ppoll([...], 4,
+  {tv_sec=30})` — a **30s-timeout poll that times out ~4x = ~120s**. It is a
+  wait, not translation, and the poll is *not* a pipe-EOF failure: the
+  `POLLHUP` from the `cds_root` child pipe **is** delivered correctly, then
+  virtuoso deliberately re-enters a 30s poll with all fds set to `-1` (a sleep).
+- The MPS daemons (`cdsNameServer`/`cdsMsgServer`/`cdsServIpc`) do **not** get
+  spawned until **t≈133s** (after the stall); `clsbd` binds `0.0.0.0:16723` and
+  is **never connected to** (node-locked license, so clsbd is orphaned). The
+  stall is *before* the MPS startup, in virtuoso's early/static init.
+- `cds_root` is spawned at t≈11s and t≈71s (60s apart), i.e. the 30s poll loop
+  drives a retry of an install-root/platform check.
+- The real `cdsMsgServer`/`cdsServIpc`/`cdsNameServer` all work fine once
+  virtuoso finally starts them at t≈133s.
 
-Root cause: `OpDispatchBuilder::MOVBetweenGPR_FPR` (and the MOVNT/AVX-128
-equivalents) computed a memory-store address with
-`LoadSourceGPR(..., {.LoadData=false})`, which returns the address **without**
-the segment base (`LoadEffectiveAddress` is called with `AddSegmentBase=false`).
-FS-relative stores therefore ignored `fs_cached` → `0 - 0x2ae0`.
+So the open question is now **what the 30s poll loop is waiting on during
+virtuoso's early init (before it spawns the MPS daemons)**.
 
-Fix (`modules/env/fex-fs-segment-store-fix.patch`): wrap the address with
-`AppendSegmentOffset(..., Op->Flags)` in 4 sites:
-- `Vector.cpp` `MOVVectorNTOp` (MOVNT*)
-- `Vector.cpp` `MOVBetweenGPR_FPR` (MOVD/MOVQ)
-- `AVX_128.cpp` `AVX128_MOVVectorNT`
-- `AVX_128.cpp` `AVX128_MOVBetweenGPR_FPR`
+### Identified: the 30s poll is the Qt event loop
 
-(The load path already goes through `LoadSourceFPR → DecodeAddress → A.Segment`,
-so only stores were wrong. XADD already does `AppendSegmentOffset`.)
+A `kill -USR1` FEX crash-dump + manual stack walk of the guest (FEX guest memory
+is 1:1 mapped) shows the 30s `ppoll` is called from **`libcdsQt5Core.so`
+(`QEventDispatcherUNIX::select()`)** — i.e. virtuoso's own Qt main event loop.
+The 30s timeout is a pending `QTimer`, and the loop is a retry: the main thread
+spawns `cds_root`, reads its output via pipes (fd 17/19, `POLLHUP` delivered
+fine), then re-arms a 30s timer and polls with all fds `-1` (a sleep), ~4 times,
+before finally spawning the MPS daemons at t≈133s. So the event loop is
+deliberately spinning on a ~30s timer during early init; the thing that isn't
+becoming ready fast enough (so the timer keeps re-arming) is still to be pinned
+down — best candidates are the CLS/license handshake (clsbd binds 16723 and is
+never connected) or the OA platform init.
 
-## Issue 2 (FIXED): saSecurity "Failed to initialize"
+### Fixes landed so far (necessary but NOT sufficient)
 
-Symptom (was): `cadence-env -c 'virtuoso'` printed
-`Error: Received an unexpected system exception: Failed to initialize saSecurity.`
+1. **`cds_root` "can't determine installation root"** — `cds_root` resolves
+   `virtuoso` via `$PATH` and walks parent dirs for `tools/bin/cds_root`. The
+   user wrapper `~/.cadence/bin/virtuoso` was **first in PATH** (outside the
+   install tree), so `cds_root` found it and failed. Fix: the wrapper now
+   re-orders `PATH` to put the install-tree bins first before exec'ing the
+   64-bit binary. Tracked as `scripts/virtuoso-wrapper.sh` (install it at
+   `~/.cadence/bin/virtuoso`).
+2. **`cds_plat` reports the wrong platform** — it spawns `/bin/uname -m` (a
+   native aarch64 binary) which returns `aarch64`, so `cds_plat` says `lna64`
+   and `cds_root` prints `running cross platform: 'lnx86' on 'lna64'`. Fix:
+   `modules/env/cadence-env.nix` now installs a `/bin/uname` wrapper that
+   reports `x86_64` for `-m` (delegating everything else to coreutils), so
+   `cds_plat` says `lnx86`. This is correctness-only; it did **not** remove
+   the ~120s.
 
-This is **not** the license checkout — it's saSecurity's anti-tamper env check,
-reverse-engineered by a previous agent (quoted below):
+### ROOT CAUSE + FIX (landed): the 30s poll is `QProcess::waitFor*`
 
-> saSecurity opens `/proc/self/maps`, parses every line, and requires the libc
-> mapping's path to **start with** `/usr/lib64/libc-` or `/lib64/libc-*`. On
-> NixOS the loader resolves libc to a `/nix/store/...` path → treated as
-> tampering → throw. Fix on box64: copy the real glibc `libc.so.6` as a real
-> file over `/usr/lib64/libc.so.6` (a symlink resolves to the store path in
-> maps; a real file records `/usr/lib64/libc.so.6`), and start LD_LIBRARY_PATH
-> with `/usr/lib64`.
-
-The env-vars gate (`CDS_LIC_USE_AGENT=0`, `VSM_FWK=VSM95011`, `VSM_ITK=VSM12141`)
-is already set in the guest script, and the `cds-apr` libm fix is already in the
-rootfs. The remaining blocker is the libc path.
-
-**Why the box64 fix doesn't carry over:** under FEX the rootfs is mounted at
-`/run/fex-emu/rootfs` and FEX **prefixes** guest paths with it. The libc maps as:
+Pinned down with an x86_64 `LD_PRELOAD` interposer (built via
+`pkgs.pkgsCross.gnu64`) that intercepts `ppoll`/`poll`/`select` + the Qt
+`QTimer::start/setInterval` and `QObject::startTimer` and dumps a backtrace when
+the poll timeout is ≥25s. The 30s poll backtrace is:
 
 ```
-/run/fex-emu/rootfs/usr/lib64/libc.so.6     (after copying real libc.so.6)
+QCadenceStyle::QCadenceStyle() → init(bool) → initStyle()
+  → applicationHierarchySupportsDarkTheme() → cdsRoot(QString)
+    → QProcess::waitForStarted(30000) / waitForFinished(30000)
+      → QEventDispatcherUNIX::select() → ppoll(30s)
 ```
 
-not `/usr/lib64/libc.so.6`. The `/run/fex-emu/rootfs` prefix breaks saSecurity's
-`/usr/lib64/libc-` prefix check. (I copied the real `libc.so.6` into the rootfs
-already; it changes the maps from `/nix/store/...` to the erofs path, which is
-closer but still prefixed.)
+i.e. the Cadence **Qt style** (`QCadenceStyle`) init runs `cds_root` through
+`QProcess` and waits with the default **30 000 ms** timeout. Under FEX the
+QProcess start/finish signal is never observed as ready, so each wait blocks the
+full 30s; `cdsRoot` is called twice (t≈11s and t≈71s) → 4×30s ≈ 120s. There is
+also a third 30s wait: `QProcess::~QProcess()` (in `libcdsQt5Core.so`) does
+`kill()` + `waitForFinished(30000)`.
 
-**Fix direction:** make the libc path in `/proc/self/maps` be `/usr/lib64/...`.
-muvm's `-m` merged-rootfs mode writes `{"Config":{"RootFS":..., "MergedRootFS":"1"}}`
-into FEX's Config.json, but **FEX 2608 does not implement `MergedRootFS`** (it
-logs `Unknown configuration option 'MergedRootFS'` and ignores it). So FEX treats
-the overlay as a normal prefix rootfs.
+**Fix (binary patches, applied to the install tree, not the repo):**
 
-**Implemented (in `modules/env/fex-merged-rootfs.patch`):**
-1. Add a `MergedRootFS` bool config option (`Config.json.in`), so FEX accepts
-   muvm's `"MergedRootFS": "1"` key instead of ignoring it.
-2. When `MergedRootFS` is set, rewrite `/proc/<pid>/{maps,smaps,smaps_rollup,
-   numa_maps}` on open (in `FileManager::ReplaceEmuFd`) so every
-   `<RootFS>/` occurrence (e.g. `/run/fex-emu/rootfs/`) is replaced with `/`.
-   Note: in merged-rootfs mode FEX opens proc files *through the rootfs path*
-   (`/run/fex-emu/rootfs/proc/<pid>/maps`), so `get_fdpath()` returns the
-   prefixed path; the matcher strips the RootFS prefix before comparing.
+| file | site | patch |
+|---|---|---|
+| `dfII/bin/64bit/virtuoso` | `QCadenceStyle::cdsRoot` `waitForStarted`/`waitForFinished` (VA 0x1ed611fb / 0x1ed61248 = file 0x1e9611fb / 0x1e961248) | `0x7530`→`0x7d0` (2000 ms) |
+| `dfII/bin/64bit/virtuoso` | 9 other `QProcess::waitForStarted/Finished(30000)` sites (file 0x11f9d078, 0x11fe9447, 0x120ca32f, 0x120cacf6, 0x121db625, 0xc167401, 0x120ca350, 0x120cad18, 0x121db8d0) | `0x7530`→`0x7d0` |
+| `dfII/bin/64bit/libManager` | `QCadenceStyle::cdsRoot` `waitForStarted`/`waitForFinished` + one more `waitForStarted` (file 0x95fe3b / 0x95fe88 / 0x2131c6) | `0x7530`→`0x7d0` |
+| `Qt/v5/64bit/lib/libcdsQt5Core.so` | `QProcess::~QProcess` `waitForFinished(30000)` (VA/file 0x252688) | `0x7530`→`0x7d0` |
 
-Result: the libc mapping now reads `/usr/lib64/libc.so.6` in `/proc/self/maps`
-and saSecurity passes (virtuoso proceeds past it). Verified with
-`FEX_SILENTLOG=0` — the `Unknown configuration option 'MergedRootFS'` message is
-gone and the maps content is rewritten.
+The patch is automated by `scripts/patch-cadence-qprocess-timeout.py` (checked
+into this repo):
 
-## Issue 3 (NOT REPRODUCED — appears fixed): boost::serialization spin
+```
+python3 scripts/patch-cadence-qprocess-timeout.py            # apply (idempotent)
+python3 scripts/patch-cadence-qprocess-timeout.py --check    # report state
+python3 scripts/patch-cadence-qprocess-timeout.py --revert   # undo
+```
 
-When running the binary **directly** (not via `~/.cadence/bin/virtuoso`), with
-`LD_LIBRARY_PATH` starting with `/usr/lib64:/lib64`, virtuoso was reported to get
-**past** saSecurity and then **spin** (State=R, wchan=0, userspace busy-loop) in
-`boost::serialization::typeid_system::extended_type_info_typeid_0` at guest
-`rip=0xd0d1f60` (offset `0xccd1f60` in the binary) — C++ static-init
-(`type_register` walking a `std::multiset`, uses `__cxa_guard_acquire` atomics).
-Untested hypothesis was broken hardware TSO in the muvm guest
-(`PR_SET_MEM_MODEL_TSO`).
+It backs each changed file up to `<name>.pre-qprocess-timeout` on first change.
+Ad-hoc backups from the initial session: `virtuoso.orig-preload`,
+`libcdsQt5Core.so.orig` (next to the patched files).
 
-**Re-test (after Issue 2 fix):** with the crash-diag patch applied and
-`kill -11` to dump the guest RIP, **both** the wrapper run and the direct run now
-reach the normal Qt event loop: state=S, `wchan=do_poll`, utime stops advancing
-(~8.9 s of startup JIT then idle), guest `rip=0x7fff…` (blocked in libc `poll`),
-**not** `0xd0d1f60`. No busy-loop spin observed. So the boost static-init spin
-is either already fixed by the FS/GS segment fix (Issue 1) or no longer
-reproducible.
+Result: **`cadence-env -c 'virtuoso'` launches in ~26s** (was ~135s):
+`cds_root` re-spawn now at t≈15s (was t≈71s), `cdsNameServer` at t≈20s (was
+t≈132s), "Virtuoso has launched" at t≈26s. The ~11s startup is FEX loading the
+818 MB binary + libraries (not part of the stall). Could go lower (e.g. 500 ms)
+if the remaining ~4s of `cdsRoot` wait is worth shaving; 2000 ms is chosen as a
+safe margin over the FEX fork/exec latency of `cds_root`.
 
-The `FEX_DISABLE_HARDWARE_TSO` escape hatch is kept as
-`modules/env/fex-tso-disable-gate.patch` (gate the `SetHardwareTSOSupport(true)`
-call behind `!getenv("FEX_DISABLE_HARDWARE_TSO")`), but the hypothesis is
-unconfirmed and no longer the suspected blocker.
+The **Library Manager (`libManager`) had the same stall** (its own copy of
+`QCadenceStyle::cdsRoot`), reproduced standalone with
+`libManager -unmapped -log …` (its `cds_root` re-spawn was at t≈34s). Patched
+the same way — now `cds_root` re-spawns at t≈6s and `cdsNameServer` at t≈10s.
+Other Cadence Qt tools (libSelect, layout, etc.) carry the same pattern and can
+be patched the same way if they also load slowly.
 
-**Next unknown:** the do_poll wait. It could be the license checkout
-(`CDS_LIC_FILE` + `CDS_LIC_ONLY=1`) or the X11 event loop; CDS.log is not yet
-written, so virtuoso likely stalls at license checkout or display setup, not
-static init. This is the next thing to investigate (not a FEX rootfs/segment
-issue).
+Note: this patch is to the **installed Cadence tree** (`~/.cadence/IC251`), which
+is not managed by Nix. A reinstall/re-extract of the Cadence install would undo
+it — re-run the script after reinstalls (it recreates its own backups).
+
+### How to (re)apply the fix — from git-tracked content only
+
+Everything needed is in this repo; the only non-repo input is the Cadence
+install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
+
+1. **Build/rebuild the environment** (one-off; installs `cadence-env` + FEX +
+   muvm with the guest scripts and the FEX patches in `modules/env/`):
+   ```
+   sudo-env -c 'nixos-rebuild switch --impure --accept-flake-config \
+     --flake /home/tianyixia/nixos-config#macbook'
+   ```
+
+2. **Install the virtuoso wrapper** — fixes `cds_root` "can't determine
+   installation root" (the cadence-env guest PATH puts `~/.cadence/bin` first,
+   so this wrapper is what `cadence-env -c 'virtuoso'` runs), and on exit kills
+   the detached daemons virtuoso leaves behind (`dashboard -runAsDaemon`, MPS
+   `cdsNameServer`/`cdsMsgServer`/`cdsServIpc`, `clsbd`, …) so the stale
+   `dashboard` tray icon doesn't block the next launch:
+   ```
+   install -m755 scripts/virtuoso-wrapper.sh ~/.cadence/bin/virtuoso
+   ```
+
+3. **Apply the launch-delay binary patches** (idempotent; backs each file up to
+   `<name>.pre-qprocess-timeout` on first change):
+   ```
+   python3 scripts/patch-cadence-qprocess-timeout.py            # apply
+   python3 scripts/patch-cadence-qprocess-timeout.py --check    # expect 11+3+1 OK
+   ```
+   Patches `tools.lnx86/dfII/bin/64bit/virtuoso` (11 sites),
+   `tools/dfII/bin/64bit/libManager` (3 sites), and
+   `tools.lnx86/Qt/v5/64bit/lib/libcdsQt5Core.so.5.15.9` (1 site) under
+   `~/.cadence/IC251`: each `QProcess::waitForStarted/Finished(30000)` immediate
+   `0x7530` → `0x7d0` (2000 ms). `--revert` undoes it.
+
+4. **Make libManager's close (X) button exit instead of minimize** (idempotent;
+    backs up to `<name>.pre-close-exit`):
+    ```
+    python3 scripts/patch-libmanager-close-exit.py          # apply
+    python3 scripts/patch-libmanager-close-exit.py --check  # expect 1/1 OK
+    ```
+    The X button is not handled by `closeEvent`; a `_qtWinCloser` event filter
+    intercepts `QEvent::Close` and, when `haveMPSClients()` and
+    `!cdsProcessExiting`, calls `showMinimized()` — the "pseudo-minimize" that
+    unmaps the window and can hit the Xwayland damage busy-loop (see "UNRESOLVED"
+    below). Patch the `je` that selects that branch to NOPs at vaddr `0x71c24c`
+    (file off `0x31c24c`) so the Close event falls through to `hide()` +
+    `fileExit()` (the File→Exit path). `--revert` undoes it.
+
+5. **Verify** (use the real `cadence-env`, not hand-rolled env — see gotcha below):
+    ```
+    cadence-env -c 'virtuoso'              # "Virtuoso has launched" at ~26s
+    libManager -unmapped -log /tmp/lm.log  # cds_root re-spawn at ~6s
+    ```
+    Timing: `cds_root` re-spawn at t≈15s (was t≈71s), `cdsNameServer` at t≈20s
+    (was t≈132s). The ~11s before the first `cds_root` is FEX loading the 818 MB
+    binary + libs — not part of the stall.
+
+6. **Re-diagnose a stall if it regresses** (the interposer that found this bug):
+   build it (cross-compiles the x86_64 `.so` from the aarch64 host), run the tool
+   under `LD_PRELOAD`, and resolve the logged backtraces — see
+   `scripts/qtimer-preload/README.md`. The stall signature is a `ppoll` with
+   `tv_sec >= 20`; resolve the logged addresses with the nixpkgs
+   `x86_64-unknown-linux-gnu-addr2line` against the tool's binary/libs.
+
+### Test-harness gotcha (important — do NOT repeat this)
+
+My earlier "~17s launch" claims were **bogus**: several of my scripts did
+`export CDSBASE="$HOME/.cadence" CDS_INST_DIR="$CDSBASE/IC251" ...` in a **single**
+`export` statement. In POSIX shell the `$CDSBASE` in `CDS_INST_DIR` is expanded
+*before* the assignment, so `CDS_INST_DIR=/IC251` (empty `CDSBASE`). That makes
+virtuoso fail to find its install (`CMGR-7001`) and **skip the full init**, which
+is why those runs were fast. Always use **separate `export` statements**. The
+real `cadence-env` sets them separately and is correct.
+
+## HiDPI scaling (QT_SCALE_FACTOR)
+
+The Cadence tools (virtuoso, libManager, …) are X11/Qt5 apps shown through
+Xwayland; on HiDPI panels they render at 1× (too small), so we scale the Qt UI
+by 1.3. The vars live in `modules/env/cadence-env.nix`, in two places:
+
+- **aarch64** — `cadence-env-guest` (the muvm guest script):
+  ```
+  export QT_ENABLE_HIGHDPI_SCALING=1
+  export QT_SCALE_FACTOR=1.3
+  export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
+  ```
+- **x86_64** — `cadence-env-raw` (the `buildFHSEnv` `profile`):
+  ```
+  unset QT_AUTO_SCREEN_SCALE_FACTOR
+  unset QT_SCREEN_SCALE_FACTORS
+  unset QT_DEVICE_PIXEL_RATIO
+  export QT_ENABLE_HIGHDPI_SCALING=1
+  export QT_SCALE_FACTOR=1.3
+  export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
+  ```
+
+Why the x86 side `unset`s three extra vars: the x86 `cadence-env` is a
+`buildFHSEnv` run under **bubblewrap**, which inherits the host's Plasma session
+environment (bwrap isolates the filesystem, not env vars). That session can
+carry Qt per-screen/auto-scale vars — `QT_SCREEN_SCALE_FACTORS`,
+`QT_AUTO_SCREEN_SCALE_FACTOR`, `QT_DEVICE_PIXEL_RATIO` — which take precedence
+over `QT_SCALE_FACTOR` and turn it into a silent no-op. The muvm guest on
+aarch64 starts with a **clean** env (only `DISPLAY`/`XAUTHORITY` are passed
+through, plus what the guest script sets), so it needs no unsets.
+
+Qt 5.15 scale precedence (highest first): `QT_DEVICE_PIXEL_RATIO` >
+`QT_SCREEN_SCALE_FACTORS` > `QT_SCALE_FACTOR` > `QT_AUTO_SCREEN_SCALE_FACTOR`.
+We pin the global 1.3 and clear everything above it. (`QT_ENABLE_HIGHDPI_SCALING`
+is a legacy Qt 5.0–5.5 knob — harmless, kept for consistency. The Cadence tools
+use their own Qt 5.15.9 under `~/.cadence/IC251/tools.lnx86/Qt/v5/64bit`, but
+`QT_SCALE_FACTOR` is honored by the xcb platform plugin regardless.)
+
+Verify inside the env:
+```
+cat /proc/$(pgrep -x virtuoso | head -1)/environ | tr '\0' '\n' | grep QT_
+```
 
 ## Key facts / reproduction
-
-Exact asusg16 Cadence `LD_LIBRARY_PATH` (from `virtuoso -debug3264`):
-
-```
-$IC/share/oa/lib/lnx86/opt:$IC/tools.lnx86/lib/64bit:$IC/tools.lnx86/lib:$IC/tools.lnx86/sev/lib/64bit:$IC/tools.lnx86/hdf5/lib/64bit:$IC/tools.lnx86/lz4/lib/64bit:$IC/tools.lnx86/python/64bit/lib:$IC/tools.lnx86/TPtools/grpc/lib64:$IC/tools.lnx86/TPtools/boost/lib/64bit:$IC/tools.lnx86/extraction/lib/64bit:$IC/tools.lnx86/leveldb/lib/64bit:$IC/tools.lnx86/Qt/v5/64bit/lib
-```
-(plus `/usr/lib64:/lib64` for the FEX system libs). `IC = ~/.cadence/IC251`;
-`share/oa -> ../oa_v22.62.009`.
 
 Build (no system rebuild needed):
 ```
@@ -171,68 +299,181 @@ nix eval --impure --accept-flake-config ~/nixos-config#nixosConfigurations.macbo
   | grep -oE '/nix/store/[a-z0-9]+-cadence-env\.drv' | head -1   # then
 nix-store --realise <that .drv>
 ```
+Rebuild/install: `sudo-env -c 'nixos-rebuild switch --impure --accept-flake-config
+--flake /home/tianyixia/nixos-config#macbook'`.
 
-Run:
+Run: `cadence-env -c 'virtuoso'` → "Virtuoso has launched" at ~26s (was ~135s);
+the Library Manager (`libManager`) is fast now too. See "How to (re)apply the fix"
+above for the exact recreate steps.
+
+Debug tools:
+- `fex-crash-diag.patch` + `-e FEX_SILENTLOG=0 -e FEX_OUTPUTLOG=/run/muvm-host/tmp/opencode/fex.log`
+  then `kill -11 <pid>` dumps the guest RIP.
+- Sample the hang with `/proc/<pid>/stat` (`utime` = CPU), `/proc/<pid>/wchan`,
+  `/proc/<pid>/syscall`, and the `comm` of all `/proc/*/` to see which daemons
+  are up.
+
+## Files in repo (all git-tracked)
+
+Runtime env (nix):
+- `modules/env/cadence-env.nix` — the `cadence-env` env: FEX rootfs +
+  `/bin`/`/usr/bin` guest setup (+ strace/gdb), the `/bin/uname` x86_64 wrapper,
+  the guest script (Cadence env + HiDPI `QT_SCALE_FACTOR=1.3`, aarch64; the
+  x86 `buildFHSEnv` `profile` carries the same vars plus `unset`s for the host's
+  auto-scale vars — see "HiDPI scaling" above),
+  the `sudo -g no-internet` muvm wrapper, and the `/lib64` tmpfiles.
+- `hosts/macbook/system/default.nix` — FEX 2608 overlay + patch list.
+- FEX patches under `modules/env/`: `fex-fs-segment-store-fix.patch`,
+  `fex-merged-rootfs.patch`, `fex-tso-disable-gate.patch`, `fex-crash-diag.patch`
+  (SIGSEGV/BUS/ILL/USR1 register + frame-walk dump), `fex-execve-log.patch`
+  (guest-execve tracing via `FEX_EXECVE_LOG`), `muvm-no-network.patch`.
+- `hosts/macbook/default.nix` / `modules/env/no-internet.nix` — the
+  `no-internet` group (guest outbound REJECTed fast).
+
+The launch-delay fix (binary patches, applied to the install tree by a script):
+- `scripts/patch-cadence-qprocess-timeout.py` — apply/check/revert the
+  `0x7530`→`0x7d0` patches (virtuoso 11 sites, libManager 3, libcdsQt5Core 1).
+- `scripts/virtuoso-wrapper.sh` — installed at `~/.cadence/bin/virtuoso`
+  (LD_LIBRARY_PATH + PATH reorder; see fix #1).
+
+Diagnostic tooling:
+- `scripts/qtimer-preload/` — x86_64 `LD_PRELOAD` interposer (`qtimer_preload.c`
+  + `qtimer.map` + `build.nix` + `README.md`) that dumps a backtrace on a
+  `ppoll` ≥20s; used to pin the stall to `QProcess::waitFor*`.
+
+Docs: `docs/cadence-fex.md` (this file).
+
+NOTE: **unrelated concurrent changes** from another agent (`packages/steam-arm64*`,
+`modules/packages/steam-arm64.nix`, and the `steam-arm64` lines in
+`hosts/macbook/packages/default.nix`) — leave them alone.
+
+## UNRESOLVED: DE freeze on closing Library Manager (Xwayland)
+
+### Symptom
+
+`cadence-env -c 'virtuoso'` → open Library Manager (`libManager`) → hit
+close/exit on the libManager window → the **whole KDE desktop freezes**
+(kwin/Xwayland hang, not a SIGSEGV — no coredump entry). Requires a hard reset.
+Also reproduced on **asusg16 (x86_64, native virtuoso)** — so it is **not**
+FEX/muvm-specific.
+
+### What it is NOT
+
+- The close button **minimizing** the libManager window is its **normal**
+  behaviour — identical on X11 and Wayland. It is *not* the bug.
+- X11: clean (closing libManager on an X11 session does not hang).
+
+### What it IS
+
+- A **Wayland/Xwayland-specific hang**, triggered *intermittently* (not every
+  close), on closing the libManager window.
+- It is a **hang** (freeze), not a crash: kwin's main thread stays in its idle
+  `ppoll` (QEventDispatcherUNIX::processEvents) — so the stuck component is
+  likely **Xwayland** or a kwin worker/GPU path, not kwin's main loop.
+
+### Debugging gotcha (Heisenbug — do NOT repeat)
+
+Any **continuous** observation perturbs the race and makes the close *minimize*
+instead of freeze:
+- a watchdog polling kwin CPU every 1s (`ps`) → minimize;
+- a periodic gdb attach every 15s → minimize.
+
+The one method that reproduces the freeze is a **single-shot**: leave the
+process completely alone for ~10s while the user closes the window, then attach
+gdb **once** (`sleep 10; gdb -p <pid> -ex bt -ex "thread apply all bt"`). So any
+capture tooling must be single-shot / delayed, never polling.
+
+### Capture setup
+
+- `sshd` is enabled on macbook (`ssh tianyixia@192.168.1.91`, password auth) so
+  the machine can be reached while the DE is frozen (the frozen DE kills the
+  local terminal).
+- Single-shot capture helper (tracked): `scripts/capture-kwin-xwayland.sh`
+  (sleeps `DELAY` s, then one gdb attach to kwin + Xwayland → `~/.cadence/freeze_dump.log`).
+  Run as root with `sudo-env -c 'setsid -f bash scripts/capture-kwin-xwayland.sh 10'`
+  (needs `sudo-lock` armed).
+- Manual equivalent: `sudo-env -c 'gdb -q -batch -p <kwin> -ex bt -ex
+  "thread apply all bt"'` and the same for `Xwayland` (`pgrep -x Xwayland`).
+
+### Root cause (captured)
+
+The freeze is a **busy-loop in Xwayland's damage/composite extension**; kwin is
+just a victim. Captured backtraces (saved in `docs/freeze-dump.log`):
+
+Xwayland main thread (spinning, `Rl`, wchan empty):
 ```
-cadence-env -c 'virtuoso'
+damageRegionProcessPending()  (miext/damage/damage.c)
+damageCopyArea()              (miext/damage/damage.c)
+compRestoreWindow()           (composite/compalloc.c)
+compCheckRedirect()           (composite/compwindow.c)
+compUnrealizeWindow()         (composite/compwindow.c)
+UnrealizeTree() -> UnmapWindow() -> ProcUnmapWindow() -> Dispatch() -> dix_main()
 ```
-Expected now: gets past saSecurity (no `Failed to initialize saSecurity.`),
-reaches the Qt event loop (state=S, `do_poll`). See Issue 2/3 above.
 
-Debug FEX via a signal dump (guest RIP on SIGSEGV): `modules/env/fex-crash-diag.patch`
-patches `SignalDelegator.cpp` `HandleSignal` to call `SpillSRA(...)` then
-`LogMan::Msg::EFmt("[FEX-CRASH] ... rip=... host_pc=...")`; run with
-`-e FEX_SILENTLOG=0 -e FEX_OUTPUTLOG=/run/muvm-host/tmp/opencode/fex.log`, let it
-spin, then `kill -11 <pid>`. (The guest is FEX's process; `/tmp` is shared.)
-
-## Files touched (uncommitted as of handoff)
-
-- `modules/env/cadence-env.nix` — FEX rootfs + guest script + muvm wrapper
-- `modules/env/fex-fs-segment-store-fix.patch` — Issue 1 fix
-- `modules/env/fex-merged-rootfs.patch` — Issue 2 fix (MergedRootFS + maps rewrite)
-- `modules/env/fex-tso-disable-gate.patch` — FEX_DISABLE_HARDWARE_TSO escape hatch
-- `modules/env/fex-crash-diag.patch` — SIGSEGV register dump for debugging
-- `hosts/macbook/system/default.nix` — fex overlay (FEX 2608 + the above patches)
-- `hosts/macbook/packages/default.nix` — unrelated wechat-uos desktop-fix wrap
-  (keep; from another agent)
-- `~/.cadence/bin/virtuoso` (not in repo) — user wrapper that runs the real
-  binary directly
-
-## Notes
-
-- The overlay `patches` uses an **absolute** path
-  `/home/tianyixia/nixos-config/modules/env/fex-fs-segment-store-fix.patch`
-  because a relative `../` path resolved against the FEX source, not the nix
-  file. Fragile if the repo moves.
-- `muvm` bundles `fex` in its wrapper PATH; rebuilding `fex` rebuilds `muvm` +
-  `cadence-env`.
-- The VM's `/bin` is read-only (only `sh -> bash-interactive`), so Cadence's ksh
-  launchers (`#!/bin/ksh`) and its crash tools (`cdsPstack` needs
-  `/bin/ls`,`/usr/bin/wc`,`/bin/sed`; `cdsCrashReport` needs `/bin/ksh`) can't
-  run there. The real binary runs directly, so this is only cosmetic for the
-  crash-report tooling.
-
-## Handoff prompt
-
+kwin main thread (blocked in `xcb_wait_for_reply`):
 ```
-Continue the Cadence-on-macbook FEX work in ~/nixos-config (docs/cadence-fex.md
-has the full writeup). Two open items:
-
-1. saSecurity "Failed to initialize saSecurity" (the blocker): saSecurity
-   requires the libc mapping in /proc/self/maps to start with /usr/lib64/libc-
-   or /lib64/libc-*. Under FEX it maps as /run/fex-emu/rootfs/usr/lib64/libc.so.6
-   (FEX prefixes guest paths with the rootfs). muvm writes a MergedRootFS config
-   but FEX 2608 ignores it ("Unknown configuration option 'MergedRootFS'").
-   Implement/backport MergedRootFS in FEX (chroot/pivot into the overlay) so the
-   libc path becomes /usr/lib64/libc.so.6, or bump FEX past 2608 if main has it.
-
-2. boost::serialization spin (when running the binary directly): guest
-   rip=0xd0d1f60, static-init type_register. Try re-testing the
-   FEX_DISABLE_HARDWARE_TSO=1 hypothesis (hardware TSO in the muvm guest may be
-   broken); the env var gate exists in FEXInterpreter.cpp SetupTSOEmulation but
-   needs to reach FEX inside the VM.
-
-Build with: nix eval …#nixosConfigurations.macbook.config.environment.systemPackages
-| grep cadence-env.drv, then nix-store --realise. Run: cadence-env -c 'virtuoso'.
-Use the SIGSEGV signal-dump trick in the doc for FEX debugging.
+xcb_wait_for_reply <- NETWinInfo::update <- KWin::X11Window::windowEvent
+  <- Workspace::workspaceEvent <- Xwayland::dispatchEvents
 ```
+
+Mechanism: closing the libManager window → `UnmapWindow` → the composite
+extension unredirects the window (`compCheckRedirect` → `compRestoreWindow`),
+copying the saved pixmap back via the damage-wrapped `CopyArea`
+(`damageCopyArea`), which then spins in `damageRegionProcessPending` — the
+damage extension's pending-damage list becomes circular when a window is
+damaged and then unrealized before the damage is processed. kwin blocks forever
+waiting for Xwayland's reply.
+
+Note: the 2018 xorg-server fix "xwayland: remove dirty window unconditionally
+on unrealize" (the `xorg_list_del(&xwl_window->link_damage)` in
+`xwl_window_dispose`) is **already present** in xwayland 24.1.13 — this is the
+*other* (core `miext/damage`) list, so a further fix is still needed.
+
+### Workaround (landed): timing-perturbation poller in cadence-env
+
+The `compRestoreWindow`→`damageCopyArea`→`damageRegionProcessPending` spin is a
+*timing race* — any per-second fork/exec against the compositor changes the
+scheduling enough that the close minimizes instead of hanging (the Heisenbug
+above, turned into a fix). `modules/env/cadence-env.nix` now starts, in the
+`cadence-env` wrapper (both aarch64 and x86_64), a background poller that runs
+`pgrep kwin_wayland` + `ps -o pcpu= -p <kwin>` once a second; a `trap … EXIT`
+kills it when the session ends (on x86 the FHS env does not destroy a VM, so the
+explicit trap is what reaps the poller there). One poller per session is
+negligible. This mirrors the watchdog that first made the crash disappear.
+
+### Additional mitigation (landed): libManager close = exit, not minimize
+
+The X button is not handled by `closeEvent`; a `_qtWinCloser` event filter
+intercepts `QEvent::Close` and, when `haveMPSClients()` and `!cdsProcessExiting`,
+calls `QWidget::showMinimized()` — the "pseudo-minimize" whose unmap (not
+destroy) goes through `compUnrealizeWindow`/`compRestoreWindow` and can hit the
+damage spin. `scripts/patch-libmanager-close-exit.py` NOPs the `je` that selects
+that branch (vaddr `0x71c24c`, file off `0x31c24c`) so the Close event falls
+through to the `hide()` + `cdsLibManager::fileExit()` path — i.e. the X button
+now behaves like File→Exit — a cleaner bypass than the poller, pending
+verification. Idempotent + revertible (backup `<name>.pre-close-exit`).
+
+### Not done (deferred): the real Xwayland fix
+
+The proper fix is a guard in `miext/damage/damage.c:damageRegionProcessPending`
+(a circular damage list makes it spin; see `docs/freeze-dump.log`). A Nix
+overlay that patches xwayland forces a rebuild of the **entire plasma/KDE stack**
+(downstream of xwayland), which is unacceptable since plasma is a flake-updated
+moving target. A binary patch of the installed Xwayland is blocked by the
+read-only Nix store. So the poller workaround is the pragmatic fix for now; the
+source patch (`xwayland-24.1.13`, `modules/env/xwayland-damage-cycle.patch` was
+prototyped and reverted) can be revisited if the poller ever stops working.
+
+## Handoff
+
+The launch delay is SOLVED (see "How to (re)apply the fix" above): the ~135s
+stall was `QCadenceStyle::cdsRoot()` → `QProcess::waitForStarted/Finished(30000)`
+blocking ~4×30s under FEX. Patched to 2s via
+`scripts/patch-cadence-qprocess-timeout.py` (virtuoso + libManager +
+libcdsQt5Core). `cadence-env -c 'virtuoso'` launches in ~26s.
+
+If a new/regressed stall appears, build + run `scripts/qtimer-preload/` and
+resolve the `ppoll` backtrace (see its README). The same `QCadenceStyle::cdsRoot`
+pattern is compiled into other Cadence Qt tools (libSelect, layout, dashboard, …)
+— patch them the same way if they load slowly (add their `0x7530` `waitFor*`
+sites to the patch script).

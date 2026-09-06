@@ -52,10 +52,14 @@
           # test whether the muvm guest's PR_SET_MEM_MODEL_TSO is broken (see
           # the boost::serialization static-init spin). modules/env/fex-tso-disable-gate.patch
           /home/tianyixia/nixos-config/modules/env/fex-tso-disable-gate.patch
-          # Diagnostic: dump the guest register state (SpillSRA) on SIGSEGV/
-          # SIGBUS/SIGILL so a spinning/crashing process can be inspected with
-          # `kill -11 <pid>`. modules/env/fex-crash-diag.patch
+          # Diagnostic: dump the guest register state (SpillSRA) + a frame-walk
+          # backtrace on SIGSEGV/SIGBUS/SIGILL/SIGUSR1 so a spinning/crashing
+          # process can be inspected with `kill -11 <pid>` / `kill -USR1 <pid>`.
+          # modules/env/fex-crash-diag.patch
           /home/tianyixia/nixos-config/modules/env/fex-crash-diag.patch
+          # Diagnostic: log every guest execve (path+argv) when FEX_EXECVE_LOG
+          # is set, to trace the MPS-daemon spawn path from virtuoso.
+          /home/tianyixia/nixos-config/modules/env/fex-execve-log.patch
         ];
         postPatch = (old.postPatch or "") + ''
           # This host runs a 16K-page kernel; jemalloc compiled with the
@@ -69,6 +73,15 @@
           # FEX 2608 renamed the interpreter binary to `FEX`.
           ln -sf FEX $out/bin/FEXInterpreter
         '';
+      });
+
+      # Add a `--no-network` flag so cadence-env can run the VM without any
+      # network interface (Cadence phones home and otherwise hangs on connect
+      # timeouts). See modules/env/muvm-no-network.patch.
+      muvm = prev.muvm.overrideAttrs (old: {
+        patches = (old.patches or []) ++ [
+          /home/tianyixia/nixos-config/modules/env/muvm-no-network.patch
+        ];
       });
     })
   ];

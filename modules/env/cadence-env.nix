@@ -187,11 +187,17 @@
   # Guest-side script: sets the Cadence environment then execs tcsh (so
   # `cadence-env -c '...'` behaves exactly like the FHS-env version).
   cadence-env-guest = pkgs.writeShellScript "cadence-env-guest" ''
-    export XKB_CONFIG_ROOT=/usr/share/X11/xkb
     export IN_FHS_ENV="cadence-env"
     unset http_proxy https_proxy ftp_proxy rsync_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY RSYNC_PROXY ALL_PROXY no_proxy NO_PROXY
     export LANG=C LC_ALL=C
     export __GLX_VENDOR_LIBRARY_NAME=mesa
+    # HiDPI: the guest X server (host Xwayland) reports 96 DPI on the 2560x1600
+    # physical display, so Qt renders at 1x and the UI is tiny. Scale it up.
+    # (aarch64/FEX guest only; the x86_64 native path is unaffected.)
+    # 1.3 is the sweet spot here (2 was too large, 1.5 still too large); tune if needed.
+    export QT_ENABLE_HIGHDPI_SCALING=1
+    export QT_SCALE_FACTOR=1.3
+    export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
     # saSecurity requires the licensing-agent mode disabled and the VSM
     # framework vars set before it will attempt the license checkout.
     export CDS_LIC_USE_AGENT=0
@@ -205,7 +211,6 @@
     export CDS_INST_DIR="$CDSBASE/IC251"
     export IC_HOME="$CDS_INST_DIR"
     export CDSHOME="$CDS_INST_DIR"
-    export SPECTRE_HOME="$CDSBASE/spectre181"
     export OA_HOME="$CDS_INST_DIR/share/oa"
     # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
     # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
@@ -214,7 +219,11 @@
     export OA_SYSNAME=linux_rhel80
     export CDS_AUTO_64BIT=ALL
     export CDS_Netlisting_Mode=Analog
-    export SPECTRE_DEFAULTS=-E
+    # NOTE: SPECTRE_DEFAULTS=-E is deliberately NOT set here. Together with
+    # CDS_Netlisting_Mode=Analog it makes virtuoso spin ~120s in "Virtuoso
+    # initialization" probing the (missing) AMS library on this install. The
+    # AMS Unified netlister is unusable here anyway (AMS-2910), so dropping the
+    # Spectre default just avoids the slow probe.
     # asusg16 .cshrc sets these too; keep the license + platform vars in sync
     export CDS_LIC_FILE="$CDSBASE/license/license.dat"
     export CDS_LIC_ONLY=1
@@ -222,7 +231,7 @@
     export OA_UNSUPPORTED_PLAT=linux_rhel80
     export CDS_ENABLE_VMS=1
     export CDS_LOAD_ENV=CWD
-    for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
+    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
       case ":$PATH:" in
         *":$p:"*) ;;
         *) PATH="$p:$PATH" ;;
@@ -247,10 +256,28 @@
       [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
       [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
     done
-    for tool in ${pkgs.gnused}/bin/* ${pkgs.gawk}/bin/* ${pkgs.gnugrep}/bin/* ${pkgs.procps}/bin/*; do
+    for tool in ${pkgs.gnused}/bin/* ${pkgs.gawk}/bin/* ${pkgs.gnugrep}/bin/* ${pkgs.procps}/bin/* ${pkgs.strace}/bin/* ${pkgs.gdb}/bin/*; do
       [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
       [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
     done
+
+    # Replace `uname` with a wrapper that reports x86_64 for `-m`. cds_plat /
+    # cds_root spawn `/bin/uname -m` (a native aarch64 binary) to detect the
+    # host platform; the real "aarch64" answer makes them report "lna64" and
+    # virtuoso treats the run as "cross platform" ("lnx86" on "lna64"), which
+    # makes it retry for ~120s in "Virtuoso initialization". Everything else
+    # (the OS name etc.) is identical between the two arches.
+    rm -f /bin/uname /usr/bin/uname
+    cat > /bin/uname <<UN
+    #!/bin/sh
+    if [ "\$1" = "-m" ]; then
+      echo x86_64
+    else
+      exec ${pkgs.coreutils}/bin/uname "\$@"
+    fi
+    UN
+    chmod +x /bin/uname
+    ln -sf /bin/uname /usr/bin/uname
 
     ln -s ${pkgs.ksh}/bin/ksh /bin/ksh
     ln -s ${pkgs.tcsh}/bin/tcsh /bin/tcsh
@@ -259,6 +286,10 @@
     ln -s ${pkgs.ksh}/bin/ksh /usr/bin/ksh
     ln -s ${pkgs.tcsh}/bin/tcsh /usr/bin/tcsh
     ln -s ${pkgs.bash}/bin/bash /usr/bin/bash
+    ln -s ${pkgs.hostname}/bin/hostname /bin/hostname
+    ln -s ${pkgs.hostname}/bin/hostname /usr/bin/hostname
+    ln -s ${pkgs.hostname}/bin/hostname /bin/domainname
+    ln -s ${pkgs.hostname}/bin/hostname /usr/bin/domainname
   '';
 
   # ── FHS environment ─────────────────────────────────────────────
@@ -441,6 +472,17 @@
         export __GLX_VENDOR_LIBRARY_DIRS="/run/opengl-driver/share/glvnd/glx_vendor.d"
       fi
       export XLIB_SKIP_ARGB_VISUALS="1"
+      # HiDPI: the Cadence tools are X11 apps shown through Xwayland; scale the
+      # Qt UI by 1.3 (the asusg16 panel DPI) instead of the default 1x. Unlike
+      # the muvm guest (which starts with a clean env), the FHS env inherits the
+      # host's Plasma session env, which may carry per-screen/auto-scale Qt vars
+      # that override QT_SCALE_FACTOR. Clear them so the explicit factor wins.
+      unset QT_AUTO_SCREEN_SCALE_FACTOR
+      unset QT_SCREEN_SCALE_FACTORS
+      unset QT_DEVICE_PIXEL_RATIO
+      export QT_ENABLE_HIGHDPI_SCALING=1
+      export QT_SCALE_FACTOR=1.3
+      export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
       # saSecurity requires the licensing-agent mode disabled and the VSM
       # framework vars set before it will attempt the license checkout.
       export CDS_LIC_USE_AGENT=0
@@ -474,7 +516,7 @@
       export CDS_AUTO_64BIT=ALL
       export CDS_Netlisting_Mode=Analog
       export SPECTRE_DEFAULTS=-E
-      for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
+    for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
         case ":$PATH:" in
           *":$p:"*) ;;
           *) PATH="$p:$PATH" ;;
@@ -489,6 +531,11 @@
 
   # ── Wrapper ─────────────────────────────────────────────────────
 
+  # Timing-perturbation poller. DISABLED while testing the libManager
+  # close-exit binary patch; restore the poll_once body (see git history) and
+  # keep the ${poller} refs in the wrapper to re-enable it.
+  poller = "";
+
   # x86_64 hosts: run as the main user in the no-internet group (license
   # daemon / firewall isolation). aarch64 hosts: run inside the muvm microVM
   # under FEX (the 16K-page host kernel cannot run FEX directly).
@@ -496,7 +543,22 @@
     if isAarch64
     then
       pkgs.writeShellScriptBin "cadence-env" ''
-        exec ${pkgs.muvm}/bin/muvm \
+        # Nuke a lingering previous session before starting a fresh VM. muvm is
+        # single-instanced here, and a prior run's guest VM can fail to shut down
+        # (the dashboard daemon holds the session lock), leaving muvm + its sudo
+        # parent + the wrapper + poller behind. Kill them all (never this shell).
+        pkill -9 -f "${pkgs.muvm}/bin/muvm" 2>/dev/null
+        for pid in $(pgrep -f "/bin/cadence-env" 2>/dev/null); do
+          [ "$pid" = "$$" ] && continue
+          kill -9 "$pid" 2>/dev/null
+        done
+        sleep 1
+        ${poller}
+        # Run muvm in the no-internet group (like the x86_64 path), so passt —
+        # which muvm spawns for the VM's networking — inherits the group and the
+        # host iptables `-m owner --gid-owner no-internet` REJECT rule makes any
+        # guest outbound connection fail fast instead of hanging on timeouts.
+        /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${pkgs.muvm}/bin/muvm \
           -f ${fex-cadence-rootfs} \
           -m \
           -x ${cadence-env-guest-bin} \
@@ -506,7 +568,8 @@
       ''
     else
       pkgs.writeShellScriptBin "cadence-env" ''
-        exec /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${cadence-env-raw}/bin/cadence-env "$@"
+        ${poller}
+        /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${cadence-env-raw}/bin/cadence-env "$@"
       '';
 in {
   environment.systemPackages = [cadence-env];
@@ -521,14 +584,18 @@ in {
     "d /usr/lib64 0755 root root -"
   ];
 
-  # Allow passwordless sudo for the cadence-env wrapper (needed for group switching)
-  security.sudo.extraRules = lib.mkIf (!isAarch64) [
+  # Allow passwordless sudo for the cadence-env wrapper (needed for the
+  # no-internet group switch). On aarch64 it runs muvm, on x86_64 the FHS env.
+  security.sudo.extraRules = [
     {
       users = [config.local.username];
       runAs = "ALL";
       commands = [
         {
-          command = "${cadence-env-raw}/bin/cadence-env";
+          command =
+            if isAarch64
+            then "${pkgs.muvm}/bin/muvm"
+            else "${cadence-env-raw}/bin/cadence-env";
           options = ["NOPASSWD" "SETENV"];
         }
       ];
