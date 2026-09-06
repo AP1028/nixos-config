@@ -473,7 +473,7 @@
       fi
       export XLIB_SKIP_ARGB_VISUALS="1"
       # HiDPI: the Cadence tools are X11 apps shown through Xwayland; scale the
-      # Qt UI by 1.3 (the asusg16 panel DPI) instead of the default 1x. Unlike
+      # Qt UI by 1.25 (the asusg16 panel DPI) instead of the default 1x. Unlike
       # the muvm guest (which starts with a clean env), the FHS env inherits the
       # host's Plasma session env, which may carry per-screen/auto-scale Qt vars
       # that override QT_SCALE_FACTOR. Clear them so the explicit factor wins.
@@ -481,7 +481,7 @@
       unset QT_SCREEN_SCALE_FACTORS
       unset QT_DEVICE_PIXEL_RATIO
       export QT_ENABLE_HIGHDPI_SCALING=1
-      export QT_SCALE_FACTOR=1.3
+      export QT_SCALE_FACTOR=1.25
       export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
       # saSecurity requires the licensing-agent mode disabled and the VSM
       # framework vars set before it will attempt the license checkout.

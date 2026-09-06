@@ -252,7 +252,8 @@ real `cadence-env` sets them separately and is correct.
 
 The Cadence tools (virtuoso, libManager, …) are X11/Qt5 apps shown through
 Xwayland; on HiDPI panels they render at 1× (too small), so we scale the Qt UI
-by 1.3. The vars live in `modules/env/cadence-env.nix`, in two places:
+(1.3 on aarch64, 1.25 on x86_64). The vars live in `modules/env/cadence-env.nix`,
+in two places:
 
 - **aarch64** — `cadence-env-guest` (the muvm guest script):
   ```
@@ -266,7 +267,7 @@ by 1.3. The vars live in `modules/env/cadence-env.nix`, in two places:
   unset QT_SCREEN_SCALE_FACTORS
   unset QT_DEVICE_PIXEL_RATIO
   export QT_ENABLE_HIGHDPI_SCALING=1
-  export QT_SCALE_FACTOR=1.3
+  export QT_SCALE_FACTOR=1.25
   export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
   ```
 
@@ -281,7 +282,8 @@ through, plus what the guest script sets), so it needs no unsets.
 
 Qt 5.15 scale precedence (highest first): `QT_DEVICE_PIXEL_RATIO` >
 `QT_SCREEN_SCALE_FACTORS` > `QT_SCALE_FACTOR` > `QT_AUTO_SCREEN_SCALE_FACTOR`.
-We pin the global 1.3 and clear everything above it. (`QT_ENABLE_HIGHDPI_SCALING`
+We pin the global scale (1.3/1.25) and clear everything above it.
+(`QT_ENABLE_HIGHDPI_SCALING`
 is a legacy Qt 5.0–5.5 knob — harmless, kept for consistency. The Cadence tools
 use their own Qt 5.15.9 under `~/.cadence/IC251/tools.lnx86/Qt/v5/64bit`, but
 `QT_SCALE_FACTOR` is honored by the xcb platform plugin regardless.)
@@ -319,8 +321,8 @@ Runtime env (nix):
 - `modules/env/cadence-env.nix` — the `cadence-env` env: FEX rootfs +
   `/bin`/`/usr/bin` guest setup (+ strace/gdb), the `/bin/uname` x86_64 wrapper,
   the guest script (Cadence env + HiDPI `QT_SCALE_FACTOR=1.3`, aarch64; the
-  x86 `buildFHSEnv` `profile` carries the same vars plus `unset`s for the host's
-  auto-scale vars — see "HiDPI scaling" above),
+  x86 `buildFHSEnv` `profile` carries `QT_SCALE_FACTOR=1.25` plus `unset`s for
+  the host's auto-scale vars — see "HiDPI scaling" above),
   the `sudo -g no-internet` muvm wrapper, and the `/lib64` tmpfiles.
 - `hosts/macbook/system/default.nix` — FEX 2608 overlay + patch list.
 - FEX patches under `modules/env/`: `fex-fs-segment-store-fix.patch`,
