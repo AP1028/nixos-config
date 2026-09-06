@@ -460,7 +460,7 @@ kills it when the session ends (on x86 the FHS env does not destroy a VM, so the
 explicit trap is what reaps the poller there). One poller per session is
 negligible. This mirrors the watchdog that first made the crash disappear.
 
-### Additional mitigation (landed): minimize/exit → destroy/quit
+### Additional mitigation (landed): minimize/exit → destroy/quit + timing poller
 
 On Xwayland an **unmap** (minimize/withdraw/hide) hits the composite-unredirect
 damage spin (DE freeze); a **destroy/quit** does not. The source-level Xwayland
@@ -470,6 +470,25 @@ NOP `fileExit()`'s `jne` so it always `quit()`s; (2) `cdsLibEditor` exit — pat
 `cdsLibEditorExit()`'s `je`→`jmp` to skip its `mainWidget->hide()`; (3) `virtuoso`
 minimize/withdraw — redirect `XIconifyWindow@plt`/`XWithdrawWindow@plt` to
 `XDestroyWindow@plt`. Idempotent + revertible (backups `<name>.pre-close-exit`).
+
+**Not 100% — it is launch-dependent.** The circular damage list is created (or
+not) at session startup as a ~50/50 race, so a whole session is either fully
+well-behaved or freezes on the first libManager close. To push the odds, the
+`cadence-env` wrapper also runs the timing-perturbation poller (a per-second
+`pgrep kwin_wayland` + `ps -o pcpu=` — see `modules/env/cadence-env.nix`), which
+perturbs host scheduling and keeps the session on the "good" side more often.
+The truly robust fix is still the Xwayland source patch below.
+
+### Stashed approaches (git history, for reference)
+
+Earlier client-side patches, superseded but kept in git:
+- **"do nothing" close** — overwrite the close handler to mark the `QEvent::Close`
+  ignored (`andb $0xfb,0x12(%event)`; `QEvent::m_accept` is bit 2 at offset 0x12
+  in Qt 5.15) so the X button is a no-op. Stable (no unmap), but the close button
+  does nothing. (libManager `_qtWinCloser::eventFilter` off `0x31c150`,
+  cdsLibEditor `closeEvent` off `0x139210`.)
+- **"native close"** — `mov $1,%eax; ret` in the filter (return true, consume
+  Close). Closes via Qt's native path but still unmaps, so it froze.
 
 ### Not done (deferred): the real Xwayland fix
 
