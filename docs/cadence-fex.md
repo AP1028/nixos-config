@@ -232,6 +232,14 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
       quit()`; NOP the `jne` (vaddr `0x5fb508`, off `0x1fb508`) so it always quits
       via the native path instead of `hide()`-ing. `--revert` undoes all three.
 
+    > **Gotcha (bitten once):** apply these in one clean pass. If you re-patch
+    > while iterating, *always* do a full `--revert` → `apply` → `--check` cycle
+    > (restores the pristine binary from `.pre-close-exit`, then re-applies), and
+    > confirm `--check` reports `2/2` (libManager) + `1/1` (cdsLibEditor). A
+    > partial/mixed state (e.g. one binary patched with an old revision of the
+    > patch) is not caught by a spot-check of a couple of bytes — only `--check`
+    > against the current `SITES` table is authoritative.
+
 5. **Verify** (use the real `cadence-env`, not hand-rolled env — see gotcha below):
     ```
     cadence-env -c 'virtuoso'              # "Virtuoso has launched" at ~26s
