@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""Make libManager's close (X) button behave like File→Exit (quit) instead of
-minimizing to the taskbar.
+"""Make libManager's close (X) button do nothing (consume the Close event).
 
 The Library Manager does NOT use `QWidget::closeEvent` for the X button.
 `cdsLibManager` installs a `_qtWinCloser` event filter that intercepts
-`QEvent::Close` and, when `haveMPSClients()` is true and `cdsProcessExiting`
-is clear, calls `QWidget::showMinimized()` — the "pseudo-minimize" that unmaps
-the window and, on Xwayland, can hit the damage-extension busy loop that
-freezes the whole DE (see docs/cadence-fex.md "UNRESOLVED"). The other branch
-of that same filter does `hide()` + `cdsLibManager::fileExit()` (the File→Exit
-handler). Patch the `je` that selects the minimize branch into NOPs so the
-Close event always falls through to the hide+fileExit path:
+`QEvent::Close` and either calls `showMinimized()` or `hide()`+`fileExit()`.
+Both paths unmap/destroy the window and can hit the Xwayland damage busy-loop
+that freezes the DE, and the exit path also makes the parent Virtuoso CIW hang
+(see docs/cadence-fex.md "UNRESOLVED"). So instead we swallow the Close event
+entirely: the filter returns true immediately without touching the window, so
+clicking X does nothing and neither crash can be triggered by accident.
 
-    _qtWinCloser::eventFilter   vaddr 0x71c24c  (file offset 0x31c24c)
-      74 2c        je   +0x2c     ; -> 90 90  (nop; fall through)
-      4c 89 e7     mov  %r12,%rdi ; hide() + fileExit() follows
+    _qtWinCloser::eventFilter   vaddr 0x71c150  (file offset 0x31c150)
+      55 bf e0 c8 ed 00   push %rbp; mov $0xedc8e0,%edi
+       ->  b8 01 00 00 00 c3   mov $1,%eax; ret   (return true = consume Close)
 
 Only valid for the exact IC25.1 `libManager` (16,440,520 bytes, non-PIE ELF);
 re-verify the offset if the install is updated. Idempotent; backs the file up
@@ -33,7 +31,9 @@ ROOT = os.path.expanduser("~/.cadence/IC251")
 
 # rel path -> [(file offset, expected old bytes, new bytes)]
 SITES = {
-    "tools/dfII/bin/64bit/libManager": [(0x31C24C, b"\x74\x2c", b"\x90\x90")],
+    "tools/dfII/bin/64bit/libManager": [
+        (0x31C150, b"\x55\xbf\xe0\xc8\xed\x00", b"\xb8\x01\x00\x00\x00\xc3"),
+    ],
 }
 
 BACKUP_SUFFIX = ".pre-close-exit"

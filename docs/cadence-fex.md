@@ -208,19 +208,19 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
    `~/.cadence/IC251`: each `QProcess::waitForStarted/Finished(30000)` immediate
    `0x7530` → `0x7d0` (2000 ms). `--revert` undoes it.
 
-4. **Make libManager's close (X) button exit instead of minimize** (idempotent;
-    backs up to `<name>.pre-close-exit`):
+4. **Make libManager's close (X) button do nothing** (idempotent; backs up to
+    `<name>.pre-close-exit`):
     ```
     python3 scripts/patch-libmanager-close-exit.py          # apply
     python3 scripts/patch-libmanager-close-exit.py --check  # expect 1/1 OK
     ```
     The X button is not handled by `closeEvent`; a `_qtWinCloser` event filter
-    intercepts `QEvent::Close` and, when `haveMPSClients()` and
-    `!cdsProcessExiting`, calls `showMinimized()` — the "pseudo-minimize" that
-    unmaps the window and can hit the Xwayland damage busy-loop (see "UNRESOLVED"
-    below). Patch the `je` that selects that branch to NOPs at vaddr `0x71c24c`
-    (file off `0x31c24c`) so the Close event falls through to `hide()` +
-    `fileExit()` (the File→Exit path). `--revert` undoes it.
+    intercepts `QEvent::Close` and either `showMinimized()` or `hide()`+`fileExit()`
+    — both unmap/destroy the window and can hit the Xwayland damage busy-loop
+    (and the exit path also hangs the parent CIW; see "UNRESOLVED" below). Patch
+    the filter's entry to `mov $1,%eax; ret` (vaddr `0x71c150`, file off
+    `0x31c150`) so it returns true immediately and swallows the Close event —
+    clicking X does nothing. `--revert` undoes it.
 
 5. **Verify** (use the real `cadence-env`, not hand-rolled env — see gotcha below):
     ```
@@ -443,17 +443,16 @@ kills it when the session ends (on x86 the FHS env does not destroy a VM, so the
 explicit trap is what reaps the poller there). One poller per session is
 negligible. This mirrors the watchdog that first made the crash disappear.
 
-### Additional mitigation (landed): libManager close = exit, not minimize
+### Additional mitigation (landed): libManager close (X) = do nothing
 
 The X button is not handled by `closeEvent`; a `_qtWinCloser` event filter
-intercepts `QEvent::Close` and, when `haveMPSClients()` and `!cdsProcessExiting`,
-calls `QWidget::showMinimized()` — the "pseudo-minimize" whose unmap (not
-destroy) goes through `compUnrealizeWindow`/`compRestoreWindow` and can hit the
-damage spin. `scripts/patch-libmanager-close-exit.py` NOPs the `je` that selects
-that branch (vaddr `0x71c24c`, file off `0x31c24c`) so the Close event falls
-through to the `hide()` + `cdsLibManager::fileExit()` path — i.e. the X button
-now behaves like File→Exit — a cleaner bypass than the poller, pending
-verification. Idempotent + revertible (backup `<name>.pre-close-exit`).
+intercepts `QEvent::Close` and either `showMinimized()` or `hide()`+`fileExit()`.
+Both unmap/destroy the window and can hit the damage spin, and the exit path also
+hangs the parent Virtuoso CIW (see "UNRESOLVED"). `scripts/patch-libmanager-close-exit.py`
+overwrites the filter's entry with `mov $1,%eax; ret` (vaddr `0x71c150`, file off
+`0x31c150`) so it returns true immediately and swallows the Close event — the X
+button does nothing, so neither crash can be triggered by accident. Idempotent +
+revertible (backup `<name>.pre-close-exit`).
 
 ### Not done (deferred): the real Xwayland fix
 
