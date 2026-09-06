@@ -1,27 +1,39 @@
 #!/usr/bin/env python3
-"""Make libManager's close (X) button do nothing (consume the Close event).
+"""Make Cadence lib tools close cleanly instead of crashing the DE / CIW.
 
-The Library Manager does NOT use `QWidget::closeEvent` for the X button.
-`cdsLibManager` installs a `_qtWinCloser` event filter that intercepts
-`QEvent::Close` and either calls `showMinimized()` or `hide()`+`fileExit()`.
-Both paths unmap/destroy the window and can hit the Xwayland damage busy-loop
-that freezes the DE, and the exit path also makes the parent Virtuoso CIW hang
-(see docs/cadence-fex.md "UNRESOLVED"). So instead we swallow the Close event
-entirely: the filter returns true immediately without touching the window, so
-clicking X does nothing and neither crash can be triggered by accident.
+The X (close) button is not handled by `QWidget::closeEvent`; a `_qtWinCloser`
+event filter intercepts `QEvent::Close` and either calls `showMinimized()` or
+`hide()`+`fileExit()`. Both unmap/destroy the window and can hit the Xwayland
+damage busy-loop that freezes the DE, and the exit path also hangs the parent
+Virtuoso CIW. Two patches fix this:
 
-    _qtWinCloser::eventFilter   vaddr 0x71c150  (file offset 0x31c150)
-      55 bf e0 c8 ed 00   push %rbp; mov $0xedc8e0,%edi
-       ->  b8 01 00 00 00 c3   mov $1,%eax; ret   (return true = consume Close)
+1. close (X) = do nothing cleanly: overwrite the filter's entry with
+   `mov $1,%eax; ret` so it returns true immediately (consumes the Close event).
+   Because `QCloseEvent` defaults to accepted, Qt then closes the window via its
+   native path (hide+destroy) — no `showMinimized`/`fileExit`, so no crash.
+2. File→Exit = native path: `cdsLibManager::fileExit()` normally does
+   `mpsOpWaiting ? QWidget::hide() : quit()`; the hide branch is the crash
+   trigger. NOP the `jne` so it always quits cleanly.
 
-Only valid for the exact IC25.1 `libManager` (16,440,520 bytes, non-PIE ELF);
-re-verify the offset if the install is updated. Idempotent; backs the file up
-to `<name>.pre-close-exit` on first change (a real copy, not a symlink).
+Targets (all under ~/.cadence/IC251):
+  tools/dfII/bin/64bit/libManager     # == libSelect (same inode), "Library Manager"
+  tools/dfII/bin/64bit/cdsLibEditor   # "Library Editor"
+
+  libManager   _qtWinCloser::eventFilter  vaddr 0x71c150  off 0x31c150
+               55 bf e0 c8 ed 00  ->  b8 01 00 00 00 c3   (return true)
+  libManager   cdsLibManager::fileExit    vaddr 0x5fb508  off 0x1fb508
+               75 0e              ->  90 90               (always quit)
+  cdsLibEditor _qtWinCloser::eventFilter  vaddr 0x557230  off 0x157230
+               55 bf 20 59 c4 00  ->  b8 01 00 00 00 c3   (return true)
+
+Offsets are only valid for the exact IC25.1 binaries (libManager 16,440,520 B,
+cdsLibEditor 12,600,720 B); re-verify if the install is updated. Idempotent;
+backs each file up to `<name>.pre-close-exit` on first change.
 
 Usage:
   python3 patch-libmanager-close-exit.py            # apply
   python3 patch-libmanager-close-exit.py --check    # report state
-  python3 patch-libmanager-close-exit.py --revert   # restore the backup
+  python3 patch-libmanager-close-exit.py --revert   # restore the backups
 """
 
 import os
@@ -33,6 +45,10 @@ ROOT = os.path.expanduser("~/.cadence/IC251")
 SITES = {
     "tools/dfII/bin/64bit/libManager": [
         (0x31C150, b"\x55\xbf\xe0\xc8\xed\x00", b"\xb8\x01\x00\x00\x00\xc3"),
+        (0x1FB508, b"\x75\x0e", b"\x90\x90"),
+    ],
+    "tools/dfII/bin/64bit/cdsLibEditor": [
+        (0x157230, b"\x55\xbf\x20\x59\xc4\x00", b"\xb8\x01\x00\x00\x00\xc3"),
     ],
 }
 
