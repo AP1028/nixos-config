@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
-"""Make Cadence lib tools' close (X) button do nothing, to avoid the DE freeze.
+"""Make Cadence tools avoid the Xwayland damage-extension freeze on close/exit.
 
-Closing a lib tool's window unmaps it and hits an Xwayland damage-extension
-race (a circular damage list makes `damageRegionProcessPending` spin) that
-freezes the whole desktop; the `hide()`+`fileExit()` path additionally hangs the
-parent Virtuoso CIW. A source-level Xwayland fix is blocked by the Nix read-only
-store, so instead we make the close button a no-op: swallow the `QEvent::Close`
-and mark it ignored, so Qt never unmaps the window and neither crash can be
-triggered by accident. File→Exit still quits cleanly.
+Closing a Cadence window unmaps it, and on Xwayland the unmap triggers a
+composite unredirect (`compUnrealizeWindow → compRestoreWindow → damageCopyArea
+→ damageRegionProcessPending`) that spins on a circular damage list and freezes
+the DE. The DESTROY path (`compDestroyWindow`) does NOT do that restore, so
+destroying/quit-ing is safe while unmap/minimize is not. A source-level Xwayland
+fix is blocked by the read-only Nix store, so instead we change the client
+behavior: replace the unmap paths with destroy/quit.
 
-Qt 5.15 `QEvent`: `m_accept` is bit 2 (0x04) at offset 0x12, so
-`andb $0xfb, 0x12(%event)` == `event->ignore()`.
+  libManager   cdsLibManager::fileExit     vaddr 0x5fb508  off 0x1fb508
+               75 0e -> 90 90               (File→Exit always quit()s, no hide)
+  cdsLibEditor cdsLibEditorExit             vaddr 0x56321e  off 0x16321e
+               74 08 -> eb 08               (exit skips the mainWidget->hide())
+  virtuoso     XIconifyWindow@plt           vaddr 0x56f7220 off 0x52f7220
+               ff 25 .. -> e9 <jmp XDestroyWindow@plt> 90   (minimize -> destroy)
+  virtuoso     XWithdrawWindow@plt          vaddr 0x5710750 off 0x5310750
+               ff 25 .. -> e9 <jmp XDestroyWindow@plt> 90   (withdraw -> destroy)
 
-  libManager   _qtWinCloser::eventFilter  vaddr 0x71c150  off 0x31c150
-               55 bf e0 c8 ed 00 48 89 e5 41
-               -> 80 62 12 fb b8 01 00 00 00 c3   (ignore Close; return true)
-  libManager   cdsLibManager::fileExit    vaddr 0x5fb508  off 0x1fb508
-               75 0e -> 90 90                      (File→Exit always quit()s)
-  cdsLibEditor cdsLibEditor::closeEvent   vaddr 0x539210  off 0x139210
-               8b 05 9a 62 97 -> 80 66 12 fb c3     (ignore Close; return)
-
-libManager == libSelect (same inode). Offsets valid only for the exact IC25.1
-binaries (libManager 16,440,520 B, cdsLibEditor 12,600,720 B); re-verify if the
-install changes. Idempotent; backs up to `<name>.pre-close-exit`.
+Offsets are only valid for the exact IC25.1 binaries (libManager 16,440,520 B,
+cdsLibEditor 12,600,720 B, virtuoso 115 MB); re-verify if the install changes.
+Idempotent; backs each file up to `<name>.pre-close-exit` on first change.
 
 Usage:
   python3 patch-libmanager-close-exit.py            # apply
@@ -38,11 +36,14 @@ ROOT = os.path.expanduser("~/.cadence/IC251")
 # rel path -> [(file offset, expected old bytes, new bytes)]
 SITES = {
     "tools/dfII/bin/64bit/libManager": [
-        (0x31C150, b"\x55\xbf\xe0\xc8\xed\x00\x48\x89\xe5\x41", b"\x80\x62\x12\xfb\xb8\x01\x00\x00\x00\xc3"),
         (0x1FB508, b"\x75\x0e", b"\x90\x90"),
     ],
     "tools/dfII/bin/64bit/cdsLibEditor": [
-        (0x139210, b"\x8b\x05\x9a\x62\x97", b"\x80\x66\x12\xfb\xc3"),
+        (0x16321E, b"\x74\x08", b"\xeb\x08"),
+    ],
+    "tools/dfII/bin/64bit/virtuoso": [
+        (0x52F7220, b"\xff\x25\xca\xfe\x25\x23", b"\xe9\x8b\x3c\xff\xff\x90"),
+        (0x5310750, b"\xff\x25\x32\x34\x25\x23", b"\xe9\x5b\xa7\xfd\xff\x90"),
     ],
 }
 

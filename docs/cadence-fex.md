@@ -208,28 +208,28 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
    `~/.cadence/IC251`: each `QProcess::waitForStarted/Finished(30000)` immediate
    `0x7530` → `0x7d0` (2000 ms). `--revert` undoes it.
 
-4. **Make the lib tools' close (X) button do nothing** (idempotent; backs up to
-    `<name>.pre-close-exit`):
+4. **Change the tools' minimize/exit to destroy/quit so they don't trigger the
+    Xwayland freeze** (idempotent; backs up to `<name>.pre-close-exit`):
     ```
     python3 scripts/patch-libmanager-close-exit.py          # apply
-    python3 scripts/patch-libmanager-close-exit.py --check  # expect 2/2 + 1/1 OK
+    python3 scripts/patch-libmanager-close-exit.py --check  # expect 1/1 + 1/1 + 2/2 OK
     ```
-    Closing a lib tool's window unmaps it and hits an Xwayland damage-extension
-    race (circular damage list → `damageRegionProcessPending` spins) that freezes
-    the DE, and the `hide()`+`fileExit()` path additionally hangs the parent CIW
-    (see "UNRESOLVED" below). A source-level Xwayland fix is blocked by the Nix
-    read-only store, so we make the close button a no-op instead. Three patches:
-    - **close (X)** on `libManager` (= `libSelect`, same inode): overwrite the
-      `_qtWinCloser::eventFilter` entry (vaddr `0x71c150`, off `0x31c150`) with
-      `andb $0xfb,0x12(%rdx); mov $1,%eax; ret` — mark the `QEvent::Close` ignored
-      (`QEvent::m_accept` is bit 2 at offset 0x12 in Qt 5.15) and return true, so
-      Qt never unmaps the window.
-    - **close (X)** on `cdsLibEditor`: it has its own `cdsLibEditor::closeEvent`
-      (not the filter); overwrite its entry (vaddr `0x539210`, off `0x139210`)
-      with `andb $0xfb,0x12(%rsi); ret` to ignore the Close event.
+    On Xwayland, an **unmap** (minimize/withdraw/hide) triggers a composite
+    unredirect (`compUnrealizeWindow → compRestoreWindow → damageCopyArea →
+    damageRegionProcessPending`) that spins on a circular damage list and freezes
+    the DE; a **destroy/quit** does not (`compDestroyWindow` skips the restore). A
+    source-level Xwayland fix is blocked by the read-only Nix store, so we change
+    the client calls to destroy/quit instead:
     - **File→Exit** on `libManager`: `fileExit()` does `mpsOpWaiting ? hide() :
-      quit()`; NOP the `jne` (vaddr `0x5fb508`, off `0x1fb508`) so it always quits
-      cleanly. `--revert` undoes all three.
+      quit()`; NOP the `jne` (vaddr `0x5fb508`, off `0x1fb508`) so it always quits.
+    - **exit** on `cdsLibEditor`: `cdsLibEditorExit()` does `mainWidget->hide()`
+      before quitting; patch the `je`→`jmp` (vaddr `0x56321e`, off `0x16321e`) so it
+      skips the hide.
+    - **minimize/withdraw** on `virtuoso`: Tk's `TkpWmSetState` calls
+      `XIconifyWindow`/`XWithdrawWindow`; redirect those PLT stubs to
+      `XDestroyWindow@plt` (`XIconifyWindow@plt` off `0x52f7220`, `XWithdrawWindow@plt`
+      off `0x5310750`), so minimizing/closing destroys the window instead of
+      unmapping it. `--revert` undoes all of it.
 
     > **Gotcha (bitten once):** apply these in one clean pass. If you re-patch
     > while iterating, *always* do a full `--revert` → `apply` → `--check` cycle
@@ -460,18 +460,16 @@ kills it when the session ends (on x86 the FHS env does not destroy a VM, so the
 explicit trap is what reaps the poller there). One poller per session is
 negligible. This mirrors the watchdog that first made the crash disappear.
 
-### Additional mitigation (landed): lib tools' close (X) does nothing
+### Additional mitigation (landed): minimize/exit → destroy/quit
 
-Closing a lib tool's window unmaps it (damage spin → DE freeze), and the exit
-path also hangs the parent CIW (see "UNRESOLVED"). A source-level Xwayland fix
-is blocked by the read-only Nix store, so `scripts/patch-libmanager-close-exit.py`
-instead makes the X button a no-op: (1) `libManager` (= `libSelect`, same inode)
-— overwrite `_qtWinCloser::eventFilter`'s entry with `andb $0xfb,0x12(%rdx);
-mov $1,%eax; ret` (ignore the Close event + return true); (2) `cdsLibEditor` —
-overwrite `cdsLibEditor::closeEvent`'s entry with `andb $0xfb,0x12(%rsi); ret`
-(`QEvent::m_accept` is bit 2 at offset 0x12 in Qt 5.15); (3) `libManager`
-File→Exit — NOP `fileExit()`'s `jne` so it always `quit()`s. Idempotent +
-revertible (backups `<name>.pre-close-exit`).
+On Xwayland an **unmap** (minimize/withdraw/hide) hits the composite-unredirect
+damage spin (DE freeze); a **destroy/quit** does not. The source-level Xwayland
+fix is blocked by the read-only Nix store, so `scripts/patch-libmanager-close-exit.py`
+changes the client behavior to destroy/quit instead: (1) `libManager` File→Exit —
+NOP `fileExit()`'s `jne` so it always `quit()`s; (2) `cdsLibEditor` exit — patch
+`cdsLibEditorExit()`'s `je`→`jmp` to skip its `mainWidget->hide()`; (3) `virtuoso`
+minimize/withdraw — redirect `XIconifyWindow@plt`/`XWithdrawWindow@plt` to
+`XDestroyWindow@plt`. Idempotent + revertible (backups `<name>.pre-close-exit`).
 
 ### Not done (deferred): the real Xwayland fix
 
