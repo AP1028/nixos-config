@@ -26,6 +26,25 @@ behavior: replace the unmap paths with destroy/quit.
   cdsLibEditor _qtWinCloser::eventFilter   vaddr 0x55726f  off 0x15726f
                e8 (call hide@plt) -> 90 90 90 90 90
                                             (X button: no unmap before fileExit→quit)
+  libManager   cdslibmanExit                vaddr 0x71a64a  off 0x31a64a
+               e8 (call hide@plt) -> 90 90 90 90 90
+                                            (exit: hide() unmaps BEFORE the safe
+                                             delete-widget/delete-qApp teardown)
+  libManager   killHidden                   vaddr 0x719939  off 0x319939
+               e8 (call close@plt) -> 90 90 90 90 90
+                                            (close() = closeEvent = hide = unmap)
+  cdsLibEditor killHidden                   vaddr 0x5572b7  off 0x1572b7
+               e8 (call close@plt) -> 90 90 90 90 90
+  cdsLibEditor killHidden                   vaddr 0x5572f9  off 0x1572f9
+               e8 (call hide@plt) -> 90 90 90 90 90
+  cdsLibEditor cdsLibEditorUnmap            vaddr 0x5628dc  off 0x1628dc
+               e8 (call hide@plt) -> 90 90 90 90 90   (no callers; dead code)
+  cdsLibEditor cdsLibEditorShutdown         vaddr 0x56293c  off 0x16293c
+               e8 (call hide@plt) -> 90 90 90 90 90
+  cdsLibEditor wrapVoExit                   vaddr 0x5578dc  off 0x1578dc
+               e8 (call hide@plt) -> 90 90 90 90 90
+                                            (hide before delete widget/quit/delete
+                                             qApp — the deletes are the safe part)
   virtuoso     XIconifyWindow@plt           vaddr 0x56f7220 off 0x52f7220
                ff 25 .. -> e9 <jmp XDestroyWindow@plt> 90   (minimize -> destroy)
   virtuoso     XWithdrawWindow@plt          vaddr 0x5710750 off 0x5310750
@@ -64,11 +83,22 @@ SITES = {
         # _qtWinCloser::eventFilter: call showMinimized@plt -> call quit@plt
         # (0x562560; disp 0xffe462a4 from next-insn 0x71c2bc)
         (0x31C2B7, b"\xe8\x04\x58\xe4\xff", b"\xe8\xa4\x62\xe4\xff"),
+        # exit-path unmap removal: hide()/close() unmap (-> spin) before the
+        # safe delete-widget/delete-qApp teardown; NOPing leaves only the
+        # per-window destroys (compDestroyWindow-safe) + windowless conn close
+        (0x31A64A, b"\xe8\x41\x81\xe4\xff", b"\x90\x90\x90\x90\x90"),
+        (0x319939, b"\xe8\x42\xca\xe4\xff", b"\x90\x90\x90\x90\x90"),
     ],
     "tools/dfII/bin/64bit/cdsLibEditor": [
         (0x16321E, b"\x74\x08", b"\xeb\x08"),
         # _qtWinCloser::eventFilter: call hide@plt (0x4f2ec0) -> nops
         (0x15726F, b"\xe8\x4c\xbc\xf9\xff", b"\x90\x90\x90\x90\x90"),
+        # exit-path unmap removal (see libManager comment)
+        (0x1572B7, b"\xe8\x24\xe0\xf9\xff", b"\x90\x90\x90\x90\x90"),
+        (0x1572F9, b"\xe8\xc2\xbb\xf9\xff", b"\x90\x90\x90\x90\x90"),
+        (0x1628DC, b"\xe8\xdf\x05\xf9\xff", b"\x90\x90\x90\x90\x90"),
+        (0x16293C, b"\xe8\x7f\x05\xf9\xff", b"\x90\x90\x90\x90\x90"),
+        (0x1578DC, b"\xe8\xdf\xb5\xf9\xff", b"\x90\x90\x90\x90\x90"),
     ],
     "tools/dfII/bin/64bit/virtuoso": [
         (0x52F7220, b"\xff\x25\xca\xfe\x25\x23", b"\xe9\x8b\x3c\xff\xff\x90"),

@@ -53,10 +53,39 @@ cp cdsLibEditor.pre-close-exit cdsLibEditor
 | libManager | `_qtWinCloser::eventFilter` libSelect-branch `call hide@plt` | 0x71c1f3 | 0x31c1f3 | `e8 98 65 e4 ff` -> `90 90 90 90 90` |
 | libManager | `_qtWinCloser::eventFilter` no-MPS-branch `call hide@plt` | 0x71c251 | 0x31c251 | `e8 3a 65 e4 ff` -> `90 90 90 90 90` |
 | libManager | `_qtWinCloser::eventFilter` iconify `call showMinimized@plt` | 0x71c2b7 | 0x31c2b7 | `e8 04 58 e4 ff` -> `e8 a4 62 e4 ff` (`call quit@plt` 0x562560) |
+| libManager | `cdslibmanExit` `call hide@plt` | 0x71a64a | 0x31a64a | `e8 41 81 e4 ff` -> `90 90 90 90 90` |
+| libManager | `killHidden` `call close@plt` | 0x719939 | 0x319939 | `e8 42 ca e4 ff` -> `90 90 90 90 90` |
 | cdsLibEditor | `cdsLibEditorExit` (the `je`) | 0x56321e | 0x16321e | `74 08` -> `eb 08` (skip `mainWidget->hide()`) |
 | cdsLibEditor | `_qtWinCloser::eventFilter` `call hide@plt` | 0x55726f | 0x15726f | `e8 4c bc f9 ff` -> `90 90 90 90 90` |
+| cdsLibEditor | `killHidden` `call close@plt` | 0x5572b7 | 0x1572b7 | `e8 24 e0 f9 ff` -> `90 90 90 90 90` |
+| cdsLibEditor | `killHidden` `call hide@plt` | 0x5572f9 | 0x1572f9 | `e8 c2 bb f9 ff` -> `90 90 90 90 90` |
+| cdsLibEditor | `cdsLibEditorUnmap` `call hide@plt` | 0x5628dc | 0x1628dc | `e8 df 05 f9 ff` -> `90 90 90 90 90` (dead code, no callers) |
+| cdsLibEditor | `cdsLibEditorShutdown` `call hide@plt` | 0x56293c | 0x16293c | `e8 7f 05 f9 ff` -> `90 90 90 90 90` |
+| cdsLibEditor | `wrapVoExit` `call hide@plt` | 0x5578dc | 0x1578dc | `e8 df b5 f9 ff` -> `90 90 90 90 90` |
 | virtuoso | `XIconifyWindow@plt` | 0x56f7220 | 0x52f7220 | `jmp XDestroyWindow@plt` |
 | virtuoso | `XWithdrawWindow@plt` | 0x5710750 | 0x5310750 | `jmp XDestroyWindow@plt` |
+
+## Teardown ALSO spins (round 3, 2026-09-06 testing)
+
+Testing on asusg16 showed the round-2 state still froze: X button -> window
+closes -> ~0.5 s later the DE freezes (Xwayland thread pegged). Crucially,
+**File->Exit on the UNPATCHED binary freezes the same way** — so it was never
+an unmap-at-click problem only: the quit/exit path itself contained unmaps.
+The X button was (deliberately) routed to `quit()`, i.e. the same path as
+File->Exit, hence the identical signature.
+
+Disassembly of the exit flow found them: `cdslibmanExit` does
+`mainWidget->hide()` (0x71a64a) **before** its teardown, and every exit route
+ends in the same safe sequence: `delete mainWidget` -> `quit()` -> `delete
+qApp` -> `voExit` (each widget delete = one `xcb_destroy_window`, the
+individually-destroyed kind that does not spin, then a **windowless**
+connection close). Round 3 NOPs every hide/close on the exit paths of both
+binaries (7 sites above), so only the safe sequence remains.
+
+If a freeze STILL occurs after round 3, the remaining suspects are the
+connection-close teardown of non-widget resources, or `endAllBusy`'s
+`XUnmapWindow` on the libSelect busy-shield (0x6930d3, libSelect paths only) —
+capture the backtrace (below) before patching further.
 
 All are in-place rewrites (no instruction insertion). Non-PIE ELF, x86_64,
 vaddr = file offset + 0x400000. Sizes: libManager 16,440,520 B, cdsLibEditor
@@ -102,27 +131,38 @@ window and never lets it through:
 
 ## Machine state
 
-- **asusg16 (x86_64)**: all 8 sites applied from pristine (verified with
+- **asusg16 (x86_64)**: all 15 sites applied from pristine (verified with
   `--check` + objdump disassembly of every patched call). qprocess-timeout
   patch **pristine** — it is FEX/macbook-only and `scripts/handoff.sh` now
   skips it on non-aarch64 by design (the 30s retry loop it shortens is
-  legitimate without FEX).
+  legitimate without FEX). Round-3 not yet field-tested.
 - **macbook (aarch64/FEX)**: round-1 sites applied; needs `git pull` then
-  `./scripts/handoff.sh apply` for the 4 new eventFilter sites (offsets are
-  identical — both machines run the same x86_64 binaries), then its usual
-  qprocess patch.
+  `./scripts/handoff.sh apply` for the new eventFilter + exit-path sites
+  (offsets are identical — both machines run the same x86_64 binaries), then
+  its usual qprocess patch.
 
 ## Manual test checklist (both machines, after a fresh login)
 
+Arm the freeze-dump capture FIRST so a repro costs us nothing: it sleeps, then
+attaches gdb once to kwin + Xwayland and dumps both stacks to
+`~/.cadence/freeze_dump.log` (single delayed attach — continuous observation
+perturbs the bug):
+
+```
+sudo-env -c 'setsid -f bash ~/nixos-config/scripts/capture-kwin-xwayland.sh 15'
+# now close the libManager window within 15s
+```
+
 1. Fresh login first (re-rolls the ~50/50 session race); repeat a few times.
-2. virtuoso session -> Library Manager -> click X: expect process exits
+2. virtuoso -> Library Manager -> click X: expect process exits
    (`pgrep libManager` empty), no freeze; reopening Library Manager respawns it.
 3. cdsLibEditor: click X: quit flow, no freeze.
-4. Titlebar **minimize** on both: watch closely — kwin-initiated unmap may be a
-   separate path client patching cannot reach. If this still freezes, record it
-   as a new finding.
-5. Keep `top` open: a spin = one Xwayland core pegged at 100%.
-6. virtuoso File→Exit and window close should behave as before (PLT remaps).
+4. File->Exit on both: same expectation (shares the exit path).
+5. Titlebar **minimize** on both: kwin-initiated unmap may be unreachable by
+   client patching — if this freezes, record it.
+6. If anything freezes: `~/.cadence/freeze_dump.log` has the backtraces —
+   check which function spins in Xwayland (`damageRegionProcessPending` vs
+   something else) and send it over.
 
 ## Tried and stashed (git history)
 

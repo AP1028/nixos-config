@@ -214,7 +214,7 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
     `<name>.pre-close-exit`):
     ```
     python3 scripts/patch-libmanager-close-exit.py          # apply
-    python3 scripts/patch-libmanager-close-exit.py --check  # expect 4/4 + 2/2 + 2/2 OK
+    python3 scripts/patch-libmanager-close-exit.py --check  # expect 6/6 + 7/7 + 2/2 OK
     ```
     On Xwayland, an **unmap** (minimize/withdraw/hide) triggers a composite
     unredirect (`compUnrealizeWindow → compRestoreWindow → damageCopyArea →
@@ -239,6 +239,16 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
     - **exit** on `cdsLibEditor`: `cdsLibEditorExit()` does `mainWidget->hide()`
       before quitting; patch the `je`→`jmp` (vaddr `0x56321e`, off `0x16321e`) so it
       skips the hide.
+    - **exit teardown** (both `libManager` and `cdsLibEditor`): every exit path
+      also called `hide()`/`close()` right before the safe teardown
+      (`delete mainWidget` -> `quit` -> `delete qApp` -> `voExit`), and those
+      unmaps froze the DE ~0.5 s into a quit (File->Exit froze the same way,
+      unpatched). NOP those too: libManager `cdslibmanExit` hide
+      (off `0x31a64a`) + `killHidden` close (off `0x319939`); cdsLibEditor
+      `killHidden` close/hide (off `0x1572b7`/`0x1572f9`),
+      `cdsLibEditorUnmap` hide (off `0x1628dc`, dead code),
+      `cdsLibEditorShutdown` hide (off `0x16293c`), `wrapVoExit` hide
+      (off `0x1578dc`).
     - **minimize/withdraw** on `virtuoso`: Tk's `TkpWmSetState` calls
       `XIconifyWindow`/`XWithdrawWindow`; redirect those PLT stubs to
       `XDestroyWindow@plt` (`XIconifyWindow@plt` off `0x52f7220`, `XWithdrawWindow@plt`
@@ -247,7 +257,7 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
 
     > **Gotcha (bitten twice):** apply these in one clean pass. Restore the
     > pristine copies first (`cp <name>.pre-close-exit <name>`), then `apply`,
-    > then `--check` and confirm `4/4` (libManager) + `2/2` (cdsLibEditor) +
+    > then `--check` and confirm `6/6` (libManager) + `7/7` (cdsLibEditor) +
     > `2/2` (virtuoso) — and disassemble the patched call sites (the byte
     > tables above carry exact encodings; a wrong rel32 targets a random
     > address while `--check` still says OK). A partial/mixed state (e.g. one
