@@ -56,6 +56,7 @@ in {
         pygobject3
       ]))
 
+    (pkgs.callPackage ../../../packages/zcode { })
     wechat-uos-wrapped
     go-musicfox
     libreoffice-qt-stable
