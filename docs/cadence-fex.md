@@ -210,8 +210,11 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
    `0x7530` → `0x7d0` (2000 ms). `--revert` undoes it.
 
 4. **Change the tools' minimize/exit to destroy/quit so they don't trigger the
-    Xwayland freeze** (idempotent; pristine originals kept at
-    `<name>.pre-close-exit`):
+    Xwayland freeze** — OPTIONAL since the root fix
+    (`packages/patched-xwayland.nix`, see docs/handoff.md) removes the spin
+    server-side; asusg16 currently runs pristine binaries. Still useful on
+    machines without the patched Xwayland (macbook until its aarch64 bypass
+    lands). Idempotent; pristine originals kept at `<name>.pre-close-exit`:
     ```
     python3 scripts/patch-libmanager-close-exit.py          # apply
     python3 scripts/patch-libmanager-close-exit.py --check  # expect 6/6 + 7/7 + 2/2 OK

@@ -160,18 +160,22 @@ window and never lets it through:
 
 ## Machine state
 
-- **asusg16 (x86_64)**: all 15 sites applied from pristine (verified with
-  `--check` + objdump disassembly of every patched call). qprocess-timeout
-  patch **pristine** — it is FEX/macbook-only and `scripts/handoff.sh` now
-  skips it on non-aarch64 by design (the 30s retry loop it shortens is
-  legitimate without FEX). Round-3 field-tested: close is clean, wedge moved
-  to the server teardown (see root cause) -> patched Xwayland installed,
-  takes effect after the next login.
+- **asusg16 (x86_64)**: **binaries fully pristine** (2026-09-06 — after the
+  Xwayland fix proved out, all client patches were reverted via the
+  `.pre-close-exit` backups; `--check` reports 0/6 + 0/7 + 0/2, which is the
+  correct reverted state, and qprocess offsets are pristine). The stock
+  behaviour is back: X button minimizes libManager, File->Exit quits — all
+  freeze-free under the patched Xwayland. Keep the binaries' `.pre-close-exit`
+  backups and `scripts/patch-libmanager-close-exit.py` around: they are the
+  quick fallback if the Xwayland patch ever has to be withdrawn (nixpkgs bump
+  that breaks the byte check), and the macbook still uses them.
 - **macbook (aarch64/FEX)**: round-1 sites applied; needs `git pull` then
   `./scripts/handoff.sh apply` for the new eventFilter + exit-path sites
   (offsets are identical — both machines run the same x86_64 binaries), then
-  its usual qprocess patch. The Xwayland blit bypass needs its own aarch64
-  offsets (nm-guided, same method as `packages/patched-xwayland.nix`).
+  its usual qprocess patch — until it gets its own Xwayland blit bypass
+  (nm-guided aarch64 offsets, same method as
+  `packages/patched-xwayland.nix`), after which its client patches can be
+  reverted the same way.
 
 ## Manual test checklist (after the next login — patched Xwayland active)
 
