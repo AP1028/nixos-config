@@ -80,6 +80,7 @@
     alejandra
     clang
     gcc
+    gdb
     gnumake
     valgrind
     neovim
