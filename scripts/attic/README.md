@@ -9,12 +9,12 @@ reference. They still work if ever needed again.
 - **`patch-libmanager-close-exit.py`** — remapped libManager/cdsLibEditor
   close/exit paths (and virtuoso's Xlib iconify/withdraw PLT stubs) to
   quit/destroy so no client-issued unmap could reach the spin. Applied in
-  three rounds, then fully reverted on asusg16 (2026-09-06) once the Xwayland
-  fix proved out; the pristine `.pre-close-exit` backups live next to the
-  binaries in `~/.cadence/IC251/tools{,.lnx86}/dfII/bin/64bit/`.
-  `--revert` restores them. The macbook still has the round-1 patches applied
-  — revert it (same script, same offsets) after its Xwayland patch is
-  confirmed.
+  three rounds, then fully reverted on asusg16 and the macbook (2026-09-06)
+  once the Xwayland fix proved out; the pristine `.pre-close-exit` backups
+  live next to the binaries in
+  `~/.cadence/IC251/tools{,.lnx86}/dfII/bin/64bit/`. `--revert` restores
+  them. Note: on the macbook the backups were taken *after* the
+  qprocess-timeout patch, so its revert correctly kept the launch-delay fix.
 
 - **`handoff.sh`** — dispatcher for the two patch scripts above and
   `../patch-cadence-qprocess-timeout.py`. Superseded: run the qprocess script

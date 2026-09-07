@@ -168,14 +168,17 @@ window and never lets it through:
   freeze-free under the patched Xwayland. Keep the binaries' `.pre-close-exit`
   backups and `scripts/attic/patch-libmanager-close-exit.py` around: they are the
   quick fallback if the Xwayland patch ever has to be withdrawn (nixpkgs bump
-  that breaks the byte check), and the macbook still uses them.
-- **macbook (aarch64/FEX)**: round-1 sites applied; needs `git pull` then
-  `./scripts/handoff.sh apply` for the new eventFilter + exit-path sites
-  (offsets are identical — both machines run the same x86_64 binaries), then
-  its usual qprocess patch — until it gets its own Xwayland blit bypass
-  (nm-guided aarch64 offsets, same method as
-  `packages/patched-xwayland.nix`), after which its client patches can be
-  reverted the same way.
+  that breaks the byte check), and the macbook used them too.
+- **macbook (aarch64/FEX)**: patched Xwayland **live** (2026-09-06: rebuilt,
+  rebooted; the running exe is the bypass derivation, NOP verified at
+  0xfc5c4). Client binaries reverted the same way — **but note**: this
+  machine's `.pre-close-exit` backups were taken *after* the qprocess-timeout
+  patch, so the revert restored "qprocess-patched + close-exit-pristine":
+  stock close/exit behaviour with the FEX launch-delay fix intact (11/11 +
+  3/3 + 1/1 still patched, ~26 s launch preserved). Verified post-revert:
+  close-exit 0/6 + 0/7 + 0/2, qprocess OK. On any machine whose backups
+  predate the qprocess patch, re-run
+  `scripts/patch-cadence-qprocess-timeout.py apply` after a revert.
 
 ## Manual test checklist (after the next login — patched Xwayland active)
 
