@@ -6,7 +6,9 @@
   pkgs,
   lib,
   ...
-}: {
+}: let
+  docSkillsNode = pkgs.callPackage ../../../packages/document-skills-node { };
+in {
   imports = [
     ../../../modules/packages/common
 
@@ -109,7 +111,29 @@
     yosys
     verilator
 
-    (python3.withPackages (ps: with ps; [dbus-python pdftotext pygobject3 tkinter]))
+    # Python deps for the ZCode document skills (pdf/docx/pptx/xlsx):
+    # reportlab/pypdf/pymupdf/pikepdf/pdfplumber = pdf core, python-docx/
+    # python-pptx/defusedxml = office editing, openpyxl/xlsxwriter/pandas =
+    # spreadsheets, matplotlib = charts, markitdown = text extraction,
+    # pyhanko = pdf signatures, pypdfium2 = pdf rendering, playwright = HTML→PDF
+    (python3.withPackages (ps: with ps; [
+      dbus-python pdftotext pygobject3 tkinter
+      reportlab pypdf pymupdf pikepdf pdfplumber
+      defusedxml python-docx python-pptx openpyxl xlsxwriter pandas
+      matplotlib markitdown pyhanko pypdfium2 playwright
+    ]))
+
+    # Node modules for the document skills (docx-js/pptxgenjs/playwright/pdf-lib/
+    # sharp) - see packages/document-skills-node; NODE_PATH/PLAYWRIGHT_BROWSERS_PATH
+    # below wire them into node and playwright.
+    nodejs
+    docSkillsNode
+    # pdf skill extras: ghostscript (compress), ocrmypdf (OCR), diff-pdf
+    # (compare), tectonic (LaTeX route; downloads its package cache on first run)
+    ghostscript
+    ocrmypdf
+    diff-pdf
+    tectonic
 
     gimp3-with-plugins
     go-musicfox
@@ -204,6 +228,12 @@
     tcsh
     ksh
   ];
+
+  environment.sessionVariables = {
+    # document-skills-node: bare `require('docx')` etc. resolves from here
+    NODE_PATH = "${docSkillsNode}/lib/node_modules";
+    PLAYWRIGHT_BROWSERS_PATH = "${docSkillsNode}/share/playwright-browsers";
+  };
 
   programs.java = {
     enable = true;
