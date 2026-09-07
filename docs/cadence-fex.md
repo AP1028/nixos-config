@@ -196,9 +196,11 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
    install -m755 scripts/virtuoso-wrapper.sh ~/.cadence/bin/virtuoso
    ```
 
-3. **Apply the launch-delay binary patches** (macbook/FEX only — `handoff.sh`
-   skips this on native x86_64, where the 30s retry is legitimate; idempotent;
-   backs each file up to `<name>.pre-qprocess-timeout` on first change):
+3. **Apply the launch-delay binary patches** (macbook/FEX only — unrelated to
+   the freeze; never run on native x86_64, where the 30s retry is legitimate;
+   the `handoff.sh` dispatcher that arch-guarded this is stashed in
+   `scripts/attic/`, so just don't run it here; idempotent; backs each file
+   up to `<name>.pre-qprocess-timeout` on first change):
    ```
    python3 scripts/patch-cadence-qprocess-timeout.py            # apply
    python3 scripts/patch-cadence-qprocess-timeout.py --check    # expect 11+3+1 OK
@@ -216,8 +218,8 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
     machines without the patched Xwayland (macbook until its aarch64 bypass
     lands). Idempotent; pristine originals kept at `<name>.pre-close-exit`:
     ```
-    python3 scripts/patch-libmanager-close-exit.py          # apply
-    python3 scripts/patch-libmanager-close-exit.py --check  # expect 6/6 + 7/7 + 2/2 OK
+    python3 scripts/attic/patch-libmanager-close-exit.py          # apply
+    python3 scripts/attic/patch-libmanager-close-exit.py --check  # expect 6/6 + 7/7 + 2/2 OK
     ```
     On Xwayland, an **unmap** (minimize/withdraw/hide) triggers a composite
     unredirect (`compUnrealizeWindow → compRestoreWindow → damageCopyArea →
@@ -280,7 +282,7 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
 6. **Re-diagnose a stall if it regresses** (the interposer that found this bug):
    build it (cross-compiles the x86_64 `.so` from the aarch64 host), run the tool
    under `LD_PRELOAD`, and resolve the logged backtraces — see
-   `scripts/qtimer-preload/README.md`. The stall signature is a `ppoll` with
+   `scripts/attic/qtimer-preload/README.md`. The stall signature is a `ppoll` with
    `tv_sec >= 20`; resolve the logged addresses with the nixpkgs
    `x86_64-unknown-linux-gnu-addr2line` against the tool's binary/libs.
 
@@ -385,7 +387,7 @@ The launch-delay fix (binary patches, applied to the install tree by a script):
   (LD_LIBRARY_PATH + PATH reorder; see fix #1).
 
 Diagnostic tooling:
-- `scripts/qtimer-preload/` — x86_64 `LD_PRELOAD` interposer (`qtimer_preload.c`
+- `scripts/attic/qtimer-preload/` — x86_64 `LD_PRELOAD` interposer (`qtimer_preload.c`
   + `qtimer.map` + `build.nix` + `README.md`) that dumps a backtrace on a
   `ppoll` ≥20s; used to pin the stall to `QProcess::waitFor*`.
 
@@ -493,7 +495,7 @@ negligible. This mirrors the watchdog that first made the crash disappear.
 
 On Xwayland an **unmap** (minimize/withdraw/hide) hits the composite-unredirect
 damage spin (DE freeze); a **destroy/quit** does not. The source-level Xwayland
-fix is blocked by the read-only Nix store, so `scripts/patch-libmanager-close-exit.py`
+fix is blocked by the read-only Nix store, so `scripts/attic/patch-libmanager-close-exit.py`
 changes the client behavior to destroy/quit instead: (1) `libManager` File→Exit —
 NOP `fileExit()`'s `jne` so it always `quit()`s; (2) `cdsLibEditor` exit — patch
 `cdsLibEditorExit()`'s `je`→`jmp` to skip its `mainWidget->hide()`; (3) `virtuoso`
@@ -538,7 +540,7 @@ blocking ~4×30s under FEX. Patched to 2s via
 `scripts/patch-cadence-qprocess-timeout.py` (virtuoso + libManager +
 libcdsQt5Core). `cadence-env -c 'virtuoso'` launches in ~26s.
 
-If a new/regressed stall appears, build + run `scripts/qtimer-preload/` and
+If a new/regressed stall appears, build + run `scripts/attic/qtimer-preload/` and
 resolve the `ppoll` backtrace (see its README). The same `QCadenceStyle::cdsRoot`
 pattern is compiled into other Cadence Qt tools (libSelect, layout, dashboard, …)
 — patch them the same way if they load slowly (add their `0x7530` `waitFor*`

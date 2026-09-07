@@ -75,5 +75,11 @@ in {
     muvm
     gamescope
     gdb
+
+    # Xwayland with the composite restore blit NOPed — root fix for the
+    # Cadence-close DE freeze (docs/handoff.md). hiPrio shadows the real
+    # xwayland's bin/Xwayland in /run/current-system/sw/bin, the path kwin
+    # launches. Active after the next login.
+    (pkgs.lib.hiPrio (pkgs.callPackage ../../../packages/patched-xwayland.nix { }))
   ];
 }

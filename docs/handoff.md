@@ -72,7 +72,7 @@ It is not a per-close coin flip. Test after a **fresh login**, several times.
 
 ## Client patches (complete set)
 
-`scripts/patch-libmanager-close-exit.py` (apply / `--check` / `--revert`).
+`scripts/attic/patch-libmanager-close-exit.py` (apply / `--check` / `--revert`; STASHED — see scripts/attic/README.md).
 Recommended flow: restore the pristine copies, then apply everything in one
 pass on top of the fresh binaries (never patch on top of unknown state):
 
@@ -80,7 +80,7 @@ pass on top of the fresh binaries (never patch on top of unknown state):
 cd ~/.cadence/IC251/tools/dfII/bin/64bit
 cp libManager.pre-close-exit libManager
 cp cdsLibEditor.pre-close-exit cdsLibEditor
-~/nixos-config/scripts/patch-libmanager-close-exit.py
+~/nixos-config/scripts/attic/patch-libmanager-close-exit.py
 ```
 
 | binary | function / site | vaddr | file off | old -> new |
@@ -166,7 +166,7 @@ window and never lets it through:
   correct reverted state, and qprocess offsets are pristine). The stock
   behaviour is back: X button minimizes libManager, File->Exit quits — all
   freeze-free under the patched Xwayland. Keep the binaries' `.pre-close-exit`
-  backups and `scripts/patch-libmanager-close-exit.py` around: they are the
+  backups and `scripts/attic/patch-libmanager-close-exit.py` around: they are the
   quick fallback if the Xwayland patch ever has to be withdrawn (nixpkgs bump
   that breaks the byte check), and the macbook still uses them.
 - **macbook (aarch64/FEX)**: round-1 sites applied; needs `git pull` then
@@ -222,7 +222,8 @@ through `compRestoreWindow`.
 
 ## Handoff script
 
-`scripts/handoff.sh` wraps both patch scripts: `apply` (default), `check`,
-`revert`. It runs the qprocess/launch-delay script **only on aarch64** and
-skips it with a notice elsewhere. Run `./scripts/handoff.sh check` to confirm
-the on-disk state.
+The client-patch scripts (including the old `handoff.sh` dispatcher) are
+**stashed in `scripts/attic/`** — see `scripts/attic/README.md`. The only
+still-active patch script is `scripts/patch-cadence-qprocess-timeout.py`
+(macbook/FEX launch-delay fix, unrelated to the freeze): run it directly,
+e.g. `python3 scripts/patch-cadence-qprocess-timeout.py --check`.
