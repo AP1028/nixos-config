@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Single-shot capture of kwin + Xwayland + Cadence client backtraces, after a delay.
 #
-# The DE-freeze-on-Cadence-close bug (docs/handoff.md) is a Heisenbug: any
+# The DE-freeze-on-Cadence-close bug (docs/cadence-freeze.md) is a Heisenbug: any
 # CONTINUOUS observation (polling / periodic gdb) makes the close behave
 # instead of freeze. The only reliable method is a single gdb attach AFTER a
 # quiet delay. Arm this (it sleeps DELAY seconds with no observation), do the

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Apply / check / revert the current Cadence close/freeze patches.
-# See docs/handoff.md for the full context.
+# See docs/cadence-freeze.md for the full context.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

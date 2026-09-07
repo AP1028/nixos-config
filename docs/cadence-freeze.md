@@ -1,4 +1,4 @@
-# Handoff: Xwayland DE freeze on Cadence close/minimize
+# Xwayland DE freeze on Cadence close/minimize
 
 Status: **root cause confirmed by backtrace; server-side fix deployed on
 asusg16, pending relogin verification**. The DE freezes (Xwayland
@@ -223,7 +223,7 @@ overlay, and it is a 3-byte NOP — no instruction insertion. Keep the loop
 guard as the fallback if some future freeze shows a spin that does NOT pass
 through `compRestoreWindow`.
 
-## Handoff script
+## Patch scripts
 
 The client-patch scripts (including the old `handoff.sh` dispatcher) are
 **stashed in `scripts/attic/`** — see `scripts/attic/README.md`. The only

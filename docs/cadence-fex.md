@@ -213,7 +213,7 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
 
 4. **Change the tools' minimize/exit to destroy/quit so they don't trigger the
     Xwayland freeze** — OPTIONAL since the root fix
-    (`packages/patched-xwayland.nix`, see docs/handoff.md) removes the spin
+    (`packages/patched-xwayland.nix`, see docs/cadence-freeze.md) removes the spin
     server-side; asusg16 currently runs pristine binaries. Still useful on
     machines without the patched Xwayland (macbook until its aarch64 bypass
     lands). Idempotent; pristine originals kept at `<name>.pre-close-exit`:

@@ -2,7 +2,7 @@
 
 The Xwayland damage-spin freeze is fixed at the root by
 `packages/patched-xwayland.nix` (compRestoreWindow blit bypass — see
-`docs/handoff.md` for the backtrace-confirmed analysis). These client-side
+`docs/cadence-freeze.md` for the backtrace-confirmed analysis). These client-side
 workarounds are no longer needed on either machine and live here for
 reference. They still work if ever needed again.
 

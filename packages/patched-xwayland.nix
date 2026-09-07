@@ -1,6 +1,6 @@
 # Xwayland with the composite restore blit disabled.
 #
-# Root cause of the Cadence DE-freeze (docs/handoff.md): when a client whose
+# Root cause of the Cadence DE-freeze (docs/cadence-freeze.md): when a client whose
 # composite damage chain got corrupted disconnects, Xwayland's single dispatch
 # thread spins forever in
 #
