@@ -11,16 +11,37 @@ behavior: replace the unmap paths with destroy/quit.
 
   libManager   cdsLibManager::fileExit     vaddr 0x5fb508  off 0x1fb508
                75 0e -> 90 90               (File→Exit always quit()s, no hide)
+  libManager   _qtWinCloser::eventFilter   vaddr 0x71c1f3  off 0x31c1f3
+               e8 (call hide@plt) -> 90 90 90 90 90
+                                            (libSelect close: no unmap before cancel)
+  libManager   _qtWinCloser::eventFilter   vaddr 0x71c251  off 0x31c251
+               e8 (call hide@plt) -> 90 90 90 90 90
+                                            (no unmap before fileExit→quit)
+  libManager   _qtWinCloser::eventFilter   vaddr 0x71c2b7  off 0x31c2b7
+               e8 (call showMinimized@plt) -> e8 (call QCoreApplication::quit@plt)
+                                            (close with clients attached: quit,
+                                             don't iconify)
   cdsLibEditor cdsLibEditorExit             vaddr 0x56321e  off 0x16321e
                74 08 -> eb 08               (exit skips the mainWidget->hide())
+  cdsLibEditor _qtWinCloser::eventFilter   vaddr 0x55726f  off 0x15726f
+               e8 (call hide@plt) -> 90 90 90 90 90
+                                            (X button: no unmap before fileExit→quit)
   virtuoso     XIconifyWindow@plt           vaddr 0x56f7220 off 0x52f7220
                ff 25 .. -> e9 <jmp XDestroyWindow@plt> 90   (minimize -> destroy)
   virtuoso     XWithdrawWindow@plt          vaddr 0x5710750 off 0x5310750
                ff 25 .. -> e9 <jmp XDestroyWindow@plt> 90   (withdraw -> destroy)
 
+The Qt close paths never call XIconifyWindow directly: _qtWinCloser::eventFilter
+intercepts QEvent::Close and hides (xcb_unmap_window) or showMinimized()s
+(WM_CHANGE_STATE) — both land in the Xwayland unmap path that spins. NOPing the
+hide is required (fileExit/libSelectCancelSlot is called on the same widget right
+after, so deleteLater would be a use-after-free); the iconify branch instead
+calls quit(), and everything is destroyed via the X connection close.
+
 Offsets are only valid for the exact IC25.1 binaries (libManager 16,440,520 B,
-cdsLibEditor 12,600,720 B, virtuoso 115 MB); re-verify if the install changes.
-Idempotent; backs each file up to `<name>.pre-close-exit` on first change.
+cdsLibEditor 12,600,720 B, virtuoso 818,274,452 B); re-verify if the install
+changes. Idempotent; backs each file up to `<name>.pre-close-exit` on first
+change.
 
 Usage:
   python3 patch-libmanager-close-exit.py            # apply
@@ -37,9 +58,17 @@ ROOT = os.path.expanduser("~/.cadence/IC251")
 SITES = {
     "tools/dfII/bin/64bit/libManager": [
         (0x1FB508, b"\x75\x0e", b"\x90\x90"),
+        # _qtWinCloser::eventFilter: call hide@plt (0x562790) x2 -> nops
+        (0x31C1F3, b"\xe8\x98\x65\xe4\xff", b"\x90\x90\x90\x90\x90"),
+        (0x31C251, b"\xe8\x3a\x65\xe4\xff", b"\x90\x90\x90\x90\x90"),
+        # _qtWinCloser::eventFilter: call showMinimized@plt -> call quit@plt
+        # (0x562560; disp 0xffe462a4 from next-insn 0x71c2bc)
+        (0x31C2B7, b"\xe8\x04\x58\xe4\xff", b"\xe8\xa4\x62\xe4\xff"),
     ],
     "tools/dfII/bin/64bit/cdsLibEditor": [
         (0x16321E, b"\x74\x08", b"\xeb\x08"),
+        # _qtWinCloser::eventFilter: call hide@plt (0x4f2ec0) -> nops
+        (0x15726F, b"\xe8\x4c\xbc\xf9\xff", b"\x90\x90\x90\x90\x90"),
     ],
     "tools/dfII/bin/64bit/virtuoso": [
         (0x52F7220, b"\xff\x25\xca\xfe\x25\x23", b"\xe9\x8b\x3c\xff\xff\x90"),

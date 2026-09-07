@@ -196,8 +196,9 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
    install -m755 scripts/virtuoso-wrapper.sh ~/.cadence/bin/virtuoso
    ```
 
-3. **Apply the launch-delay binary patches** (idempotent; backs each file up to
-   `<name>.pre-qprocess-timeout` on first change):
+3. **Apply the launch-delay binary patches** (macbook/FEX only — `handoff.sh`
+   skips this on native x86_64, where the 30s retry is legitimate; idempotent;
+   backs each file up to `<name>.pre-qprocess-timeout` on first change):
    ```
    python3 scripts/patch-cadence-qprocess-timeout.py            # apply
    python3 scripts/patch-cadence-qprocess-timeout.py --check    # expect 11+3+1 OK
@@ -209,10 +210,11 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
    `0x7530` → `0x7d0` (2000 ms). `--revert` undoes it.
 
 4. **Change the tools' minimize/exit to destroy/quit so they don't trigger the
-    Xwayland freeze** (idempotent; backs up to `<name>.pre-close-exit`):
+    Xwayland freeze** (idempotent; pristine originals kept at
+    `<name>.pre-close-exit`):
     ```
     python3 scripts/patch-libmanager-close-exit.py          # apply
-    python3 scripts/patch-libmanager-close-exit.py --check  # expect 1/1 + 1/1 + 2/2 OK
+    python3 scripts/patch-libmanager-close-exit.py --check  # expect 4/4 + 2/2 + 2/2 OK
     ```
     On Xwayland, an **unmap** (minimize/withdraw/hide) triggers a composite
     unredirect (`compUnrealizeWindow → compRestoreWindow → damageCopyArea →
@@ -222,6 +224,18 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
     the client calls to destroy/quit instead:
     - **File→Exit** on `libManager`: `fileExit()` does `mpsOpWaiting ? hide() :
       quit()`; NOP the `jne` (vaddr `0x5fb508`, off `0x1fb508`) so it always quits.
+    - **X button** on `libManager`: `_qtWinCloser::eventFilter` intercepts
+      `QEvent::Close` and either `hide()`s (unmap!) or — with clients attached —
+      `showMinimized()`s (iconify = unmap by the WM). NOP the two `call
+      hide@plt` (vaddr `0x71c1f3`/`0x71c251`, off `0x31c1f3`/`0x31c251` — the
+      filter then falls through to `fileExit`→quit / `libSelectCancelSlot`) and
+      retarget the `call showMinimized@plt` (vaddr `0x71c2b7`, off `0x31c2b7`)
+      to `QCoreApplication::quit@plt` (`e8 04 58 e4 ff` → `e8 a4 62 e4 ff`), so
+      close-with-clients quits and everything is destroyed via the X connection
+      close instead.
+    - **X button** on `cdsLibEditor`: the same eventFilter does `hide()` +
+      virtual `fileExit` (it never calls `showMinimized`); NOP the `call
+      hide@plt` (vaddr `0x55726f`, off `0x15726f`).
     - **exit** on `cdsLibEditor`: `cdsLibEditorExit()` does `mainWidget->hide()`
       before quitting; patch the `je`→`jmp` (vaddr `0x56321e`, off `0x16321e`) so it
       skips the hide.
@@ -231,13 +245,15 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
       off `0x5310750`), so minimizing/closing destroys the window instead of
       unmapping it. `--revert` undoes all of it.
 
-    > **Gotcha (bitten once):** apply these in one clean pass. If you re-patch
-    > while iterating, *always* do a full `--revert` → `apply` → `--check` cycle
-    > (restores the pristine binary from `.pre-close-exit`, then re-applies), and
-    > confirm `--check` reports `2/2` (libManager) + `1/1` (cdsLibEditor). A
-    > partial/mixed state (e.g. one binary patched with an old revision of the
-    > patch) is not caught by a spot-check of a couple of bytes — only `--check`
-    > against the current `SITES` table is authoritative.
+    > **Gotcha (bitten twice):** apply these in one clean pass. Restore the
+    > pristine copies first (`cp <name>.pre-close-exit <name>`), then `apply`,
+    > then `--check` and confirm `4/4` (libManager) + `2/2` (cdsLibEditor) +
+    > `2/2` (virtuoso) — and disassemble the patched call sites (the byte
+    > tables above carry exact encodings; a wrong rel32 targets a random
+    > address while `--check` still says OK). A partial/mixed state (e.g. one
+    > binary patched with an old revision of the patch) is not caught by a
+    > spot-check of a couple of bytes — only `--check` against the current
+    > `SITES` table is authoritative.
 
 5. **Verify** (use the real `cadence-env`, not hand-rolled env — see gotcha below):
     ```
