@@ -1,17 +1,43 @@
-# Xwayland DE freeze on Cadence close/minimize
+# Xwayland DE freeze on Cadence close/minimize — root cause and fix
 
-Status: **root cause confirmed by backtrace; server-side fix deployed on
-asusg16, pending relogin verification**. The DE freezes (Xwayland
-damage-extension spin) when libManager disconnects; virtuoso going
-unresponsive right after a clean close is the same wedge. The client-side
-patch set (below) is kept, and a patched Xwayland
-(`packages/patched-xwayland.nix`) removes the spin itself.
+Status: **RESOLVED on both machines** (2026-09-06). Closing / minimizing /
+exiting Cadence windows used to wedge the whole KDE desktop through an
+Xwayland damage-extension spin. The fix is server-side: a patched Xwayland
+(`packages/patched-xwayland.nix`) wired into both host configs. Cadence
+binaries are **stock** on both machines (asusg16 fully stock; the macbook
+additionally carries only the FEX launch-delay patch — see
+`docs/cadence-fex.md`, that is a separate bug).
 
-## Root cause (confirmed by gdb backtrace, 2026-09-06)
+## Runbook (what to do)
 
-Captured live with `scripts/capture-kwin-xwayland.sh` while the DE was
-wedged (`~/.cadence/freeze_dump.log`). Xwayland's single dispatch thread
-spins inside the teardown of the just-disconnected libManager client:
+- **Normal operation: nothing.** The patched Xwayland is built and shadowed in
+  automatically by `hosts/asusg16/packages/default.nix` and
+  `hosts/macbook/packages/default.nix`; it activates when kwin spawns the next
+  session (relogin after a rebuild).
+- **After a nixpkgs bump**, the derivation byte-checks its patch site. If the
+  build fails there, the binary changed — re-derive the offsets before
+  bumping: `nm $out/bin/Xwayland | grep compRestoreWindow`, disassemble, find
+  the GC-ops `CopyArea` call right after `ValidateGC` (x86_64:
+  `call *0x18(%rax)`; aarch64: `ldr xN,[x0,#0x18]` + `blr xN`), then update
+  the site table in `packages/patched-xwayland.nix`.
+- **Cadence binaries stay stock.** Do **not** apply anything from
+  `scripts/attic/` — those are the retired client-side freeze workarounds
+  (kept for reference, see the RETIRED section below). The only live Cadence
+  binary patch is the macbook's FEX launch-delay fix
+  (`scripts/patch-cadence-qprocess-timeout.py`) — unrelated to the freeze;
+  re-apply it after an IC reinstall per `docs/cadence-fex.md`.
+- **If a freeze ever reappears**: arm
+  `scripts/capture-kwin-xwayland.sh` (see Diagnostics) and check
+  `~/.cadence/freeze_dump.log`. If the spin still passes through
+  `compRestoreWindow`, something re-broke the Xwayland patch; if it found a
+  new door, see the loop-guard fallback below.
+
+## Root cause (confirmed by backtrace, 2026-09-06)
+
+Captured live with `scripts/capture-kwin-xwayland.sh` while the DE was wedged
+(`~/.cadence/freeze_dump.log` on asusg16; `docs/freeze-dump.log` is the
+macbook's earlier capture). Xwayland's single dispatch thread spins inside the
+teardown of the just-disconnected libManager client:
 
 ```
 CloseDownClient -> FreeClientResources -> doFreeResource -> DeleteWindow
@@ -19,62 +45,80 @@ CloseDownClient -> FreeClientResources -> doFreeResource -> DeleteWindow
   -> compRestoreWindow -> damageCopyArea -> damageRegionProcessPending  (spin)
 ```
 
-Corrections to earlier assumptions this proves:
+(macbook aarch64 capture shows the same spine via `ProcUnmapWindow`; kwin's
+main thread sits blocked in `xcb_wait_for_reply ← NETWinInfo::update ←
+KWin::X11Window::windowEvent ← Xwayland::dispatchEvents` — a victim, not the
+cause.)
+
+Key facts:
 
 - **Destroy is NOT safe in xwayland-24.1.13**: `DeleteWindow` itself goes
-  through `UnmapWindow -> compRestoreWindow`. The macbook-era "destroy path
-  does not restore" note is wrong for this build. Any client exit frees its
+  through `UnmapWindow -> compRestoreWindow`. The earlier "destroy path does
+  not restore" assumption is wrong for this build. Any client exit frees its
   windows server-side; nothing client-side can prevent it.
+- **`compRestoreWindow`'s blit is the only door.** The spin lives in
+  `damageRegionProcessPending`, walking a corrupted (circular) per-drawable
+  damage chain, reached here through the damage-wrapped `CopyArea` that
+  `compRestoreWindow` uses to copy the redirection pixmap back on unrealize.
+  Every observed freeze — unmap on close, iconify, exit teardown, disconnect —
+  passes through that single blit.
 - The damage chain is corrupted on **libManager's own windows**, created by
   the graceful shutdown path: killing libManager externally (wrapper pkill at
   virtuoso exit) tears the same windows down cleanly, while quitting from the
   X button/File→Exit wedges. Mechanism unknown (an Xwayland bookkeeping bug;
   the clients do not even use the X Damage extension). On real X11 there is
   no composite-restore-unmap path, which is why X11 never froze.
-- Symptom mapping: the wedge starts at disconnect -> Xwayland stops
-  dispatching for everyone -> virtuoso's `QXcbEventQueue` starves ("virtuoso
-  main window broken") while the DE still renders (kwin composites from its
-  own state) -> the first interaction that forces kwin to block on Xwayland
-  (dragging an X11 window) freezes the DE ~0.5 s later. "libmanager closes
-  fine, virtuoso breaks, xwayland breaks on interact" is exactly this.
-
-The original unmap triggers (iconify on close, hide at exit) spin through the
-same `compRestoreWindow -> damageCopyArea -> damageRegionProcessPending`
-stack - it is one bug with three entry doors, which is why each client-side
-round only moved the freeze later.
+- Symptom mapping: the wedge starts at disconnect → Xwayland stops dispatching
+  for everyone → virtuoso's `QXcbEventQueue` starves ("virtuoso main window
+  broken") while the DE still renders (kwin composites from its own state) →
+  the first interaction that forces kwin to block on Xwayland (dragging an X11
+  window) freezes the DE ~0.5 s later.
+- The upstream 2018 fix "xwayland: remove dirty window unconditionally on
+  unrealize" is already present in 24.1.13 — the circular list here is the
+  *core* `miext/damage` pending list, a different structure.
 
 ## The fix: patched Xwayland (server-side, no plasma rebuild)
 
-`packages/patched-xwayland.nix` copies the store Xwayland (24.1.13, 2.9 MB),
-NOPs the 3-byte GC CopyArea blit inside `compRestoreWindow`
-(`call *0x18(%rax)` = `ff 50 18` at file offset **0x101c91**; the text
-segment maps vaddr to file offset 1:1), and sanity-runs `Xwayland -version`.
-The build byte-checks first: a nixpkgs bump that shifts the binary fails the
+`packages/patched-xwayland.nix` copies the store Xwayland (24.1.13), NOPs the
+GC `CopyArea` blit inside `compRestoreWindow` (installed as `damageCopyArea`
+by the damage extension), and sanity-runs `Xwayland -version`. The build
+byte-checks the site first: a nixpkgs bump that shifts the binary fails the
 build instead of blind-patching.
+
+| arch | file offset | expected bytes | replacement |
+|---|---|---|---|
+| x86_64-linux | 0x101c91 | `ff 50 18` (`call *0x18(%rax)`) | `90 90 90` |
+| aarch64-linux | 0x0fc5c4 | `40 01 3f d6` (`blr x10`) | `1f 20 03 d5` (`nop`) |
+
+(text segment maps vaddr to file offset 1:1 on both; `+0x18` is the
+arch-independent `ops->CopyArea` offset in the GC ops struct.)
 
 `compRestoreWindow` keeps all bookkeeping; only the restore copy is skipped,
 which is purely cosmetic in a compositing Wayland session (kwin renders from
 its own buffers). With the blit gone, the spin is unreachable from any entry
-door - close, minimize, exit, kill, any client.
+door — close, minimize, exit, kill, any client.
 
-Installed on asusg16 wrapped in `lib.hiPrio` so it shadows the real
+Both host configs wrap it in `lib.hiPrio` so it shadows the real
 `xorg.xwayland` in `/run/current-system/sw/bin`: kwin launches Xwayland via
-PATH (verified: live process argv[0] is `/run/current-system/sw/bin/Xwayland`).
-**Takes effect after the next login.** For the macbook (aarch64/muvm), apply
-the same compRestoreWindow-blit bypass to its Xwayland - nm-guided, offsets
-differ from x86_64.
+PATH (verified on both machines: live process argv[0] is the sw path).
+**Takes effect after the next login.**
 
-## Launch-dependence (key observation)
+## Session-startup race (historical context)
 
-The circular list is created (or not) at **session startup** as a ~50/50 race, so
-a whole session is either fully well-behaved or freezes on the **first** close.
-It is not a per-close coin flip. Test after a **fresh login**, several times.
+The circular damage list used to appear (or not) at session startup as a
+~50/50 race, so a whole session was either fully well-behaved or froze on the
+first close. With the blit bypass the race no longer matters — the traversal
+cannot spin.
 
-## Client patches (complete set)
+## RETIRED: client-side workarounds (OUTDATED / UNUSED — do not apply)
 
-`scripts/attic/patch-libmanager-close-exit.py` (apply / `--check` / `--revert`; STASHED — see scripts/attic/README.md).
-Recommended flow: restore the pristine copies, then apply everything in one
-pass on top of the fresh binaries (never patch on top of unknown state):
+Everything below was tried before the root cause was found. It "worked" only
+by removing client-issued unmaps, which moved the freeze later (into the
+server teardown) instead of fixing it. All of it is reverted on both machines
+and the script is stashed in `scripts/attic/patch-libmanager-close-exit.py`.
+Kept here for reference only.
+
+Historical apply flow (DO NOT RUN — superseded by the Xwayland fix):
 
 ```
 cd ~/.cadence/IC251/tools/dfII/bin/64bit
@@ -101,132 +145,92 @@ cp cdsLibEditor.pre-close-exit cdsLibEditor
 | virtuoso | `XIconifyWindow@plt` | 0x56f7220 | 0x52f7220 | `jmp XDestroyWindow@plt` |
 | virtuoso | `XWithdrawWindow@plt` | 0x5710750 | 0x5310750 | `jmp XDestroyWindow@plt` |
 
-## Teardown ALSO spins (round 3, 2026-09-06 testing)
+Rounds, for the record:
 
-Testing on asusg16 showed the round-2 state still froze: X button -> window
-closes -> ~0.5 s later the DE freezes (Xwayland thread pegged). Crucially,
-**File->Exit on the UNPATCHED binary freezes the same way** — so it was never
-an unmap-at-click problem only: the quit/exit path itself contained unmaps.
-The X button was (deliberately) routed to `quit()`, i.e. the same path as
-File->Exit, hence the identical signature.
+- **Round 1** — `fileExit` always quits (libManager), `cdsLibEditorExit` skips
+  its hide, virtuoso's `XIconifyWindow`/`XWithdrawWindow` PLT stubs redirect to
+  `XDestroyWindow`. Still froze: `_qtWinCloser::eventFilter` intercepts
+  `QEvent::Close` and issues its own unmaps.
+- **Round 2** — NOPed the eventFilter hides (libManager ×2, cdsLibEditor ×1)
+  and routed the iconify branch to `quit()`. Close became visually clean, but
+  the DE still wedged ~0.5 s later: every exit path also ran `hide()`/`close()`
+  right before the safe teardown (`delete mainWidget` -> `quit` -> `delete qApp`
+  -> `voExit`).
+- **Round 3** — NOPed all 7 exit-path hide/close sites (libManager
+  `cdslibmanExit` + `killHidden`; cdsLibEditor `killHidden` ×2,
+  `cdsLibEditorUnmap`, `cdsLibEditorShutdown`, `wrapVoExit`). Close and exit
+  became fully clean client-side — which exposed the real bug: the wedge had
+  moved into Xwayland's own teardown (see root cause). That discovery is what
+  led to the server-side fix.
 
-Round 3 NOPed every hide/close on the exit paths of both binaries (7 sites in
-the table above), which made the close itself clean — and exposed the real
-bug: the wedge had merely moved into the server-side teardown (see the
-confirmed root cause above). The gdb capture that nailed it is the
-`capture-kwin-xwayland.sh` flow documented in the test checklist.
+Notes from the round-2/3 disassembly (still true, historical):
 
-All are in-place rewrites (no instruction insertion). Non-PIE ELF, x86_64,
-vaddr = file offset + 0x400000. Sizes: libManager 16,440,520 B, cdsLibEditor
-12,600,720 B, virtuoso 818,274,452 B. The `.cdssig` files next to the binaries
-are stale — Cadence does not enforce them.
+- `_qtWinCloser::eventFilter` intercepts `QEvent::Close` (type 19) and never
+  lets it through. libManager filter at vaddr 0x71c140 (libSelect branch
+  `hide()` @0x71c1f3; no-MPS branch `hide()` @0x71c251 before `fileExit`;
+  with-MPS branch `showMinimized()` @0x71c2b7 — Cadence's "close = iconify to
+  keep the server alive" design). cdsLibEditor filter at vaddr 0x557220 is
+  `hide()` + virtual `fileExit` (never `showMinimized`). NOPs (not retargets)
+  were required for the hides because `fileExit`/`libSelectCancelSlot` runs on
+  the same widget immediately after.
+- `_lmgrCloseIconify` @0x71c829 calls `showMinimized` but is gated on the
+  `inReplay` flag (QA replay only) — left untouched, like the HiQReplay* sites.
+- The Qt side never calls `XIconifyWindow`: the bundled `libcdsQt5XcbQpa.so` is
+  pure XCB — minimize = `xcb_send_event` WM_CHANGE_STATE, hide =
+  `xcb_unmap_window`.
+- In-place rewrites only (no instruction insertion). Non-PIE ELF, x86_64,
+  vaddr = file offset + 0x400000. Sizes: libManager 16,440,520 B, cdsLibEditor
+  12,600,720 B, virtuoso 818,274,452 B. The `.cdssig` files next to the
+  binaries are stale — Cadence does not enforce them.
+- A wrong rel32 targets a random address while `--check` still says OK —
+  always disassemble patched call sites after applying.
+- The timing-perturbation poller (a per-second `pgrep kwin_wayland` +
+  `ps -o pcpu=` inside the cadence-env wrapper, since reverted from
+  `modules/env/cadence-env.nix`) exploited the Heisenbug — continuous
+  observation made closes minimize instead of freeze — and was dropped once
+  the real fix landed.
 
-### Why these sites (disassembly findings, 2026-09-06)
+## Backups
 
-`_qtWinCloser::eventFilter` intercepts `QEvent::Close` (type 19) on the main
-window and never lets it through:
+- `<name>.pre-close-exit` next to the binaries in
+  `~/.cadence/IC251/tools{,.lnx86}/dfII/bin/64bit/` — the clean, unmodified
+  originals (byte-verified pristine at every close-exit and qprocess site;
+  the retired script's `--revert` restores them). On the macbook these
+  backups were taken *after* the qprocess-timeout patch, so they carry the
+  launch-delay bytes; on asusg16 they are fully pristine.
+- asusg16's intermediate `.pre-close-exit-r2` snapshots were removed
+  (2026-09-06).
 
-- **libManager** (filter at vaddr 0x71c140): three freeze paths —
-  libSelect branch `hide()` @0x71c1f3; no-MPS-clients branch `hide()` @0x71c251
-  before `fileExit` (patched to always quit); with-MPS-clients branch
-  `showMinimized()` @0x71c2b7 (the "close = iconify to keep the server alive"
-  behavior). NOPing the hides is required — `fileExit` /
-  `libSelectCancelSlot` is called on the same widget immediately after, so a
-  `deleteLater` there would be a use-after-free. The iconify branch now calls
-  `QCoreApplication::quit()`: close-with-clients = process exit, all windows
-  destroyed via the X connection close (the safe destroy path); Cadence tools
-  respawn libManager on next use (fast on native x86).
-- **cdsLibEditor** (filter at vaddr 0x557220): the X button is
-  `hide()` @0x55726f + virtual `cdsLibEditor::fileExit` — **not**
-  `showMinimized()` as earlier assumed on the macbook. NOP the hide and the
-  close path becomes the same quit flow as File→Exit.
-- `_lmgrCloseIconify` @0x71c829 also calls `showMinimized`, but it is gated on
-  the `inReplay` flag (QA replay only) — intentionally left untouched, like the
-  HiQReplay* call sites.
-- The Qt side never calls `XIconifyWindow`: the bundled
-  `libcdsQt5XcbQpa.so` is pure XCB — minimize = `xcb_send_event` WM_CHANGE_STATE,
-  hide = `xcb_unmap_window`. Both land in the server-side unmap path; only a
-  real destroy avoids the spin. Patching the Qt plugin is not an option (it
-  would break every hide in every Cadence Qt app).
+## Machine state (2026-09-06, verified)
 
-### Backups
+- **asusg16 (x86_64)**: patched Xwayland live (running exe = bypass
+  derivation); binaries fully pristine (`--check` 0/6 + 0/7 + 0/2; qprocess
+  offsets pristine). User-confirmed working.
+- **macbook (aarch64/FEX)**: patched Xwayland live (NOP verified at 0xfc5c4);
+  binaries stock close/exit + qprocess launch-delay patch kept (11/11 + 3/3 +
+  1/1, ~26 s launch). User-confirmed working.
 
-- `<name>.pre-close-exit` — the **clean, unmodified originals** (byte-verified
-  pristine at every close-exit and qprocess site; `--revert` restores them).
-  Never patch on top of anything else — restore from these first.
-- `<name>.pre-close-exit-r2` — asusg16-only snapshot of the intermediate
-  round-1 state, kept as a rollback point; safe to delete once the full set is
-  verified.
+## Diagnostics (if a freeze ever reappears)
 
-## Machine state
-
-- **asusg16 (x86_64)**: **binaries fully pristine** (2026-09-06 — after the
-  Xwayland fix proved out, all client patches were reverted via the
-  `.pre-close-exit` backups; `--check` reports 0/6 + 0/7 + 0/2, which is the
-  correct reverted state, and qprocess offsets are pristine). The stock
-  behaviour is back: X button minimizes libManager, File->Exit quits — all
-  freeze-free under the patched Xwayland. Keep the binaries' `.pre-close-exit`
-  backups and `scripts/attic/patch-libmanager-close-exit.py` around: they are the
-  quick fallback if the Xwayland patch ever has to be withdrawn (nixpkgs bump
-  that breaks the byte check), and the macbook used them too.
-- **macbook (aarch64/FEX)**: patched Xwayland **live** (2026-09-06: rebuilt,
-  rebooted; the running exe is the bypass derivation, NOP verified at
-  0xfc5c4). Client binaries reverted the same way — **but note**: this
-  machine's `.pre-close-exit` backups were taken *after* the qprocess-timeout
-  patch, so the revert restored "qprocess-patched + close-exit-pristine":
-  stock close/exit behaviour with the FEX launch-delay fix intact (11/11 +
-  3/3 + 1/1 still patched, ~26 s launch preserved). Verified post-revert:
-  close-exit 0/6 + 0/7 + 0/2, qprocess OK. On any machine whose backups
-  predate the qprocess patch, re-run
-  `scripts/patch-cadence-qprocess-timeout.py apply` after a revert.
-
-## Manual test checklist (after the next login — patched Xwayland active)
-
-The patched Xwayland is only picked up when kwin spawns a new session, so
-**log out and back in first**. Then, in any session state (the ~50/50 race no
-longer matters for the freeze — the blit it spins in is gone):
-
-1. virtuoso -> Library Manager -> click X: process exits, window closes, and
-   crucially virtuoso stays responsive afterwards (the old tell was virtuoso
-   freezing the moment LM closed).
-2. Drag the virtuoso main window: was the freeze trigger — should be smooth.
-3. Titlebar minimize on LM/virtuoso: the last unfixed unmap path, now also
-   under the bypass.
-4. cdsLibEditor X button and File->Exit on both: clean quit, no hang.
-5. Keep `scripts/capture-kwin-xwayland.sh` in reserve: arm it before a
-   suspicious close; if a wedge ever reappears, `~/.cadence/freeze_dump.log`
-   will show whether the spin still passes through `compRestoreWindow`
-   (it should not) or found a new door (loop-guard fallback, see below).
-
-## Tried and stashed (git history)
-
-- **"do nothing" close** — `andb $0xfb,0x12(%event)` (= `QEvent::ignore()`;
-  `m_accept` is bit 2 at offset 0x12 in Qt 5.15) so the X button is a no-op.
-  *Stable* (no unmap), but the close button does nothing. libManager
-  `_qtWinCloser::eventFilter` off `0x31c150`, cdsLibEditor `closeEvent` off `0x139210`.
-- **"native close"** — `mov $1,%eax; ret` in the filter (return true). Still unmaps -> freezes.
-- **timing poller** — per-second `pgrep kwin_wayland` + `ps -o pcpu=`. "Works by chance", not reliable. Disabled.
-
-## The loop-guard Xwayland patch (superseded, kept for history)
-
-The macbook-era plan was a loop guard in
-`miext/damage/damage.c:damageRegionProcessPending` (AArch64 vaddr `0x11aa00`,
-loop advance `0x11aa54` / exit `0x11aa58`), abandoned because:
-
-1. **Source patch via Nix overlay** -> rebuilds the whole plasma/KDE stack (unacceptable; plasma is a flake-updated moving target).
-2. **Binary patch of the installed Xwayland** -> `/nix/store` is read-only.
-3. **Loop bound needs a counter register** (x21, callee-saved, unsaved in the prologue) -> requires instruction insertion, and the function has no dead space (the only slack is the epilogue's register-zeroing `mov xN,#0` block).
-
-All three blockers evaporate with the compRestoreWindow-blit bypass: the copy
-is a plain derivation (no store writes), `lib.hiPrio` shadowing replaces the
-overlay, and it is a 3-byte NOP — no instruction insertion. Keep the loop
-guard as the fallback if some future freeze shows a spin that does NOT pass
-through `compRestoreWindow`.
-
-## Patch scripts
-
-The client-patch scripts (including the old `handoff.sh` dispatcher) are
-**stashed in `scripts/attic/`** — see `scripts/attic/README.md`. The only
-still-active patch script is `scripts/patch-cadence-qprocess-timeout.py`
-(macbook/FEX launch-delay fix, unrelated to the freeze): run it directly,
-e.g. `python3 scripts/patch-cadence-qprocess-timeout.py --check`.
+- Capture: `sudo-env -c 'setsid -f bash scripts/capture-kwin-xwayland.sh 15'`
+  (single-shot delayed gdb attach to kwin + Xwayland + any Cadence clients →
+  `~/.cadence/freeze_dump.log`; needs `sudo-lock` on asusg16). The macbook is
+  reachable over `ssh tianyixia@192.168.1.91` while its DE is frozen (sshd
+  survives; the frozen DE kills only the local terminal).
+- **Heisenbug**: any *continuous* observation (CPU polling, periodic gdb)
+  perturbs the race and makes the close minimize instead of freeze. Only
+  single-shot delayed capture reproduces it.
+- Reading the dump: if Xwayland's main thread is in
+  `damageRegionProcessPending`, walk down the stack — if `compRestoreWindow`
+  is in it, the Xwayland patch regressed (check `/run/current-system/sw/bin/Xwayland`
+  actually resolves to the bypass derivation); if it is *not*, a new door to
+  the spin exists — consider the loop guard below.
+- **Loop-guard fallback**: a bounded loop in
+  `miext/damage/damage.c:damageRegionProcessPending` (aarch64 vaddr 0x11aa00,
+  loop advance 0x11aa54 / exit 0x11aa58 on the macbook's binary). Needs
+  instruction insertion (the function has no dead space), which is why the
+  blit bypass was preferred. Only viable as a Nix derivation on a copied
+  binary, same as the current fix.
+- Earlier stashed attempts (git history): "do nothing" close
+  (`QEvent::ignore()` — stable but the button does nothing), "native close"
+  (`mov $1,%eax; ret` — still unmaps, froze), timing poller (see RETIRED).
