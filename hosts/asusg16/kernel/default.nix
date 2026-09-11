@@ -5,11 +5,12 @@
   ...
 }: {
   # Latest kernel for newer hardware support (WiFi 7, Intel NPU, etc.).
-  # Pinned to the 7.1 series: the out-of-tree i915-sriov patchset (strongtz,
-  # kernel-v7.1 branch) has no 7.2 support yet — building it against 7.2 fails
-  # on drm API changes (intel_display_types.h incomplete-type errors). Bump
-  # once i915-sriov-dkms gains a kernel-v7.2 branch.
-  boot.kernelPackages = pkgs.linuxPackages_7_1;
+  # 7.1 and older were EOL-removed from nixpkgs, so this tracks the newest
+  # series. The out-of-tree i915-sriov patchset must match: the flake pins
+  # the PR #482 v7.2 sync (upstream master stops at 7.1). Bump both together
+  # when a newer kernel lands — check i915-sriov's README required-kernel
+  # range first.
+  boot.kernelPackages = pkgs.linuxPackages_7_2;
 
   boot.kernelModules = [
     "kvm-intel" # nested VM acceleration

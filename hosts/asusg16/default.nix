@@ -51,6 +51,7 @@
     ../../modules/services/uudeck.nix
 
     ../../modules/packages/plasma-nm-sso-fix.nix
+    ../../modules/packages/inline-snapshot-fix.nix
 
     ./users
 

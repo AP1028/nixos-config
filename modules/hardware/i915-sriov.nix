@@ -7,8 +7,9 @@
   igpuScripts = pkgs.callPackage ../../packages/igpu-sriov-scripts.nix {};
 in {
   # Out-of-tree i915 SR-IOV kernel module for GPU virtualization.
-  # Using the upstream kernel-v7.1 branch, which supports kernel 7.1 natively,
-  # so the sketchy sed-based patching below is no longer needed.
+  # The flake pins the PR #482 v7.2 sync (cristatus/kernel-v7.2) so the
+  # module builds against boot.kernelPackages (linuxPackages_7_2). The old
+  # sed-based API patching below is no longer needed (kept for reference).
   boot.extraModulePackages = [
     pkgs.i915-sriov
     # (pkgs.i915-sriov.overrideAttrs (oldAttrs: {

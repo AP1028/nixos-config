@@ -24,7 +24,10 @@
   virtualisation.libvirtd = {
     enable = true;
     qemu = {
-      package = pkgs.qemu_full;
+      # pkgs.qemu_full enables Ceph RBD (+ SMB), pulling in ceph whose closure
+      # is not in any binary cache; plain pkgs.qemu (the module default) is
+      # cached and enough here.
+      package = pkgs.qemu;
       swtpm.enable = true;
       verbatimConfig = ''
         namespaces = []

@@ -26,6 +26,7 @@
     (import ../../modules/services/iptables-clash-openwrt.nix {interface = "wlan0";})
 
     ../../modules/packages/plasma-nm-sso-fix.nix
+    ../../modules/packages/inline-snapshot-fix.nix
 
     ../../modules/env/common.nix
     ../../modules/env/box64-env.nix

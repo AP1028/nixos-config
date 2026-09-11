@@ -18,8 +18,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # strongtz master only supports kernels up to 7.1, which nixpkgs removed
+    # as EOL. Pin the v7.2 sync from PR #482 (branch kernel-v7.2, rev
+    # f6b7541c) until it merges. Bump the rev for review fixes; once merged,
+    # switch back to `github:strongtz/i915-sriov-dkms`.
     i915-sriov-dkms = {
-      url = "github:strongtz/i915-sriov-dkms";
+      url = "github:cristatus/i915-sriov-dkms/f6b7541cb4b4f425f97ce756cdfb0fef2f9d35da";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
