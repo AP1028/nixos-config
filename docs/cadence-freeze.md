@@ -14,12 +14,14 @@ additionally carries only the FEX launch-delay patch — see
   automatically by `hosts/asusg16/packages/default.nix` and
   `hosts/macbook/packages/default.nix`; it activates when kwin spawns the next
   session (relogin after a rebuild).
-- **After a nixpkgs bump**, the derivation byte-checks its patch site. If the
-  build fails there, the binary changed — re-derive the offsets before
-  bumping: `nm $out/bin/Xwayland | grep compRestoreWindow`, disassemble, find
-  the GC-ops `CopyArea` call right after `ValidateGC` (x86_64:
-  `call *0x18(%rax)`; aarch64: `ldr xN,[x0,#0x18]` + `blr xN`), then update
-  the site table in `packages/patched-xwayland.nix`.
+- **After a nixpkgs bump**, the derivation locates the patch site itself:
+  `packages/patch-xwayland-comp-restore.py` reads `compRestoreWindow`'s
+  address/size from the symbol table and finds the unique GC-ops `CopyArea`
+  call inside it (x86_64: `call *0x18(%rax)`; aarch64:
+  `ldr xN,[xM,#0x18]` + `blr xN`). Rebuilds that only shift the code layout
+  are absorbed automatically; if the build still fails (symbols stripped or
+  pattern no longer unique), re-derive manually with `nm`/`objdump` and
+  adjust the matcher in the script.
 - **Cadence binaries stay stock.** Do **not** apply anything from
   `scripts/attic/` — those are the retired client-side freeze workarounds
   (kept for reference, see the RETIRED section below). The only live Cadence
@@ -79,19 +81,25 @@ Key facts:
 
 ## The fix: patched Xwayland (server-side, no plasma rebuild)
 
-`packages/patched-xwayland.nix` copies the store Xwayland (24.1.13), NOPs the
-GC `CopyArea` blit inside `compRestoreWindow` (installed as `damageCopyArea`
-by the damage extension), and sanity-runs `Xwayland -version`. The build
-byte-checks the site first: a nixpkgs bump that shifts the binary fails the
-build instead of blind-patching.
+`packages/patched-xwayland.nix` copies the store Xwayland, NOPs the GC
+`CopyArea` blit inside `compRestoreWindow` (installed as `damageCopyArea`
+by the damage extension), and sanity-runs `Xwayland -version`. The site is
+found structurally by `packages/patch-xwayland-comp-restore.py`:
 
-| arch | file offset | expected bytes | replacement |
-|---|---|---|---|
-| x86_64-linux | 0x101c91 | `ff 50 18` (`call *0x18(%rax)`) | `90 90 90` |
-| aarch64-linux | 0x0fc5c4 | `40 01 3f d6` (`blr x10`) | `1f 20 03 d5` (`nop`) |
+1. read `compRestoreWindow`'s address/size out of `.symtab`
+2. NOP the unique GC-ops `CopyArea` call inside that range:
+   - x86_64: `ff 50 18` (`call *0x18(%rax)`) -> `90 90 90`
+   - aarch64: `ldr xN,[xM,#0x18]` + `blr xN` -> `1f 20 03 d5` (`nop`)
 
-(text segment maps vaddr to file offset 1:1 on both; `+0x18` is the
-arch-independent `ops->CopyArea` offset in the GC ops struct.)
+(`+0x18` is the arch-independent `ops->CopyArea` offset in the GC ops
+struct; the aarch64 `blr` can be a few instructions after the `ldr`.) No
+file offset is baked in, so nixpkgs rebuilds that merely shift the binary
+keep working; if the symbols vanish or the pattern stops being unique, the
+build fails instead of blind-patching.
+
+For reference, the 24.1.13 sites the finder resolves: x86_64 file/vaddr
+0x101c91 (`ff 50 18`); aarch64 0x0fc5c4 (`40 01 3f d6`, `blr x10`). Text
+segment maps vaddr to file offset 1:1 on both builds.
 
 `compRestoreWindow` keeps all bookkeeping; only the restore copy is skipped,
 which is purely cosmetic in a compositing Wayland session (kwin renders from

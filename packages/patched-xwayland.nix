@@ -10,72 +10,42 @@
 #
 # freezing the whole DE. The ONLY door to the spinning loop from that stack is
 # the GC CopyArea blit inside compRestoreWindow (installed as damageCopyArea by
-# the damage extension). The GC ops struct offset is arch-independent (+0x18);
-# the call encoding and its site differ per arch:
+# the damage extension). +0x18 is the arch-independent ops->CopyArea offset in
+# the GC ops struct; the call encoding differs per arch:
 #
-#   x86_64-linux  file off 0x101c91: ff 50 18        (call *0x18(%rax)) -> 3x nop
-#   aarch64-linux file off 0x fc5c4: 40 01 3f d6     (blr x10)          -> nop (d503201f)
+#   x86_64-linux   ff 50 18        call *0x18(%rax)             -> 90 90 90
+#   aarch64-linux  f940.. d63f..   ldr xN,[xM,#0x18]; blr xN    -> d503201f (nop)
 #
-# (both on xwayland-24.1.13; text segment maps vaddr to file offset 1:1).
 # NOPing it skips only the restore copy - purely cosmetic in a compositing
 # Wayland session (kwin renders windows from its own buffers) - while keeping
 # all of compRestoreWindow's bookkeeping.
 #
+# The site is not baked in: patch-xwayland-comp-restore.py reads
+# compRestoreWindow's address/size from .symtab and finds the unique GC-ops
+# CopyArea call inside it, so nixpkgs bumps that merely shift the binary keep
+# working. If the symbols disappear or the pattern stops being unique, the
+# build fails loudly instead of blind-patching (re-derive with nm/objdump per
+# the runbook in docs/cadence-freeze.md).
+#
 # Install with lib.hiPrio so it shadows xorg.xwayland's bin/Xwayland in
 # /run/current-system/sw/bin: kwin launches Xwayland via PATH (verified on
 # both asusg16 and the macbook: live argv[0] is the sw path).
-#
-# The byte check makes a nixpkgs bump fail the build instead of blind-patching
-# a changed binary; re-derive the offset then (nm -> compRestoreWindow, first
-# `call *0x18(%rax)` / `blr` after the ValidateGC call).
 {
   lib,
   runCommand,
   xwayland,
-  stdenv,
-}: let
-  sites = {
-    x86_64-linux = {
-      offset = "0x101c91";
-      expect = "ff5018";
-      new = "909090";
-    };
-    aarch64-linux = {
-      offset = "0xfc5c4";
-      expect = "40013fd6";
-      new = "1f2003d5";
-    };
+  python3,
+}:
+runCommand "xwayland-comp-restore-bypass" {
+  nativeBuildInputs = [python3];
+  meta = with lib; {
+    description = "Xwayland with the compRestoreWindow blit NOPed (Cadence DE-freeze workaround)";
+    platforms = platforms.linux;
   };
-  site =
-    sites.${stdenv.hostPlatform.system}
-    or (throw "patched-xwayland: no patch site for ${stdenv.hostPlatform.system}");
-  count = builtins.div (builtins.stringLength site.expect) 2;
-  # "ff5018" -> "\xff\x50\x18" for printf
-  hexBytes = h:
-    builtins.concatStringsSep "" (
-      map (p: "\\x" + builtins.head p) (
-        builtins.filter builtins.isList (builtins.split "([0-9a-f]{2})" h)
-      )
-    );
-in
-  runCommand "xwayland-comp-restore-bypass"
-    {
-      meta = with lib; {
-        description = "Xwayland 24.1.13 with the compRestoreWindow blit NOPed (Cadence DE-freeze workaround)";
-        platforms = with platforms; linux;
-      };
-    }
-    ''
-      install -Dm755 ${xwayland}/bin/Xwayland $out/bin/Xwayland
+} ''
+  install -Dm755 ${xwayland}/bin/Xwayland $out/bin/Xwayland
+  python3 ${./patch-xwayland-comp-restore.py} $out/bin/Xwayland
 
-      got=$(dd if=$out/bin/Xwayland bs=1 skip=$(( ${site.offset} )) count=${toString count} status=none | od -An -tx1 | tr -d ' \n')
-      if [ "$got" != "${site.expect}" ]; then
-        echo "Xwayland bytes at ${site.offset} are '$got', expected '${site.expect}'" \
-             "- xwayland changed, refusing to blind-patch" >&2
-        exit 1
-      fi
-      printf '${hexBytes site.new}' | dd of=$out/bin/Xwayland bs=1 seek=$(( ${site.offset} )) conv=notrunc status=none
-
-      # sanity: the patched binary must still run
-      $out/bin/Xwayland -version >/dev/null
-    ''
+  # sanity: the patched binary must still run
+  $out/bin/Xwayland -version >/dev/null
+''
