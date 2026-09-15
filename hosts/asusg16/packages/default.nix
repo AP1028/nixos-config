@@ -51,6 +51,7 @@ in {
     qalculate-qt
     pinta
     audacity
+    easyeffects
     poppler-utils
 
     discord
