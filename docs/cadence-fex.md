@@ -290,6 +290,35 @@ Verify inside the env:
 cat /proc/$(pgrep -x virtuoso | head -1)/environ | tr '\0' '\n' | grep QT_
 ```
 
+## ADE simulation Xvfb (EXPLORER-9512)
+
+Running a simulation from ADE Explorer/Assembler spawns **Xvfb** and looks for
+it at the hardcoded path `/usr/bin/Xvfb`; without it the run aborts with
+`ERROR (EXPLORER-9512): Cannot run simulation because the Xserver Virtual Frame
+Buffer (Xvfb) executable is not found`. Fix (2026-09): place Xvfb there in both
+environments. **Do not** reach for `CDS_XVFB_PATH` — its semantics vary between
+Cadence releases (directory vs. binary path), and the default `/usr/bin` lookup
+suffices once the binary exists at that path.
+
+- **aarch64 (muvm guest)** — `cadence-env-guest-bin` symlinks
+  `${pkgs.xvfb}/bin/Xvfb` (the **aarch64** build) into the guest `/bin` +
+  `/usr/bin` tmpfs, next to the coreutils/hostname links. Xvfb is not emulated:
+  it runs natively in the guest, and the x86_64 virtuoso talks plain X11 to it
+  (the X protocol is arch-independent). Its store deps resolve via the
+  virtiofs-mirrored host `/nix/store`, like every other linked-in tool.
+- **x86_64 (asusg16 FHS env)** — `xvfb` was already in the `buildFHSEnv`
+  `targetPkgs` (rootfs-builder remaps every `bin/*` into a real `/usr/bin`), so
+  it likely worked before; `extraBuildCommands` now pins
+  `ln -sf ${pkgs.xvfb}/bin/Xvfb $out/usr/bin/Xvfb` so the path can never
+  regress.
+
+Verify:
+```
+cadence-env -c 'ls -l /usr/bin/Xvfb'    # symlink present in both envs
+# macbook in-guest smoke test (aarch64 Xvfb starts, socket appears):
+cadence-env -c 'Xvfb :91 -screen 0 1280x1024x24 >& /dev/null & sleep 3; ls -l /tmp/.X11-unix/X91 && pkill -n Xvfb'
+```
+
 ## Key facts / reproduction
 
 Build (no system rebuild needed):
@@ -319,7 +348,8 @@ Runtime env (nix):
   `/bin`/`/usr/bin` guest setup (+ strace/gdb), the `/bin/uname` x86_64 wrapper,
   the guest script (Cadence env + HiDPI `QT_SCALE_FACTOR=1.3`, aarch64; the
   x86 `buildFHSEnv` `profile` carries `QT_SCALE_FACTOR=1.25` plus `unset`s for
-  the host's auto-scale vars — see "HiDPI scaling" above),
+  the host's auto-scale vars — see "HiDPI scaling" above), the Xvfb links for
+  ADE simulation (see "ADE simulation Xvfb" above),
   the `sudo -g no-internet` muvm wrapper, and the `/lib64` tmpfiles.
 - `hosts/macbook/system/default.nix` — FEX 2608 overlay + patch list.
 - FEX patches under `modules/env/`: `fex-fs-segment-store-fix.patch`,

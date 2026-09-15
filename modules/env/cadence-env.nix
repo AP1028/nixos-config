@@ -290,6 +290,13 @@
     ln -s ${pkgs.hostname}/bin/hostname /usr/bin/hostname
     ln -s ${pkgs.hostname}/bin/hostname /bin/domainname
     ln -s ${pkgs.hostname}/bin/hostname /usr/bin/domainname
+
+    # ADE simulation spawns Xvfb and looks for /usr/bin/Xvfb (EXPLORER-9512).
+    # Use the aarch64 build: it runs natively in the guest (no FEX), and the
+    # x86_64 virtuoso talks plain X11 to it. Store deps resolve via the
+    # virtiofs-mirrored host /nix/store, like the tools linked above.
+    ln -s ${pkgs.xvfb}/bin/Xvfb /bin/Xvfb
+    ln -s ${pkgs.xvfb}/bin/Xvfb /usr/bin/Xvfb
   '';
 
   # ── FHS environment ─────────────────────────────────────────────
@@ -425,6 +432,10 @@
       # old-SONAME OpenLDAP compat for Cadence's liblog4cxx
       ln -sf ${pkgs.openldap}/lib/libldap.so.2 $out/usr/lib64/libldap_r-2.4.so.2
       ln -sf ${pkgs.openldap}/lib/liblber.so.2 $out/usr/lib64/liblber-2.4.so.2
+      # Virtuoso ADE simulation looks for Xvfb at /usr/bin (EXPLORER-9512).
+      # xvfb is already in targetPkgs; pin the exact path so the check can
+      # never regress.
+      ln -sf ${pkgs.xvfb}/bin/Xvfb $out/usr/bin/Xvfb
     '' + lib.optionalString isAarch64 ''
       # x86_64 multiarch lib tree for box64 (Cadence tools are x86_64).
       # NOTE: $out/lib is a usrmerge symlink (-> /usr/lib -> /usr/lib64 on
