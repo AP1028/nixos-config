@@ -344,6 +344,19 @@ Other pieces of the chain that must exist in the guest (all present):
 + the `uname -m → x86_64` wrapper for the makefile's `$(shell cds_plat)` /
 `cds_root`, and `/bin/sh` for make's recipes.
 
+Second layer (compile works, link failed): after the make swap the 9 generated
+C files compiled cleanly and only the final `gcc -shared` died with
+`ld: cannot find crti.o`. `gcc -shared` pulls `crti.o`/`crtn.o` (plus
+`crtbegin/endS.o` from the bundled gcc, which it finds itself) from
+`/usr/lib64`, but the rootfs lib loop **skips `*.o`** — right for runtime
+libs, fatal for linking. Fix: `fex-cadence-rootfs` additionally links
+`${x86.glibc}/lib/*.o` (crti/crtn/Scrt1/…) into `rootfs/usr/lib64`, and the
+guest script exports `LIBRARY_PATH=/usr/lib64` so gcc's own startfile search
+finds them (cdsgcc prepends its install dirs, preserving it). The unversioned
+`libc.so`/`libm.so` linker scripts were already linked by the main loop, and
+their `GROUP()` entries use absolute store paths — `libc_nonshared.a` included
+— so they resolve through the mirrored `/nix/store` despite the `*.a` skip.
+
 ## Key facts / reproduction
 
 Build (no system rebuild needed):

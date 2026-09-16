@@ -179,6 +179,15 @@
     # cdsgcc include_next's <math.h> into /usr/include)
     mkdir -p rootfs/usr/include
     cp -a ${x86.glibc.dev}/include/. rootfs/usr/include/
+    # C runtime startfiles for the ahdlcmi link (`ld: cannot find crti.o`).
+    # The lib loop above deliberately skips *.o — right for runtime libs, but
+    # `gcc -shared` needs crti.o/crtn.o out of /usr/lib64; cross-glibc ships
+    # them in its out lib dir next to the .so linker scripts. (The scripts'
+    # GROUP() entries use absolute store paths, so libc_nonshared.a resolves
+    # through the virtiofs-mirrored /nix/store despite the *.a skip.)
+    for f in ${x86.glibc}/lib/*.o; do
+      [ -e "$f" ] && ln -sf "$f" rootfs/usr/lib64/
+    done
     # aarch64 shells for the guest (Cadence launchers are ksh/tcsh scripts)
     ln -sf ${pkgs.ksh}/bin/ksh rootfs/bin/ksh
     ln -sf ${pkgs.tcsh}/bin/tcsh rootfs/bin/tcsh
@@ -221,6 +230,10 @@
     # The x86_64 ld-linux (nixpkgs glibc) only searches its own store lib dir
     # by default; point it at the rootfs system libs.
     export LD_LIBRARY_PATH="/usr/lib64:/lib64''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # gcc search path for startfiles and -L: lets the cdsgcc link find
+    # crti.o/crtn.o and the unversioned libc.so/libm.so linker scripts in the
+    # rootfs /usr/lib64 (cdsgcc prepends its install dirs, preserving this).
+    export LIBRARY_PATH="/usr/lib64''${LIBRARY_PATH:+:$LIBRARY_PATH}"
     # EE477 environment (equivalent of sourcing setup_ee477_ee577a_v2602.csh)
     export CDSBASE="$HOME/.cadence"
     export CDS_INST_DIR="$CDSBASE/IC251"
