@@ -247,6 +247,15 @@
     export OA_UNSUPPORTED_PLAT=linux_rhel80
     export CDS_ENABLE_VMS=1
     export CDS_LOAD_ENV=CWD
+    # Spectre's bundled ahdlcmi gnumake (x86_64, spectre/ahdlcmi/bin/gnumake)
+    # segfaults under FEX on every invocation, which kills Verilog-A
+    # compilation (VACOMP-1008). ahdlcmicompile honors AHDLCMI_MAKEPROGRAM:
+    # it only falls back to the bundled binary when the var is unset, and
+    # merely requires the target to exist as a file. Point it at the native
+    # aarch64 GNU make linked into the guest /bin — make only orchestrates
+    # (runs recipes via /bin/sh); the x86_64 cdsgcc toolchain under FEX does
+    # the actual compiling/linking.
+    export AHDLCMI_MAKEPROGRAM=/bin/make
     for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin" "$SPECTRE_HOME/bin"; do
       case ":$PATH:" in
         *":$p:"*) ;;
@@ -272,7 +281,7 @@
       [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
       [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
     done
-    for tool in ${pkgs.gnused}/bin/* ${pkgs.gawk}/bin/* ${pkgs.gnugrep}/bin/* ${pkgs.procps}/bin/* ${pkgs.strace}/bin/* ${pkgs.gdb}/bin/* ${pkgs.psmisc}/bin/*; do
+    for tool in ${pkgs.gnused}/bin/* ${pkgs.gawk}/bin/* ${pkgs.gnugrep}/bin/* ${pkgs.procps}/bin/* ${pkgs.strace}/bin/* ${pkgs.gdb}/bin/* ${pkgs.psmisc}/bin/* ${pkgs.gnumake}/bin/*; do
       [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
       [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
     done

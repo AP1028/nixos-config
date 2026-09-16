@@ -319,6 +319,31 @@ cadence-env -c 'ls -l /usr/bin/Xvfb'    # symlink present in both envs
 cadence-env -c 'Xvfb :91 -screen 0 1280x1024x24 >& /dev/null & sleep 3; ls -l /tmp/.X11-unix/X91 && pkill -n Xvfb'
 ```
 
+## Verilog-A (ahdlcmi) compilation under FEX
+
+With a Verilog-A cell (e.g. a `bsource`) in the netlist, Spectre compiles it at
+run time: `spectre/ahdlcmi/bin/ahdlcmicompile` generates C + a `GNUmakefile` in
+`<netlist>/…/ahdlcmi/Linux-64/` and runs the **bundled x86_64
+`spectre/ahdlcmi/bin/gnumake`**. Under FEX that gnumake segfaults on every
+invocation (`cleanObj` and the build alike), so compilation aborts with
+`VACOMP-1008` (`ahdlcmi.out` shows `Segmentation fault … $AHDLCMI_MAKEPROGRAM`).
+
+Fix (aarch64 only; asusg16 runs the bundled make natively): `ahdlcmicompile`
+honors the `AHDLCMI_MAKEPROGRAM` env var — it only defaults to the bundled
+binary when the var is unset, and only checks that the target exists as a file.
+`cadence-env-guest` exports `AHDLCMI_MAKEPROGRAM=/bin/make`, where `make` is
+the native aarch64 `pkgs.gnumake` linked into the guest `/bin`+/`/usr/bin`
+tmpfs. Make only orchestrates (recipes through `/bin/sh`); the actual
+compile/link still runs the x86_64 `cdsgcc` toolchain
+(`tools.lnx86/cdsgcc/gcc/bin/{gcc,as,ld}` → `gcc/12.3/install/…`) under FEX.
+The glibc headers in the FEX rootfs `/usr/include` (see Spectre 25.1 commits)
+cover cdsgcc's `include_next <math.h>`.
+
+Other pieces of the chain that must exist in the guest (all present):
+`#!/usr/bin/env bash` + `readlink`/`cut` for the cdsgcc wrappers, `/bin/csh`
++ the `uname -m → x86_64` wrapper for the makefile's `$(shell cds_plat)` /
+`cds_root`, and `/bin/sh` for make's recipes.
+
 ## Key facts / reproduction
 
 Build (no system rebuild needed):
