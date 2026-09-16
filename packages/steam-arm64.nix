@@ -160,17 +160,30 @@ let
     libxcomposite
     libxdamage
     libxfixes
+    libxcursor
     libxcb
     libxinerama
     libsm
     libice
+    libxkbcommon
 
     fontconfig
     freetype
+    expat
 
     glib
     gtk2
+    gtk3 # steamwebhelper/libcef: libgtk-3.so.0 (closure: atk, pango, cairo)
     gdk-pixbuf
+
+    # steamwebhelper/libcef (Chromium): nss is the lib it failed on first
+    # (libnss3.so), plus dbus, cups, alsa, curl probed at startup.
+    nss
+    nspr
+    dbus
+    cups
+    alsa-lib
+    curl
 
     pipewire
     libpulseaudio
