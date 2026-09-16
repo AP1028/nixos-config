@@ -112,7 +112,17 @@
       chmod +x $out/bin/$1
     }
     make_launcher virtuoso "IC251/tools/dfII/bin/virtuoso"
-    make_launcher spectre "spectre181/bin/spectre"
+    make_launcher spectre "spectre251/bin/spectre"
+    # direct-ELF launcher: skips the ksh wrapper entirely — box64 runs the
+    # x86_64 engine with the bundled private libs on its search path
+    cat > $out/bin/spectre64 <<EOF
+    #!/bin/sh
+    T="\$CDSBASE/spectre251/tools.lnx86"
+    BOX64_LD_LIBRARY_PATH="\$T/lib/64bit:\$T/inca/lib/64bit:\$T/spectre/lib/64bit:\$T/tcltk-8.6.8/lib/64bit:\$T/mdl/lib/64bit\${BOX64_LD_LIBRARY_PATH:+:\$BOX64_LD_LIBRARY_PATH}"
+    export BOX64_LD_LIBRARY_PATH
+    exec ${pkgs.box64}/bin/box64 "\$T/spectre/bin/64bit/spectre" "\$@"
+    EOF
+    chmod +x $out/bin/spectre64
   '';
 
   # ── FEX (muvm) aarch64 runtime ─────────────────────────────────
@@ -131,6 +141,7 @@
     x86.libnsl
     x86.libuuid
     x86.libelf
+    x86.numactl # libnuma.so.1 — Spectre 25.1 links it, not bundled
     x86.systemd
     x86.libxkbcommon
     x86.xcbutilwm
@@ -164,6 +175,10 @@
         done
       fi
     done
+    # glibc C headers for Verilog-A ahdlcmi compilation (Spectre's bundled
+    # cdsgcc include_next's <math.h> into /usr/include)
+    mkdir -p rootfs/usr/include
+    cp -a ${x86.glibc.dev}/include/. rootfs/usr/include/
     # aarch64 shells for the guest (Cadence launchers are ksh/tcsh scripts)
     ln -sf ${pkgs.ksh}/bin/ksh rootfs/bin/ksh
     ln -sf ${pkgs.tcsh}/bin/tcsh rootfs/bin/tcsh
@@ -189,7 +204,7 @@
   cadence-env-guest = pkgs.writeShellScript "cadence-env-guest" ''
     export IN_FHS_ENV="cadence-env"
     unset http_proxy https_proxy ftp_proxy rsync_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY RSYNC_PROXY ALL_PROXY no_proxy NO_PROXY
-    export LANG=C LC_ALL=C
+    export LANG=C.UTF-8 LC_ALL=C.UTF-8
     export __GLX_VENDOR_LIBRARY_NAME=mesa
     # HiDPI: the guest X server (host Xwayland) reports 96 DPI on the 2560x1600
     # physical display, so Qt renders at 1x and the UI is tiny. Scale it up.
@@ -211,6 +226,7 @@
     export CDS_INST_DIR="$CDSBASE/IC251"
     export IC_HOME="$CDS_INST_DIR"
     export CDSHOME="$CDS_INST_DIR"
+    export SPECTRE_HOME="$CDSBASE/spectre251"
     export OA_HOME="$CDS_INST_DIR/share/oa"
     # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
     # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
@@ -231,7 +247,7 @@
     export OA_UNSUPPORTED_PLAT=linux_rhel80
     export CDS_ENABLE_VMS=1
     export CDS_LOAD_ENV=CWD
-    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
+    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin" "$SPECTRE_HOME/bin"; do
       case ":$PATH:" in
         *":$p:"*) ;;
         *) PATH="$p:$PATH" ;;
@@ -256,7 +272,7 @@
       [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
       [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
     done
-    for tool in ${pkgs.gnused}/bin/* ${pkgs.gawk}/bin/* ${pkgs.gnugrep}/bin/* ${pkgs.procps}/bin/* ${pkgs.strace}/bin/* ${pkgs.gdb}/bin/*; do
+    for tool in ${pkgs.gnused}/bin/* ${pkgs.gawk}/bin/* ${pkgs.gnugrep}/bin/* ${pkgs.procps}/bin/* ${pkgs.strace}/bin/* ${pkgs.gdb}/bin/* ${pkgs.psmisc}/bin/*; do
       [ -e "$tool" ] && ln -s "$tool" /bin/ 2>/dev/null
       [ -e "$tool" ] && ln -s "$tool" /usr/bin/ 2>/dev/null
     done
@@ -283,6 +299,9 @@
     ln -s ${pkgs.tcsh}/bin/tcsh /bin/tcsh
     ln -s ${pkgs.bash}/bin/bash /bin/bash
     ln -s ${pkgs.bash}/bin/bash /bin/sh
+    # Cadence wrapper scripts (cds_plat) run via #!/bin/csh
+    ln -s ${pkgs.tcsh}/bin/tcsh /bin/csh
+    ln -s ${pkgs.tcsh}/bin/tcsh /usr/bin/csh
     ln -s ${pkgs.ksh}/bin/ksh /usr/bin/ksh
     ln -s ${pkgs.tcsh}/bin/tcsh /usr/bin/tcsh
     ln -s ${pkgs.bash}/bin/bash /usr/bin/bash
