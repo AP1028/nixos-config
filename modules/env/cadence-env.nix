@@ -494,6 +494,14 @@
       export QT_ENABLE_HIGHDPI_SCALING=1
       export QT_SCALE_FACTOR=1.25
       export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
+      # The Plasma session exports QT_PLUGIN_PATH pointing at the system qt-5
+      # plugin dirs, so Cadence's bundled Qt5 loads nixpkgs'
+      # KDEPlasmaPlatformTheme5, which exports every menubar to the panel's
+      # global-menu widget (in-window menubar disappears, and breaks outright
+      # when new windows open). This var makes the theme keep styling but
+      # leave menubars attached to the app windows. Not needed in the muvm
+      # guest path: it starts with a clean env (no QT_PLUGIN_PATH).
+      export KDE_NO_GLOBAL_MENU=1
       # saSecurity requires the licensing-agent mode disabled and the VSM
       # framework vars set before it will attempt the license checkout.
       export CDS_LIC_USE_AGENT=0
