@@ -359,6 +359,9 @@
       libjpeg
       krb5
       e2fsprogs
+      numactl # libnuma.so.1 — Spectre 25.1 links it, not bundled with the tool
+      glibc.dev # glibc C headers (/usr/include/math.h ...) — needed by Spectre's
+                # bundled cdsgcc when compiling Verilog-A ahdlcmi modules
       libICE
       libSM
       libXmu
@@ -436,6 +439,10 @@
       # xvfb is already in targetPkgs; pin the exact path so the check can
       # never regress.
       ln -sf ${pkgs.xvfb}/bin/Xvfb $out/usr/bin/Xvfb
+      # Cadence launcher wrappers (.cdnWrapperIndep) run cds_plat, a csh
+      # script with a #!/bin/csh shebang. tcsh is csh-compatible; provide the
+      # name in the env's bin dir (in the FHS sandbox /bin -> /usr/bin).
+      ln -sf ${pkgs.tcsh}/bin/tcsh $out/usr/bin/csh
     '' + lib.optionalString isAarch64 ''
       # x86_64 multiarch lib tree for box64 (Cadence tools are x86_64).
       # NOTE: $out/lib is a usrmerge symlink (-> /usr/lib -> /usr/lib64 on
@@ -475,7 +482,9 @@
       export XKB_CONFIG_ROOT=/usr/share/X11/xkb
       export IN_FHS_ENV="cadence-env"
       unset http_proxy https_proxy ftp_proxy rsync_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY RSYNC_PROXY ALL_PROXY no_proxy NO_PROXY
-      export LANG=C LC_ALL=C
+      # C.UTF-8 (not plain C): a POSIX-locale JVM maps filenames as ASCII and
+      # blows up on any non-ASCII path (InstallScape file chooser, Java NIO).
+      export LANG=C.UTF-8 LC_ALL=C.UTF-8
       export __GLX_VENDOR_LIBRARY_NAME=mesa
       export LIBGL_DRIVERS_PATH="/run/opengl-driver/lib/dri:/run/opengl-driver-32/lib/dri"
       if [ -d /run/opengl-driver/share/glvnd/egl_vendor.d ]; then
@@ -527,7 +536,7 @@
       export CDS_INST_DIR="$CDSBASE/IC251"
       export IC_HOME="$CDS_INST_DIR"
       export CDSHOME="$CDS_INST_DIR"
-      export SPECTRE_HOME="$CDSBASE/spectre181"
+      export SPECTRE_HOME="$CDSBASE/spectre251"
     export OA_HOME="$CDS_INST_DIR/share/oa"
     # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
     # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
@@ -537,7 +546,11 @@
       export CDS_AUTO_64BIT=ALL
       export CDS_Netlisting_Mode=Analog
       export SPECTRE_DEFAULTS=-E
-    for p in "$SPECTRE_HOME/bin" "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin"; do
+    # IC paths BEFORE $SPECTRE_HOME/bin: the spectre tree ships generic
+    # utilities (cds_root, cdspython, cdslmd, ...) that would otherwise shadow
+    # the IC25.1 versions. spectre/aps themselves only exist in SPECTRE's bin,
+    # so putting it last loses nothing.
+    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin" "$SPECTRE_HOME/bin"; do
         case ":$PATH:" in
           *":$p:"*) ;;
           *) PATH="$p:$PATH" ;;
