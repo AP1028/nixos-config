@@ -360,6 +360,7 @@
       krb5
       e2fsprogs
       numactl # libnuma.so.1 — Spectre 25.1 links it, not bundled with the tool
+      psmisc # pstree/killall — Spectre APS supervisor shells out to pstree
       glibc.dev # glibc C headers (/usr/include/math.h ...) — needed by Spectre's
                 # bundled cdsgcc when compiling Verilog-A ahdlcmi modules
       libICE
