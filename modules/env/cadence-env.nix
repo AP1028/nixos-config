@@ -494,14 +494,16 @@
       export QT_ENABLE_HIGHDPI_SCALING=1
       export QT_SCALE_FACTOR=1.25
       export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
-      # The Plasma session exports QT_PLUGIN_PATH pointing at the system qt-5
-      # plugin dirs, so Cadence's bundled Qt5 loads nixpkgs'
-      # KDEPlasmaPlatformTheme5, which exports every menubar to the panel's
-      # global-menu widget (in-window menubar disappears, and breaks outright
-      # when new windows open). This var makes the theme keep styling but
-      # leave menubars attached to the app windows. Not needed in the muvm
-      # guest path: it starts with a clean env (no QT_PLUGIN_PATH).
-      export KDE_NO_GLOBAL_MENU=1
+      # Cadence's bundled Qt5 exports every window menubar to the Plasma
+      # global-menu widget: upstream Qt5 creates a QDBusMenuBar whenever the
+      # com.canonical.AppMenu.Registrar service is on the session bus
+      # (code inside libcdsQt5XcbQpa; there is no env kill-switch in Qt5),
+      # and the export breaks when new windows open, leaving no menu
+      # anywhere. Point the session bus at a dead address so Qt's DBus
+      # connection fails: no registrar → menubars stay attached to the app
+      # windows. Cadence tools don't use the session bus for anything else
+      # (the muvm/FEX guest runs fine without one).
+      export DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent-cadence-env-no-dbus"
       # saSecurity requires the licensing-agent mode disabled and the VSM
       # framework vars set before it will attempt the license checkout.
       export CDS_LIC_USE_AGENT=0
