@@ -118,7 +118,7 @@
     cat > $out/bin/spectre64 <<EOF
     #!/bin/sh
     T="\$CDSBASE/spectre251/tools.lnx86"
-    BOX64_LD_LIBRARY_PATH="\$T/lib/64bit:\$T/inca/lib/64bit:\$T/spectre/lib/64bit:\$T/tcltk-8.6.8/lib/64bit:\$T/mdl/lib/64bit\${BOX64_LD_LIBRARY_PATH:+:\$BOX64_LD_LIBRARY_PATH}"
+    BOX64_LD_LIBRARY_PATH="\$T/lib/64bit:\$T/inca/lib/64bit:\$T/spectre/lib/64bit:\$T/tcltk-8.6.8/lib/64bit:\$T/mdl/lib/64bit:\$BOX64_LD_LIBRARY_PATH"
     export BOX64_LD_LIBRARY_PATH
     exec ${pkgs.box64}/bin/box64 "\$T/spectre/bin/64bit/spectre" "\$@"
     EOF
