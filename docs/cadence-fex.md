@@ -319,7 +319,7 @@ cadence-env -c 'ls -l /usr/bin/Xvfb'    # symlink present in both envs
 cadence-env -c 'Xvfb :91 -screen 0 1280x1024x24 >& /dev/null & sleep 3; ls -l /tmp/.X11-unix/X91 && pkill -n Xvfb'
 ```
 
-## Verilog-A (ahdlcmi) compilation under FEX
+## Verilog-A (ahdlcmi) compilation under FEX — WORKING (verified 2026-09-16)
 
 With a Verilog-A cell (e.g. a `bsource`) in the netlist, Spectre compiles it at
 run time: `spectre/ahdlcmi/bin/ahdlcmicompile` generates C + a `GNUmakefile` in
