@@ -7,6 +7,7 @@
   writeShellScriptBin,
   symlinkJoin,
   python3,
+  callPackage,
   muvm,
 }:
 
@@ -34,6 +35,25 @@
 # inside a muvm microVM (see `steam` below).
 
 let
+  # Dedicated x86_64 FEX rootfs for this VM's FEX-Emu tool. Kept separate
+  # from cadence-env's fex-cadence-rootfs on purpose (see the header of
+  # steam-arm64-fex-rootfs.nix) — the two VMs must stay independently
+  # updatable, so both copies exist side by side.
+  steam-arm64-fex-rootfs = callPackage ./steam-arm64-fex-rootfs.nix { };
+
+  # Guest-side root setup, run by muvm (-x) before the Steam command. Valve's
+  # fex-compat-tool hardcodes /usr/share/guestos/fex-mesa as the FEX rootfs
+  # (a SteamOS guest-image convention; g_fex_rootfs_with_mesa in that
+  # script), so expose the muvm-mounted rootfs there. muvm mounts the -f
+  # image at /run/fex-emu/rootfs and registers the FEX binfmt handler; the
+  # symlink makes the Valve path resolve to the same tree, and the per-app
+  # Config.json the tool writes (RootFS=/usr/share/guestos/fex-mesa/) ends
+  # up pointing at a real rootfs.
+  steam-arm64-guest-setup = writeShellScript "steam-arm64-guest-setup" ''
+    mkdir -p /usr/share/guestos
+    ln -sfn /run/fex-emu/rootfs /usr/share/guestos/fex-mesa
+  '';
+
   # Valve's favicon, reused as the app icon (the client zip ships none).
   steam-icon = fetchurl {
     url = "https://store.steampowered.com/favicon.ico";
@@ -296,6 +316,10 @@ let
 # kernel (Apple Silicon), so its ELF LOAD segments can't be mapped by the
 # host. Run the whole FHS env inside a 4K-page muvm microVM; the client runs
 # natively there, and the host GPU/display are bridged through by muvm.
+# x86_64 games are handled by the client itself (FEX-Emu compat tool →
+# Steam Linux Runtime 4 → Proton), which needs a FEX rootfs: pass
+# steam-arm64-fex-rootfs to muvm (-f) and publish it at the Valve-hardcoded
+# /usr/share/guestos/fex-mesa path in the guest (-x script).
 steam = symlinkJoin {
   name = "steam-arm64";
   paths = [
@@ -328,6 +352,9 @@ steam = symlinkJoin {
       XDG_RUNTIME_DIR="$iso_runtime" \
         exec ${muvm}/bin/muvm "''${env_flags[@]}" \
           -e "XDG_RUNTIME_DIR=$real_runtime" \
+          -f ${steam-arm64-fex-rootfs} \
+          -m \
+          -x ${steam-arm64-guest-setup} \
           -- ${steam-fhs}/bin/steam "$@"
     '')
     steam-fhs
