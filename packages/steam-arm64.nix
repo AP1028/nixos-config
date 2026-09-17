@@ -265,10 +265,12 @@ let
 
     # Run the native client directly. Its updater exits with code 42
     # (MAGIC_RESTART) after installing an update, so honour that by
-    # re-launching with the freshly-installed client.
+    # re-launching with the freshly-installed client. `|| status=$?` keeps
+    # the non-zero exit away from `set -e`, which would otherwise kill this
+    # script on the spot and turn every self-update into a dead terminal.
     while true; do
-      "$client_dir/steam" "$@" 2> "$HOME/steam_client_stderr.log"
-      status=$?
+      status=0
+      "$client_dir/steam" "$@" 2> "$HOME/steam_client_stderr.log" || status=$?
       [ "$status" -eq 42 ] || exit "$status"
     done
   '';
