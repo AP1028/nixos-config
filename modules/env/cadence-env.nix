@@ -295,6 +295,12 @@
   # sessions that are still alive. Invoked by the virtuoso wrapper (MAX=1:
   # its own parent tcsh still counts) and by the cadence-env wrapper after
   # an attached session exits (MAX=0).
+  #
+  # The orphan sweep must NEVER touch muvm-guest: it is the guest init
+  # (PPid 1, running as the mapped user), so a blanket PPid==1 kill takes
+  # the whole VM — and every attached session — down with it. The keeper
+  # model wants the VM to survive session exits; only Cadence's own
+  # orphaned daemons go.
   cadence-env-cleanup = pkgs.writeShellScript "cadence-env-cleanup" ''
     MAX="''${1:-0}"
     [ "$(/bin/pgrep -cx tcsh 2>/dev/null)" -le "$MAX" ] || exit 0
@@ -305,7 +311,9 @@
       pid=''${d##*/}
       [ "$pid" = "$$" ] && continue
       ppid=$(/bin/awk '/^PPid:/{print $2}' "$d/status" 2>/dev/null)
-      [ "$ppid" = "1" ] && /bin/kill -9 "$pid" 2>/dev/null
+      [ "$ppid" = "1" ] || continue
+      [ "$(/bin/cat "$d/comm" 2>/dev/null)" = "muvm-guest" ] && continue
+      /bin/kill -9 "$pid" 2>/dev/null
     done
     exit 0
   '';
