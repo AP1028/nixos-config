@@ -354,9 +354,19 @@ steam = symlinkJoin {
         fi
       done
 
+      # The game's FEX runs inside the SLR4 pressure-vessel container, whose
+      # /usr is the Steam runtime's tree — the guest-side
+      # /usr/share/guestos/fex-mesa symlink is invisible there. Tell PV to
+      # bind the rootfs into the container at the same path (bind source
+      # symlinks resolve at mount time, so the real rootfs lands exactly at
+      # Valve's hardcoded path inside the container). The second entry covers
+      # anything that reaches for the muvm mountpoint directly.
+      export STEAM_COMPAT_MOUNTS="/usr/share/guestos/fex-mesa:/run/fex-emu/rootfs''${STEAM_COMPAT_MOUNTS:+:$STEAM_COMPAT_MOUNTS}"
+
       XDG_RUNTIME_DIR="$iso_runtime" \
         exec ${muvm}/bin/muvm "''${env_flags[@]}" \
           -e "XDG_RUNTIME_DIR=$real_runtime" \
+          -e "STEAM_COMPAT_MOUNTS=$STEAM_COMPAT_MOUNTS" \
           -f ${steam-arm64-fex-rootfs} \
           -m \
           -x ${steam-arm64-guest-setup} \
