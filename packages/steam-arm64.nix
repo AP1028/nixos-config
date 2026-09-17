@@ -95,12 +95,13 @@ let
     # STEAM_COMPAT_GRAPHICS_PROVIDER points at an existing file (without it,
     # the x86 PV runs under FEX and trips over rootfs-translated host paths
     # like /etc/machine-id). fex-compat-tool, in turn, derives the FEX rootfs
-    # from dirname(STEAM_COMPAT_GRAPHICS_PROVIDER) — which also makes every
-    # layer use /run/fex-emu/rootfs, the one path PV actually binds into the
-    # container (it refuses anything under /usr). The json itself is minimal:
-    # PV falls back to auto-discovering the host GPU when it declares
-    # nothing. Also seed the rootfs /etc for the x86-PV fallback path.
-    echo '{}' > /run/fex-emu/graphics_provider.json
+    # from dirname(STEAM_COMPAT_GRAPHICS_PROVIDER) — so the marker file must
+    # live INSIDE the rootfs, making /run/fex-emu/rootfs the RootFS
+    # everywhere, i.e. the one path PV actually binds into the container (it
+    # refuses anything under /usr). The json itself is minimal: PV falls
+    # back to auto-discovering the host GPU when it declares nothing. Also
+    # seed the rootfs /etc for the x86-PV fallback path.
+    echo '{}' > /run/fex-emu/rootfs/graphics_provider.json
     if [ ! -e /run/fex-emu/rootfs/etc/machine-id ]; then
       mount -t tmpfs tmpfs /run/fex-emu/rootfs/etc
       cp /etc/resolv.conf /run/fex-emu/rootfs/etc/resolv.conf 2>/dev/null || true
@@ -328,10 +329,10 @@ let
   extraBwrapArgs = [
     "--bind-try /tmp/dumps /tmp/dumps"
     # FEX rootfs (mounted by muvm at /run/fex-emu/rootfs, see the -f flag)
-    # reachable from inside the FHS env for the game's FEX chain, plus the
-    # graphics-provider marker file the chain requires to exist.
+    # reachable from inside the FHS env for the game's FEX chain. The
+    # graphics-provider marker file lives inside the rootfs, so it comes
+    # along with this bind.
     "--bind-try /run/fex-emu/rootfs /run/fex-emu/rootfs"
-    "--bind-try /run/fex-emu/graphics_provider.json /run/fex-emu/graphics_provider.json"
   ];
 
   runScript = writeShellScript "steam-arm64-run" ''
@@ -431,8 +432,8 @@ steam = symlinkJoin {
       # it derives the FEX rootfs from dirname(provider), making
       # /run/fex-emu/rootfs the RootFS everywhere, and SLR4 uses its native
       # arm64 pressure-vessel when the provider file exists.
-      export STEAM_COMPAT_GRAPHICS_PROVIDER="/run/fex-emu/graphics_provider.json"
-      export STEAM_COMPAT_MOUNTS="/run/fex-emu/rootfs:/run/fex-emu/graphics_provider.json''${STEAM_COMPAT_MOUNTS:+:$STEAM_COMPAT_MOUNTS}"
+      export STEAM_COMPAT_GRAPHICS_PROVIDER="/run/fex-emu/rootfs/graphics_provider.json"
+      export STEAM_COMPAT_MOUNTS="/run/fex-emu/rootfs''${STEAM_COMPAT_MOUNTS:+:$STEAM_COMPAT_MOUNTS}"
 
       XDG_RUNTIME_DIR="$iso_runtime" \
         exec ${muvm}/bin/muvm "''${env_flags[@]}" \
