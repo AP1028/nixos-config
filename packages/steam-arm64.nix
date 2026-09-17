@@ -204,6 +204,12 @@ let
     gtk3 # steamwebhelper/libcef: libgtk-3.so.0 (closure: atk, pango, cairo)
     gdk-pixbuf
 
+    # Tray icon: the client dlopens libappindicator.so.1 (StatusNotifierItem
+    # on the session bus) but doesn't bundle it. Without it the tray icon
+    # silently fails to appear, so closing the window leaves Steam running
+    # with nothing in the KDE panel to quit it from.
+    libappindicator-gtk3
+
     # steamwebhelper/libcef (Chromium): nss is the lib it failed on first
     # (libnss3.so), plus dbus, cups, alsa, curl probed at startup.
     nss
