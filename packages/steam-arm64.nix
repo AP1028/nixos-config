@@ -325,8 +325,13 @@ steam = symlinkJoin {
         fi
       done
 
+      # Cap the VM: muvm defaults to 80% of host RAM, and together with
+      # cadence-env's VM (also capped) that overcommits a 16 GB machine —
+      # host memory pressure then kills the guest server mid-run while the
+      # VMM survives (the wedged-VM state).
       XDG_RUNTIME_DIR="$iso_runtime" \
         exec ${muvm}/bin/muvm "''${env_flags[@]}" \
+          --mem=4608 \
           -e "XDG_RUNTIME_DIR=$real_runtime" \
           -- ${steam-fhs}/bin/steam "$@"
     '')
