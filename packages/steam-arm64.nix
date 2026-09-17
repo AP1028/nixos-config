@@ -73,12 +73,21 @@ let
 
     # The emulated x86 side reads the ld.so cache through the rootfs, but
     # rootfs /var is a bind of the host /var, where NixOS keeps
-    # /var/cache/ldconfig root-only (drwx------). An EACCES there is fatal
-    # for PV's x86 capsule-capture-libs ("error: code 13"), while a MISSING
-    # cache is fine — the loader falls back to searching lib dirs. Shadow it
-    # with an empty, world-readable tmpfs; same for the root-only /root.
+    # /var/cache/ldconfig root-only (drwx------). PV's x86
+    # capsule-capture-libs treats an unreadable AND a missing cache as
+    # fatal, so shadow the dir with a writable tmpfs and seed it with the
+    # platform tree's own x86 cache — the same thing Valve's guestos rootfs
+    # ships; its entry paths resolve inside the container where SLR4 is
+    # mounted at their absolute paths. Same for the root-only /root.
     mount -t tmpfs tmpfs /run/fex-emu/rootfs/var/cache/ldconfig
     chmod 755 /run/fex-emu/rootfs/var/cache/ldconfig
+    for c in /home/tianyixia/.local/share/Steam/steamapps/common/SteamLinuxRuntime_4/steamrt4_platform_*/files/etc/ld.so.cache; do
+      if [ -r "$c" ]; then
+        cp "$c" /run/fex-emu/rootfs/var/cache/ldconfig/ld.so.cache
+        chmod 644 /run/fex-emu/rootfs/var/cache/ldconfig/ld.so.cache
+        break
+      fi
+    done
     mount -t tmpfs tmpfs /run/fex-emu/rootfs/root
     chmod 755 /run/fex-emu/rootfs/root
   '';
