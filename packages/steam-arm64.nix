@@ -101,7 +101,7 @@ let
     # refuses anything under /usr). The json itself is minimal: PV falls
     # back to auto-discovering the host GPU when it declares nothing. Also
     # seed the rootfs /etc for the x86-PV fallback path.
-    echo '{}' > /run/fex-emu/rootfs/graphics_provider.json
+    echo '{"graphics_provider_v0": {"architectures": {"x86_64-linux-gnu": {}}}}' > /run/fex-emu/rootfs/graphics_provider.json
     if [ ! -e /run/fex-emu/rootfs/etc/machine-id ]; then
       mount -t tmpfs tmpfs /run/fex-emu/rootfs/etc
       cp /etc/resolv.conf /run/fex-emu/rootfs/etc/resolv.conf 2>/dev/null || true
