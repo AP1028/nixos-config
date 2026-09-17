@@ -8,6 +8,7 @@
   symlinkJoin,
   python3,
   callPackage,
+  coreutils,
   muvm,
 }:
 
@@ -41,16 +42,20 @@ let
   # updatable, so both copies exist side by side.
   steam-arm64-fex-rootfs = callPackage ./steam-arm64-fex-rootfs.nix { };
 
-  # Guest-side root setup, run by muvm (-x) before the Steam command. Valve's
+  # Guest-side root setup, run by muvm (-x) before the Steam command. The
+  # guest / is the host's, shared read-only, so /usr itself cannot be written
+  # (cadence-env works around the same thing by mounting tmpfs over /bin).
+  # Shadow /usr with a tmpfs and recreate the bits the guest needs: Valve's
   # fex-compat-tool hardcodes /usr/share/guestos/fex-mesa as the FEX rootfs
   # (a SteamOS guest-image convention; g_fex_rootfs_with_mesa in that
-  # script), so expose the muvm-mounted rootfs there. muvm mounts the -f
-  # image at /run/fex-emu/rootfs and registers the FEX binfmt handler; the
-  # symlink makes the Valve path resolve to the same tree, and the per-app
-  # Config.json the tool writes (RootFS=/usr/share/guestos/fex-mesa/) ends
-  # up pointing at a real rootfs.
+  # script) — expose the muvm-mounted rootfs there so the per-app
+  # Config.json it writes (RootFS=/usr/share/guestos/fex-mesa/) points at a
+  # real rootfs — and /usr/bin/env, because fex-compat-tool itself is a
+  # `#!/usr/bin/env python3` script.
   steam-arm64-guest-setup = writeShellScript "steam-arm64-guest-setup" ''
-    mkdir -p /usr/share/guestos
+    mount -t tmpfs tmpfs /usr
+    mkdir -p /usr/bin /usr/share/guestos
+    ln -sf ${coreutils}/bin/env /usr/bin/env
     ln -sfn /run/fex-emu/rootfs /usr/share/guestos/fex-mesa
   '';
 
