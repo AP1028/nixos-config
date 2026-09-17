@@ -653,6 +653,24 @@
   # damage-extension circular list — see docs/cadence-fex.md.
   poller = "";
 
+  # Standalone VM stop command (also what `cadence-env --kill` runs). The
+  # VMM is matched by its unique -f rootfs argument — never by the muvm
+  # path, which is steam-arm64's binary too.
+  cadence-env-kill = pkgs.writeShellScriptBin "cadence-env-kill" ''
+    REAL_RUNTIME="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    XDG_RUNTIME_DIR="$REAL_RUNTIME/cadence-muvm"
+    pkill -TERM -f "${fex-cadence-rootfs}" 2>/dev/null
+    n=0
+    while [ $n -lt 20 ] && pgrep -f "${fex-cadence-rootfs}" >/dev/null 2>&1; do
+      sleep 0.5
+      n=$((n + 1))
+    done
+    if pgrep -f "${fex-cadence-rootfs}" >/dev/null 2>&1; then
+      pkill -KILL -f "${fex-cadence-rootfs}" 2>/dev/null
+    fi
+    echo "cadence-env VM stopped."
+  '';
+
   # x86_64 hosts: run as the main user in the no-internet group (license
   # daemon / firewall isolation). aarch64 hosts: run inside the muvm microVM
   # under FEX (the 16K-page host kernel cannot run FEX directly).
@@ -693,17 +711,7 @@
             echo "  --kill  stop the VM (graceful, then forceful)"
             exit 0 ;;
           --kill)
-            pkill -TERM -f "$VMM_PAT" 2>/dev/null
-            n=0
-            while [ $n -lt 20 ] && pgrep -f "$VMM_PAT" >/dev/null 2>&1; do
-              sleep 0.5
-              n=$((n + 1))
-            done
-            if pgrep -f "$VMM_PAT" >/dev/null 2>&1; then
-              pkill -KILL -f "$VMM_PAT" 2>/dev/null
-            fi
-            echo "cadence-env VM stopped."
-            exit 0 ;;
+            exec ${cadence-env-kill}/bin/cadence-env-kill ;;
         esac
 
         # muvm holds an exclusive flock on muvm.lock for the whole VM
@@ -742,14 +750,9 @@
           # so passt — which muvm spawns for the VM's networking — inherits
           # the group and the host iptables `-m owner --gid-owner
           # no-internet` REJECT rule makes any guest outbound connection
-          # fail fast instead of hanging on timeouts. Cap the VM at 6 GiB
-          # (muvm defaults to 80% of host RAM; steam's muvm VM claims the
-          # same on this 12 GB machine, and a guest OOM kills the muvm
-          # server while the host VMM — and its lock — survive: the wedged
-          # state the probe below recovers from).
+          # fail fast instead of hanging on timeouts.
           nohup $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
             -f ${fex-cadence-rootfs} \
-            --mem=6144 \
             -m \
             -x ${cadence-env-guest-bin} \
             -e DISPLAY \
@@ -833,7 +836,7 @@
         /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${cadence-env-raw}/bin/cadence-env "$@"
       '';
 in {
-  environment.systemPackages = [cadence-env];
+  environment.systemPackages = [cadence-env cadence-env-kill];
 
   # Cadence's ksh/tcsh launcher scripts probe `[ -r /lib64/. ]` (and some check
   # /usr/lib64) to decide 32-vs-64-bit. NixOS is not usr-merged, so neither

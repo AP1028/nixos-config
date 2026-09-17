@@ -45,7 +45,8 @@ relaying stdio (a pty with `-t`) and returning the command's real exit code.
   attaches with `muvm -i [-t] -- <guest> "$@"`.
 - **Detection**: `flock -n` probe on `muvm.lock` (held continuously by the
   live muvm process; a stale unlocked file just means "boot", muvm's own rule).
-- **`cadence-env --kill`**: SIGTERM → wait → SIGKILL to the muvm process
+- **`cadence-env --kill`** (also installed standalone as **`cadence-env-kill`**):
+  SIGTERM → wait → SIGKILL to the muvm process
   (explicit VM shutdown; the recovery path for a wedged guest).
 - **Env**: attach-time client env overlays the guest server env, and it would
   replace the working guest `DISPLAY=:1`/xauth with unusable host values — so
@@ -63,12 +64,15 @@ relaying stdio (a pty with `-t`) and returning the command's real exit code.
 - **Isolation**: muvm keys its lock + server socket on `$XDG_RUNTIME_DIR`, and
   other tools own their own VMs there (steam-arm64 runs in
   `<runtime>/steam-muvm` — see its launcher). cadence-env runs its VM in
-  `<runtime>/cadence-muvm`, capped at `--mem=6144` (muvm defaults to 80 % of
-  host RAM; two such VMs on a 12 GB machine OOM the guest — which kills the
-  muvm guest server while the host VMM and its lock survive). Never `pkill`
-  by the muvm path: steam's muvm is the *same* store path — match the VMM's
-  unique `-f <fex-cadence-rootfs>` argv instead (that's what `--kill` and the
-  recovery path do).
+  `<runtime>/cadence-muvm`. Never `pkill` by the muvm path: steam's muvm is
+  the *same* store path — match the VMM's unique `-f <fex-cadence-rootfs>`
+  argv instead (that's what `--kill` and the recovery path do).
+- **Memory**: muvm has no balloon driver, so a VM's host RSS is the
+  high-water mark of everything its sessions ever touched — a fresh idle VM
+  is ~5 MB, but a post-virtuoso VM keeps GBs of install-tree page cache
+  until it is killed (the host has no swap either, so nothing reclaims it).
+  VMs therefore run **uncapped**; when the host gets tight, `cadence-env-kill`
+  (or `cadence-env --kill`) stops the VM and frees everything.
 - **Self-healing**: a wedged VM (lock held + socket bound but the guest
   server dead) makes every attach fail with `could not request launch to
   server: failed to fill whole buffer` — the wrapper detects it by probing
