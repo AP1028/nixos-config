@@ -49,8 +49,18 @@ in
 runCommand "steam-arm64-fex-rootfs" {
   nativeBuildInputs = [erofs-utils];
 } ''
-  mkdir -p rootfs/lib64 rootfs/usr/lib64
+  mkdir -p rootfs/lib64 rootfs/usr/lib64 rootfs/usr/bin
   ln -sf ${x86.glibc}/lib/ld-linux-x86-64.so.2 rootfs/lib64/ld-linux-x86-64.so.2
+
+  # x86 shells/env for FEX's script handling: the depot FEX resolves a
+  # script's shebang interpreter through the rootfs and requires it to be an
+  # x86 ELF (an arm64 /bin/sh fails with "Invalid or Unsupported elf
+  # file"). The merged rootfs takes /usr from this erofs first, so these
+  # shadow the guest's arm64 tools at /usr/bin; /bin is shadowed by the
+  # guest-setup script in steam-arm64.nix (muvm binds guest /bin there,
+  # which an erofs cannot override).
+  ln -sf ${x86.bash}/bin/bash rootfs/usr/bin/bash
+  ln -sf ${x86.coreutils}/bin/env rootfs/usr/bin/env
 
   for p in ${lib.concatMapStringsSep " " (p: "${lib.getLib p}") x86LibPkgs}; do
     if [ -d "$p/lib" ]; then

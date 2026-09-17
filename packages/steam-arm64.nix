@@ -9,6 +9,7 @@
   python3,
   callPackage,
   coreutils,
+  pkgsCross,
   muvm,
 }:
 
@@ -57,6 +58,18 @@ let
     mkdir -p /usr/bin /usr/share/guestos
     ln -sf ${coreutils}/bin/env /usr/bin/env
     ln -sfn /run/fex-emu/rootfs /usr/share/guestos/fex-mesa
+
+    # Valve's launch chain hands shell scripts (_v2-entry-point, proton) to
+    # the depot FEX, which resolves a script's shebang interpreter through
+    # the FEX rootfs and requires an x86 ELF there. The merged rootfs takes
+    # /bin from the guest (arm64 sh), which fails with "Invalid or
+    # Unsupported elf file" — shadow it with x86 shells. muvm mounts the
+    # rootfs before running this script, and the erofs cannot shadow /bin
+    # (only /usr and /lib64 are overlaid), so a tmpfs is the only hook.
+    mount -t tmpfs tmpfs /run/fex-emu/rootfs/bin
+    ln -sf ${pkgsCross.gnu64.bash}/bin/bash /run/fex-emu/rootfs/bin/bash
+    ln -sf bash /run/fex-emu/rootfs/bin/sh
+    ln -sf ${pkgsCross.gnu64.coreutils}/bin/env /run/fex-emu/rootfs/bin/env
   '';
 
   # Valve's favicon, reused as the app icon (the client zip ships none).
