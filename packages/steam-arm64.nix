@@ -261,6 +261,15 @@ let
   # Steam expects /sbin/ldconfig to exist; copy it (see nixpkgs steam).
   extraBuildCommands = ''
     cp -f "$out"/usr/{bin,sbin}/ldconfig
+
+    # The game's FEX chain runs inside this bubblewrap container, whose /usr
+    # is built from multiPkgs — the guest-level /usr/share/guestos symlink
+    # (-x setup script) is not visible here. Valve's fex-compat-tool
+    # hardcodes /usr/share/guestos/fex-mesa as the FEX rootfs, so publish it
+    # in this container as well; the target is bind-mounted in through
+    # extraBwrapArgs below.
+    mkdir -p "$out/usr/share/guestos"
+    ln -s /run/fex-emu/rootfs "$out/usr/share/guestos/fex-mesa"
   '';
 
   extraInstallCommands = ''
@@ -269,6 +278,9 @@ let
 
   extraBwrapArgs = [
     "--bind-try /tmp/dumps /tmp/dumps"
+    # FEX rootfs (mounted by muvm at /run/fex-emu/rootfs, see the -f flag)
+    # reachable from inside the FHS env for the game's FEX chain.
+    "--bind-try /run/fex-emu/rootfs /run/fex-emu/rootfs"
   ];
 
   runScript = writeShellScript "steam-arm64-run" ''
