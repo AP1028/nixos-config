@@ -261,10 +261,16 @@ let
     mkdir -p "$steam_root/package"
     printf 'publicbeta\n' > "$steam_root/package/beta"
 
-    # ~/.steam symlinks point Steam at its install/data root.
+    # ~/.steam symlinks point Steam at its install/data root. steam.sh's
+    # bootstrap normally creates sdkarm64 (-> linuxarm64, holding
+    # steam-launch-wrapper + steamclient.so); since we launch the binary
+    # directly, create it here or every game launch dies instantly with
+    # "/bin/sh: .steam/sdkarm64/steam-launch-wrapper: No such file or
+    # directory".
     mkdir -p "$HOME/.steam"
     ln -sfn "$steam_root" "$HOME/.steam/steam"
     ln -sfn "$steam_root" "$HOME/.steam/root"
+    ln -sfn "$steam_root/linuxarm64" "$HOME/.steam/sdkarm64"
 
     # Run the native client directly. Its updater exits with code 42
     # (MAGIC_RESTART) after installing an update, so honour that by
