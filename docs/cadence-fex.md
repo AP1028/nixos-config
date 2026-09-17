@@ -63,16 +63,27 @@ relaying stdio (a pty with `-t`) and returning the command's real exit code.
 - **Isolation**: muvm keys its lock + server socket on `$XDG_RUNTIME_DIR`, and
   other tools own their own VMs there (steam-arm64 runs in
   `<runtime>/steam-muvm` — see its launcher). cadence-env runs its VM in
-  `<runtime>/cadence-muvm`. Never `pkill` by the muvm path: steam's muvm is
-  the *same* store path — match the VMM's unique `-f <fex-cadence-rootfs>`
-  argv instead (that's what `--kill` and the recovery path do).
-- **Self-healing**: the guest server can die while the host VMM and its lock
-  stay alive (guest OOM is the likely trigger — two muvm VMs each default to
-  80 % of RAM). Wedged state = lock held + socket bound + server gone, and
-  every attach fails with `could not request launch to server: failed to fill
-  whole buffer` (this is also what a broken desktop entry launch sees). The
-  wrapper probes the server (`muvm -i -- /bin/true`, 10 s timeout) before
-  attaching and automatically stops + reboots the VM when it is wedged.
+  `<runtime>/cadence-muvm`, capped at `--mem=6144` (muvm defaults to 80 % of
+  host RAM; two such VMs on a 12 GB machine OOM the guest — which kills the
+  muvm guest server while the host VMM and its lock survive). Never `pkill`
+  by the muvm path: steam's muvm is the *same* store path — match the VMM's
+  unique `-f <fex-cadence-rootfs>` argv instead (that's what `--kill` and the
+  recovery path do).
+- **Self-healing**: a wedged VM (lock held + socket bound but the guest
+  server dead) makes every attach fail with `could not request launch to
+  server: failed to fill whole buffer` — the wrapper detects it by probing
+  with a *detached* `muvm -- /bin/true` (connect + request + OK-reply —
+  exactly the path that breaks) and automatically stops + reboots the VM.
+  A lock without a socket yet is treated as "still booting" (a concurrent
+  launch), not wedged.
+- **muvm `-i` stdin gotcha**: muvm's interactive relay epolls stdin, and
+  `/dev/null` (and regular files) don't support epoll — `muvm -i <
+  /dev/null` fails with `EPERM: could not request launch to server` on a
+  perfectly healthy VM. The wrapper therefore attaches with the caller's
+  stdin only when it is a terminal (with `-t`); otherwise it substitutes an
+  at-EOF pipe (`< <(:)`). This is also why the Virtuoso *desktop entry* was
+  broken: Plasma launches apps with stdin `/dev/null`. The detached probe
+  and the post-session cleanup call use the same EOF-pipe form.
 - The VM keeps running until `cadence-env --kill` or reboot (idle guest is
   small — muvm memory is demand-paged). A hard muvm crash auto-releases the
   flock, so the next launch simply boots a fresh VM.

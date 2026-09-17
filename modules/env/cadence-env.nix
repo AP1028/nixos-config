@@ -715,6 +715,16 @@
           pkill -KILL -f "$VMM_PAT" 2>/dev/null
         }
 
+        wait_socket() {
+          # $1 = max half-seconds
+          n=0
+          while [ ! -S "$SOCK" ] && [ $n -lt "$1" ]; do
+            sleep 0.5
+            n=$((n + 1))
+          done
+          [ -S "$SOCK" ]
+        }
+
         boot_vm() {
           # Safe only because the lock is free: no live VM can own the
           # socket (a concurrent boot in this window re-attaches harmlessly).
@@ -724,30 +734,34 @@
           # so passt — which muvm spawns for the VM's networking — inherits
           # the group and the host iptables `-m owner --gid-owner
           # no-internet` REJECT rule makes any guest outbound connection
-          # fail fast instead of hanging on timeouts.
+          # fail fast instead of hanging on timeouts. Cap the VM at 6 GiB
+          # (muvm defaults to 80% of host RAM; steam's muvm VM claims the
+          # same on this 12 GB machine, and a guest OOM kills the muvm
+          # server while the host VMM — and its lock — survive: the wedged
+          # state the probe below recovers from).
           nohup $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
             -f ${fex-cadence-rootfs} \
+            --mem=6144 \
             -m \
             -x ${cadence-env-guest-bin} \
             -e DISPLAY \
             -e XAUTHORITY \
             -- /bin/sleep infinity \
             >"$REAL_RUNTIME/cadence-env-vm.log" 2>&1 &
-          n=0
-          while [ ! -S "$SOCK" ] && [ $n -lt 120 ]; do
-            sleep 0.5
-            n=$((n + 1))
-          done
-          [ -S "$SOCK" ]
+          wait_socket 120
         }
 
         # The guest server can die (e.g. guest OOM) while the host VMM and
         # its lock stay alive — every attach then fails with "could not
         # request launch to server: failed to fill whole buffer". Probe with
-        # a trivial exec before attaching and restart the VM if it's wedged.
+        # a plain detached exec (NO -i: muvm's interactive relay epolls
+        # stdin, and stdin=/dev/null does not support epoll — `muvm -i <
+        # /dev/null` fails with EPERM on a HEALTHY server). The detached
+        # request exercises exactly the wedged-server path (connect + write
+        # + read the OK reply) without touching stdin.
         server_healthy() {
           timeout 10 $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
-            -i -- /bin/true </dev/null >/dev/null 2>"$PROBE_ERR"
+            -- /bin/true >/dev/null 2>"$PROBE_ERR"
         }
 
         if ! vm_running; then
@@ -755,8 +769,14 @@
             echo "cadence-env: VM did not come up within 60s (log: $REAL_RUNTIME/cadence-env-vm.log)" >&2
             exit 1
           }
-        elif ! server_healthy; then
-          recover=1
+        else
+          # Lock held: either still booting (a concurrent launch), or up.
+          # Only a socket that never appears AND a failed probe is "wedged".
+          if ! wait_socket 60; then
+            recover=1
+          elif ! server_healthy; then
+            recover=1
+          fi
         fi
         if [ "''${recover:-}" = 1 ]; then
           echo "cadence-env: running VM is wedged — restarting it" >&2
@@ -773,17 +793,30 @@
         # NO `-e DISPLAY/-e XAUTHORITY`: the guest server env already carries
         # the x11-bridge values (DISPLAY=:1 + guest xauth) and client-sent
         # env would override them with unusable host values.
-        TTY_FLAG=""
-        [ -t 0 ] && TTY_FLAG="-t"
-        $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
-          -i $TTY_FLAG \
-          -- ${cadence-env-guest} "$@"
-        rc=$?
+        # stdin: a terminal is relayed as-is (epoll-able, gets the pty);
+        # anything else — notably /dev/null, which Plasma gives desktop
+        # entries — is replaced with an at-EOF pipe, because muvm's relay
+        # epolls stdin and /dev/null (or a regular file) fails with EPERM
+        # ("could not request launch to server"). Batch commands (-c '...')
+        # never read stdin, so immediate EOF is the right semantic.
+        if [ -t 0 ]; then
+          $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
+            -i -t \
+            -- ${cadence-env-guest} "$@"
+          rc=$?
+        else
+          $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
+            -i \
+            -- ${cadence-env-guest} "$@" \
+            < <(:)
+          rc=$?
+        fi
         # Last session gone? Reap the Cadence session daemons so the next
         # virtuoso starts clean (the virtuoso wrapper skips its sweep when
-        # other sessions were still alive at its exit).
+        # other sessions were still alive at its exit). stdin is the EOF
+        # pipe for the same epoll reason as above.
         $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
-          -i -- /bin/cadence-env-cleanup 0 </dev/null >/dev/null 2>&1
+          -i -- /bin/cadence-env-cleanup 0 < <(:) >/dev/null 2>&1
         exit $rc
       ''
     else
