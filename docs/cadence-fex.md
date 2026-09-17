@@ -8,7 +8,7 @@ aarch64, **16K-page kernel**) by emulating x86_64 with FEX inside a muvm microVM
 
 ```
 cadence-env -c 'virtuoso'
-  └─ muvm -f <fex-cadence-rootfs> -m -x <bin-setup> -e DISPLAY -e XAUTHORITY -- <guest> "$@"
+  └─ muvm -i [-t] -- <guest> "$@"            # attach (boot if none: see below)
        └─ guest script sets env → exec tcsh -c 'virtuoso'
             └─ ~/.cadence/bin/virtuoso sets Cadence LD_LIBRARY_PATH → exec
                IC251/tools.lnx86/dfII/bin/64bit/virtuoso   (x86_64 ELF)
@@ -21,11 +21,48 @@ Key components (in `modules/env/cadence-env.nix`):
   **real file** (not symlink) so saSecurity sees `/usr/lib64/libc.so.6`.
 - `cadence-env-guest-bin` (muvm `-x`, runs as root) — mounts tmpfs over `/bin`
   and `/usr/bin` and symlinks in aarch64 coreutils/gnused/gawk/gnugrep/procps +
-  ksh/tcsh/bash/sh + hostname/domainname. (Needed because the VM's `/bin` only
-  has `sh`, and the guest root is read-only for the mapped user.)
+  ksh/tcsh/bash/sh/csh + hostname/domainname + gnumake + Xvfb +
+  cadence-env-cleanup. (Needed because the VM's `/bin` only has `sh`, and the
+  guest root is read-only for the mapped user.)
 - `cadence-env-guest` — sets the Cadence env, then `exec tcsh "$@"`.
-- `cadence-env` (aarch64 branch) — `sudo -E -u tianyixia -g no-internet muvm -f
-  <rootfs> -m -x <bin-setup> -e DISPLAY -e XAUTHORITY -- <guest> "$@"`.
+- `cadence-env` (aarch64 branch) — boots a resident keeper VM if none is up,
+  then attaches: see "Multi-session cadence-env VM" below.
+- `cadence-env-cleanup` — session-daemon reap, guarded to the last session.
+
+## Multi-session cadence-env VM (attach model)
+
+`cadence-env` used to pkill any running VM on every launch (single-session
+only). It now uses muvm's **built-in single-instance server**: the first
+`muvm` process holds an exclusive `flock` on `$XDG_RUNTIME_DIR/muvm.lock` for
+the VM's whole lifetime, and any later `muvm -i [-t] -- <cmd>` transparently
+forwards its command into the running VM over `$XDG_RUNTIME_DIR/krun/server`,
+relaying stdio (a pty with `-t`) and returning the command's real exit code.
+
+- **Keeper VM**: the first launch boots `muvm -f <rootfs> -m -x <bin-setup>
+  -e DISPLAY -e XAUTHORITY -- /bin/sleep infinity` detached (nohup+sudo).
+  The initial command never exits, so the VM stays up independently of any
+  session — closing a terminal never kills other sessions. Every launch then
+  attaches with `muvm -i [-t] -- <guest> "$@"`.
+- **Detection**: `flock -n` probe on `muvm.lock` (held continuously by the
+  live muvm process; a stale unlocked file just means "boot", muvm's own rule).
+- **`cadence-env --kill`**: SIGTERM → wait → SIGKILL to the muvm process
+  (explicit VM shutdown; the recovery path for a wedged guest).
+- **Env**: attach-time client env overlays the guest server env, and it would
+  replace the working guest `DISPLAY=:1`/xauth with unusable host values — so
+  the attach invocation deliberately passes no `-e DISPLAY/-e XAUTHORITY`
+  (boot does: they configure the x11 bridge). The guest script also appends
+  `/bin:/usr/bin` to PATH, since the client's host PATH would otherwise shadow
+  the guest tool dirs.
+- **cwd**: muvm commands inherit the guest daemon's cwd (the host home), not
+  the caller's cwd — same as the old single-session behavior; `cd` explicitly.
+- **Session daemons**: `dashboard`/MPS/`clsbd` are shared per CDSBASE, so the
+  exit-time reap (moved to `cadence-env-cleanup`, linked into guest `/bin`)
+  only fires when no other tcsh session remains — called by the virtuoso
+  wrapper (MAX=1: its parent tcsh still counts) and by the cadence-env wrapper
+  after an attached session exits (MAX=0).
+- The VM keeps running until `cadence-env --kill` or reboot (idle guest is
+  small — muvm memory is demand-paged). A hard muvm crash auto-releases the
+  flock, so the next launch simply boots a fresh VM.
 
 `hosts/macbook/system/default.nix` pins FEX 2608 (jemalloc 16K fix + `FEXInterpreter`
 symlink) and applies these patches (all in `modules/env/`):
@@ -188,10 +225,10 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
 
 2. **Install the virtuoso wrapper** — fixes `cds_root` "can't determine
    installation root" (the cadence-env guest PATH puts `~/.cadence/bin` first,
-   so this wrapper is what `cadence-env -c 'virtuoso'` runs), and on exit kills
-   the detached daemons virtuoso leaves behind (`dashboard -runAsDaemon`, MPS
-   `cdsNameServer`/`cdsMsgServer`/`cdsServIpc`, `clsbd`, …) so the stale
-   `dashboard` tray icon doesn't block the next launch:
+   so this wrapper is what `cadence-env -c 'virtuoso'` runs); on exit it kills
+   the daemons virtuoso leaves behind (`dashboard -runAsDaemon`, MPS
+   `cdsNameServer`/`cdsMsgServer`/`cdsServIpc`, `clsbd`, …) — but only when it
+   is the last session in the VM, so other sessions keep theirs:
    ```
    install -m755 scripts/virtuoso-wrapper.sh ~/.cadence/bin/virtuoso
    ```

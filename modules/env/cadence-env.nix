@@ -277,8 +277,37 @@
     done
     # user wrapper dir first: ~/.cadence/bin/virtuoso preloads the PDK libs
     export PATH="$HOME/.cadence/bin:$PATH"
+    # muvm's attach path merges the CLIENT's PATH (host dirs) over the guest
+    # base env; keep the guest tool dirs on PATH regardless (/bin holds the
+    # tmpfs tool links: the uname shim, cadence-env-cleanup, ksh/tcsh/...).
+    case ":$PATH:" in
+      *":/bin:"*) ;;
+      *) PATH="$PATH:/bin:/usr/bin" ;;
+    esac
     export PATH
     exec ${pkgs.tcsh}/bin/tcsh "$@"
+  '';
+
+  # Guest-side session cleanup: reap the Cadence session daemons virtuoso
+  # leaves behind (dashboard holds the session lock; see the virtuoso
+  # wrapper) plus any orphaned processes — but only when no more than MAX
+  # tcsh sessions remain, so an exiting session never kills the daemons of
+  # sessions that are still alive. Invoked by the virtuoso wrapper (MAX=1:
+  # its own parent tcsh still counts) and by the cadence-env wrapper after
+  # an attached session exits (MAX=0).
+  cadence-env-cleanup = pkgs.writeShellScript "cadence-env-cleanup" ''
+    MAX="''${1:-0}"
+    [ "$(/bin/pgrep -cx tcsh 2>/dev/null)" -le "$MAX" ] || exit 0
+    for p in dashboard cdsNameServer cdsMsgServer cdsServIpc clsbd progressWidget cdsVncserver oaFSLockD perfUtilExtCtrl libManager libSelect; do
+      /bin/pkill -9 -f "$p" 2>/dev/null
+    done
+    for d in /proc/[0-9]*; do
+      pid=''${d##*/}
+      [ "$pid" = "$$" ] && continue
+      ppid=$(/bin/awk '/^PPid:/{print $2}' "$d/status" 2>/dev/null)
+      [ "$ppid" = "1" ] && /bin/kill -9 "$pid" 2>/dev/null
+    done
+    exit 0
   '';
 
   # Guest-side root setup script (run via muvm `-x` before the user command).
@@ -338,6 +367,10 @@
     # virtiofs-mirrored host /nix/store, like the tools linked above.
     ln -s ${pkgs.xvfb}/bin/Xvfb /bin/Xvfb
     ln -s ${pkgs.xvfb}/bin/Xvfb /usr/bin/Xvfb
+    # Session cleanup helper for the multi-session attach model (called by
+    # the virtuoso wrapper and the cadence-env wrapper; see its header).
+    ln -s ${cadence-env-cleanup} /bin/cadence-env-cleanup
+    ln -s ${cadence-env-cleanup} /usr/bin/cadence-env-cleanup
   '';
 
   # ── FHS environment ─────────────────────────────────────────────
@@ -619,28 +652,95 @@
     if isAarch64
     then
       pkgs.writeShellScriptBin "cadence-env" ''
-        # Nuke a lingering previous session before starting a fresh VM. muvm is
-        # single-instanced here, and a prior run's guest VM can fail to shut down
-        # (the dashboard daemon holds the session lock), leaving muvm + its sudo
-        # parent + the wrapper + poller behind. Kill them all (never this shell).
-        pkill -9 -f "${pkgs.muvm}/bin/muvm" 2>/dev/null
-        for pid in $(pgrep -f "/bin/cadence-env" 2>/dev/null); do
-          [ "$pid" = "$$" ] && continue
-          kill -9 "$pid" 2>/dev/null
-        done
-        sleep 1
-        ${poller}
-        # Run muvm in the no-internet group (like the x86_64 path), so passt —
-        # which muvm spawns for the VM's networking — inherits the group and the
-        # host iptables `-m owner --gid-owner no-internet` REJECT rule makes any
-        # guest outbound connection fail fast instead of hanging on timeouts.
-        /run/wrappers/bin/sudo -E -u ${config.local.username} -g no-internet ${pkgs.muvm}/bin/muvm \
-          -f ${fex-cadence-rootfs} \
-          -m \
-          -x ${cadence-env-guest-bin} \
-          -e DISPLAY \
-          -e XAUTHORITY \
+        # Multi-session model: the VM is a resident "keeper" microVM. The
+        # first launch boots it (its initial command is `/bin/sleep infinity`,
+        # which never exits, so muvm keeps the VM alive independently of any
+        # session); every launch — including the first — then attaches its
+        # command to the running VM through muvm's built-in single-instance
+        # server ($XDG_RUNTIME_DIR/krun/server). Concurrent GUI + CLI
+        # sessions share one VM, and closing a terminal never kills other
+        # sessions. `cadence-env --kill` stops the VM explicitly.
+        RUN_DIR="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+        LOCK="$RUN_DIR/muvm.lock"
+        SOCK="$RUN_DIR/krun/server"
+        MUVM="${pkgs.muvm}/bin/muvm"
+        SUDO=/run/wrappers/bin/sudo
+
+        case "''${1:-}" in
+          --help|-h)
+            echo "usage: cadence-env [--kill|--help] [tcsh args...]"
+            echo "  runs its arguments (or an interactive tcsh) inside the"
+            echo "  shared cadence muvm VM, attaching if one is already up."
+            echo "  --kill  stop the VM (graceful, then forceful)"
+            exit 0 ;;
+          --kill)
+            pkill -TERM -f "$MUVM" 2>/dev/null
+            n=0
+            while [ $n -lt 20 ] && pgrep -f "$MUVM" >/dev/null 2>&1; do
+              sleep 0.5
+              n=$((n + 1))
+            done
+            if pgrep -f "$MUVM" >/dev/null 2>&1; then
+              pkill -KILL -f "$MUVM" 2>/dev/null
+            fi
+            echo "cadence-env VM stopped."
+            exit 0 ;;
+        esac
+
+        # muvm holds an exclusive flock on muvm.lock for the whole VM
+        # lifetime; a stale (unlocked) file just means "boot", the same rule
+        # muvm itself uses.
+        vm_running() {
+          [ -e "$LOCK" ] && ! flock -n "$LOCK" true 2>/dev/null
+        }
+
+        if ! vm_running; then
+          # Safe only because the lock is free: no live VM can own the
+          # socket (a concurrent boot in this window re-attaches harmlessly).
+          rm -f "$SOCK"
+          ${poller}
+          # Boot the keeper VM detached. muvm runs in the no-internet group
+          # so passt — which muvm spawns for the VM's networking — inherits
+          # the group and the host iptables `-m owner --gid-owner
+          # no-internet` REJECT rule makes any guest outbound connection
+          # fail fast instead of hanging on timeouts.
+          nohup $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
+            -f ${fex-cadence-rootfs} \
+            -m \
+            -x ${cadence-env-guest-bin} \
+            -e DISPLAY \
+            -e XAUTHORITY \
+            -- /bin/sleep infinity \
+            >"$RUN_DIR/cadence-env-vm.log" 2>&1 &
+          n=0
+          while [ ! -S "$SOCK" ] && [ $n -lt 120 ]; do
+            sleep 0.5
+            n=$((n + 1))
+          done
+          if [ ! -S "$SOCK" ]; then
+            echo "cadence-env: VM did not come up within 60s (log: $RUN_DIR/cadence-env-vm.log)" >&2
+            exit 1
+          fi
+        fi
+
+        # Attach. -i relays stdio and propagates the command's real exit
+        # code (without it muvm detaches the command and always exits 0);
+        # -t adds a pty, only possible with a terminal on stdin. Deliberately
+        # NO `-e DISPLAY/-e XAUTHORITY`: the guest server env already carries
+        # the x11-bridge values (DISPLAY=:1 + guest xauth) and client-sent
+        # env would override them with unusable host values.
+        TTY_FLAG=""
+        [ -t 0 ] && TTY_FLAG="-t"
+        $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
+          -i $TTY_FLAG \
           -- ${cadence-env-guest} "$@"
+        rc=$?
+        # Last session gone? Reap the Cadence session daemons so the next
+        # virtuoso starts clean (the virtuoso wrapper skips its sweep when
+        # other sessions were still alive at its exit).
+        $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
+          -i -- /bin/cadence-env-cleanup 0 </dev/null >/dev/null 2>&1
+        exit $rc
       ''
     else
       pkgs.writeShellScriptBin "cadence-env" ''
