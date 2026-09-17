@@ -7,3 +7,6 @@ result
 local.nix
 git-excluded/
 __pycache__/
+
+# ZCode session state (plans, etc.) — local only, never commit.
+.zcode/
