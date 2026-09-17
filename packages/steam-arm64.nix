@@ -115,12 +115,15 @@ let
   includeClosures = true;
 
   # Command-line tools Steam shells out to (mirrors nixpkgs' steam, minus the
-  # x86-only glibc_multi.bin).
+  # x86-only glibc_multi.bin). lsof is hard-required: GetIPCConnectionDetails
+  # uses it to authenticate the steamui websocket, and without it startup
+  # fails with "unexpected error during startup: 0x3009".
   targetPkgs = pkgs: with pkgs; [
     bash
     coreutils
     file
     lsb-release
+    lsof
     pciutils
     usbutils
     util-linux # taskset, used by steamwebhelper.sh
