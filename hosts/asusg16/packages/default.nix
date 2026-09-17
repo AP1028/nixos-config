@@ -53,7 +53,7 @@ in {
     pinta
     audacity
     easyeffects
-    whisper-cpp # local speech-to-text for lecture recording transcription
+    (whisper-cpp.override { cudaSupport = true; }) # local speech-to-text, CUDA-accelerated for lecture transcription
     poppler-utils
 
     discord
