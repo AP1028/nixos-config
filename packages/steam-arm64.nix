@@ -70,6 +70,17 @@ let
     ln -sf ${pkgsCross.gnu64.bash}/bin/bash /run/fex-emu/rootfs/bin/bash
     ln -sf bash /run/fex-emu/rootfs/bin/sh
     ln -sf ${pkgsCross.gnu64.coreutils}/bin/env /run/fex-emu/rootfs/bin/env
+
+    # The emulated x86 side reads the ld.so cache through the rootfs, but
+    # rootfs /var is a bind of the host /var, where NixOS keeps
+    # /var/cache/ldconfig root-only (drwx------). An EACCES there is fatal
+    # for PV's x86 capsule-capture-libs ("error: code 13"), while a MISSING
+    # cache is fine — the loader falls back to searching lib dirs. Shadow it
+    # with an empty, world-readable tmpfs; same for the root-only /root.
+    mount -t tmpfs tmpfs /run/fex-emu/rootfs/var/cache/ldconfig
+    chmod 755 /run/fex-emu/rootfs/var/cache/ldconfig
+    mount -t tmpfs tmpfs /run/fex-emu/rootfs/root
+    chmod 755 /run/fex-emu/rootfs/root
   '';
 
   # Valve's favicon, reused as the app icon (the client zip ships none).
