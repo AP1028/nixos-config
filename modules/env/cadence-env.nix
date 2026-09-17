@@ -660,11 +660,22 @@
         # server ($XDG_RUNTIME_DIR/krun/server). Concurrent GUI + CLI
         # sessions share one VM, and closing a terminal never kills other
         # sessions. `cadence-env --kill` stops the VM explicitly.
-        RUN_DIR="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-        LOCK="$RUN_DIR/muvm.lock"
-        SOCK="$RUN_DIR/krun/server"
+        #
+        # muvm keys its lock + server socket on $XDG_RUNTIME_DIR, and other
+        # tools run their own muvm VMs (steam-arm64 uses
+        # <runtime>/steam-muvm) — so run ours in a private runtime dir. The
+        # VMM is also identifiable by its unique -f rootfs argument: NEVER
+        # pkill by the muvm path, that is steam's binary too.
+        REAL_RUNTIME="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+        XDG_RUNTIME_DIR="$REAL_RUNTIME/cadence-muvm"
+        mkdir -p "$XDG_RUNTIME_DIR"
+        chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null
+        LOCK="$XDG_RUNTIME_DIR/muvm.lock"
+        SOCK="$XDG_RUNTIME_DIR/krun/server"
+        PROBE_ERR="$XDG_RUNTIME_DIR/probe.err"
         MUVM="${pkgs.muvm}/bin/muvm"
         SUDO=/run/wrappers/bin/sudo
+        VMM_PAT="${fex-cadence-rootfs}"
 
         case "''${1:-}" in
           --help|-h)
@@ -674,14 +685,14 @@
             echo "  --kill  stop the VM (graceful, then forceful)"
             exit 0 ;;
           --kill)
-            pkill -TERM -f "$MUVM" 2>/dev/null
+            pkill -TERM -f "$VMM_PAT" 2>/dev/null
             n=0
-            while [ $n -lt 20 ] && pgrep -f "$MUVM" >/dev/null 2>&1; do
+            while [ $n -lt 20 ] && pgrep -f "$VMM_PAT" >/dev/null 2>&1; do
               sleep 0.5
               n=$((n + 1))
             done
-            if pgrep -f "$MUVM" >/dev/null 2>&1; then
-              pkill -KILL -f "$MUVM" 2>/dev/null
+            if pgrep -f "$VMM_PAT" >/dev/null 2>&1; then
+              pkill -KILL -f "$VMM_PAT" 2>/dev/null
             fi
             echo "cadence-env VM stopped."
             exit 0 ;;
@@ -694,7 +705,17 @@
           [ -e "$LOCK" ] && ! flock -n "$LOCK" true 2>/dev/null
         }
 
-        if ! vm_running; then
+        stop_vm() {
+          pkill -TERM -f "$VMM_PAT" 2>/dev/null
+          n=0
+          while [ $n -lt 10 ] && pgrep -f "$VMM_PAT" >/dev/null 2>&1; do
+            sleep 0.5
+            n=$((n + 1))
+          done
+          pkill -KILL -f "$VMM_PAT" 2>/dev/null
+        }
+
+        boot_vm() {
           # Safe only because the lock is free: no live VM can own the
           # socket (a concurrent boot in this window re-attaches harmlessly).
           rm -f "$SOCK"
@@ -711,16 +732,39 @@
             -e DISPLAY \
             -e XAUTHORITY \
             -- /bin/sleep infinity \
-            >"$RUN_DIR/cadence-env-vm.log" 2>&1 &
+            >"$REAL_RUNTIME/cadence-env-vm.log" 2>&1 &
           n=0
           while [ ! -S "$SOCK" ] && [ $n -lt 120 ]; do
             sleep 0.5
             n=$((n + 1))
           done
-          if [ ! -S "$SOCK" ]; then
-            echo "cadence-env: VM did not come up within 60s (log: $RUN_DIR/cadence-env-vm.log)" >&2
+          [ -S "$SOCK" ]
+        }
+
+        # The guest server can die (e.g. guest OOM) while the host VMM and
+        # its lock stay alive — every attach then fails with "could not
+        # request launch to server: failed to fill whole buffer". Probe with
+        # a trivial exec before attaching and restart the VM if it's wedged.
+        server_healthy() {
+          timeout 10 $SUDO -n -E -u ${config.local.username} -g no-internet "$MUVM" \
+            -i -- /bin/true </dev/null >/dev/null 2>"$PROBE_ERR"
+        }
+
+        if ! vm_running; then
+          boot_vm || {
+            echo "cadence-env: VM did not come up within 60s (log: $REAL_RUNTIME/cadence-env-vm.log)" >&2
             exit 1
-          fi
+          }
+        elif ! server_healthy; then
+          recover=1
+        fi
+        if [ "''${recover:-}" = 1 ]; then
+          echo "cadence-env: running VM is wedged — restarting it" >&2
+          stop_vm
+          boot_vm || {
+            echo "cadence-env: VM did not come up within 60s (log: $REAL_RUNTIME/cadence-env-vm.log)" >&2
+            exit 1
+          }
         fi
 
         # Attach. -i relays stdio and propagates the command's real exit

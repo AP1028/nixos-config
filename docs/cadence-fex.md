@@ -60,6 +60,19 @@ relaying stdio (a pty with `-t`) and returning the command's real exit code.
   only fires when no other tcsh session remains — called by the virtuoso
   wrapper (MAX=1: its parent tcsh still counts) and by the cadence-env wrapper
   after an attached session exits (MAX=0).
+- **Isolation**: muvm keys its lock + server socket on `$XDG_RUNTIME_DIR`, and
+  other tools own their own VMs there (steam-arm64 runs in
+  `<runtime>/steam-muvm` — see its launcher). cadence-env runs its VM in
+  `<runtime>/cadence-muvm`. Never `pkill` by the muvm path: steam's muvm is
+  the *same* store path — match the VMM's unique `-f <fex-cadence-rootfs>`
+  argv instead (that's what `--kill` and the recovery path do).
+- **Self-healing**: the guest server can die while the host VMM and its lock
+  stay alive (guest OOM is the likely trigger — two muvm VMs each default to
+  80 % of RAM). Wedged state = lock held + socket bound + server gone, and
+  every attach fails with `could not request launch to server: failed to fill
+  whole buffer` (this is also what a broken desktop entry launch sees). The
+  wrapper probes the server (`muvm -i -- /bin/true`, 10 s timeout) before
+  attaching and automatically stops + reboots the VM when it is wedged.
 - The VM keeps running until `cadence-env --kill` or reboot (idle guest is
   small — muvm memory is demand-paged). A hard muvm crash auto-releases the
   flock, so the next launch simply boots a fresh VM.
