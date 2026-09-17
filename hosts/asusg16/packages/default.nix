@@ -43,6 +43,7 @@ in {
     brave
     firefox
     mpv
+    ffmpeg
     kdePackages.okular
     marktext
     motrix-next
@@ -52,6 +53,7 @@ in {
     pinta
     audacity
     easyeffects
+    whisper-cpp # local speech-to-text for lecture recording transcription
     poppler-utils
 
     discord
