@@ -32,6 +32,7 @@
     ../../modules/hardware/bridge.nix
     ../../modules/hardware/common.nix
     ../../modules/hardware/flydigi.nix
+    ../../modules/hardware/tools.nix
 
     ../../modules/desktop
     (import ../../modules/system/i18n.nix { timezone = null; })

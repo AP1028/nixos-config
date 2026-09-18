@@ -7,6 +7,10 @@
   imports = [
     ./hardware-configuration.nix
     ./hardware
+
+    # /tools: dedicated btrfs subvolume (module shared with asusg16)
+    ../../modules/hardware/tools.nix
+
     ./networking
     ./packages
     ./system
