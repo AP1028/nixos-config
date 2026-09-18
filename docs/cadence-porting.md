@@ -113,9 +113,15 @@ instead of `~/.cadence`. Only the root is nix-managed (`cdsBase` in
    from it (`CDS`, `CDSDIR`, `CDS_LIC_FILE`, `SPECTRE_HOME`). Note the FHS
    env's tcsh sources this file, so `SPECTRE_HOME` ends up
    `${CADHOME}/spectre181` exactly as before.
-3. **`<root>/bin/virtuoso`** wrapper — `cd <root>/work_gpdk045` then
-   `exec <root>/IC251/tools/dfII/bin/virtuoso` (the module puts `<root>/bin`
-   first on PATH, so this is what `cadence-env -c 'virtuoso'` runs).
+3. **`<root>/bin` wrappers** — both embed the old root and are what PATH
+   resolves to first (`<root>/bin` leads in the module's profile):
+   - `virtuoso` — `cd <root>/work_gpdk045` then
+     `exec <root>/IC251/tools/dfII/bin/virtuoso`; this is what
+     `cadence-env -c 'virtuoso'` runs.
+   - `iscape` — `ISCAPE_ROOT=<root>/iscape` (drives the LD_PRELOAD of the
+     bundled nativemethods lib and the final `iscape.sh` call). Verified with
+     `iscape -help`, which locates the tree and falls back to the system JVM
+     as the header documents.
 4. **`<root>/work_gpdk045/cds.lib`** — PDK `include`s and `DEFINE ee477`
    repointed at the new root.
 
