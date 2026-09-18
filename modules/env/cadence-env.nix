@@ -156,6 +156,7 @@
     x86.pciutils
     x86.libidn2
     x86.libssh
+    x86.curl # libcurl.so.4 — Quantus's extraction binary links it
     x86.xcbutil
   ];
 
@@ -245,6 +246,12 @@
     export IC_HOME="$CDS_INST_DIR"
     export CDSHOME="$CDS_INST_DIR"
     export SPECTRE_HOME="$CDSBASE/SPECTRE251"
+    # Additional tools installed alongside IC/SPECTRE, same school layout.
+    # (INCISIVE152: tools/bin/irun is a 32-bit ELF and the FEX guest has no
+    # 32-bit loader, so the 64-bit launchers are used instead.)
+    export INC_HOME="$CDSBASE/INCISIVE152"
+    export QRC_HOME="$CDSBASE/QUANTUS251"
+    export PEGASUS_HOME="$CDSBASE/PEGASUSDFM232"
     export OA_HOME="$CDS_INST_DIR/share/oa"
     # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
     # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
@@ -274,7 +281,7 @@
     # (runs recipes via /bin/sh); the x86_64 cdsgcc toolchain under FEX does
     # the actual compiling/linking.
     export AHDLCMI_MAKEPROGRAM=/bin/make
-    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin" "$SPECTRE_HOME/bin"; do
+    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin" "$SPECTRE_HOME/bin" "$INC_HOME/tools.lnx86/inca/bin/64bit" "$QRC_HOME/bin" "$PEGASUS_HOME/tools/bin"; do
       case ":$PATH:" in
         *":$p:"*) ;;
         *) PATH="$p:$PATH" ;;
@@ -626,6 +633,12 @@
       export IC_HOME="$CDS_INST_DIR"
       export CDSHOME="$CDS_INST_DIR"
       export SPECTRE_HOME="$CDSBASE/SPECTRE251"
+    # Additional tools installed alongside IC/SPECTRE, same school layout.
+    # (INCISIVE152: tools/bin/irun is a 32-bit ELF and the FEX guest has no
+    # 32-bit loader, so the 64-bit launchers are used instead.)
+    export INC_HOME="$CDSBASE/INCISIVE152"
+    export QRC_HOME="$CDSBASE/QUANTUS251"
+    export PEGASUS_HOME="$CDSBASE/PEGASUSDFM232"
     export OA_HOME="$CDS_INST_DIR/share/oa"
     # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
     # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
@@ -639,7 +652,7 @@
     # utilities (cds_root, cdspython, cdslmd, ...) that would otherwise shadow
     # the IC25.1 versions. spectre/aps themselves only exist in SPECTRE's bin,
     # so putting it last loses nothing.
-    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin" "$SPECTRE_HOME/bin"; do
+    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin" "$SPECTRE_HOME/bin" "$INC_HOME/tools.lnx86/inca/bin/64bit" "$QRC_HOME/bin" "$PEGASUS_HOME/tools/bin"; do
         case ":$PATH:" in
           *":$p:"*) ;;
           *) PATH="$p:$PATH" ;;
