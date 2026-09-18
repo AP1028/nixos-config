@@ -156,7 +156,7 @@
     x86.pciutils
     x86.libidn2
     x86.libssh
-    x86.curl # libcurl.so.4 — Quantus's extraction binary links it
+    x86.curl.out # libcurl.so.4 for Quantus — default output is "bin" (no lib)
     x86.xcbutil
   ];
 
