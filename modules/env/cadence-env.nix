@@ -31,12 +31,10 @@
   # wrapped in box64 launchers. x86_64 hosts run the tools natively.
   isAarch64 = pkgs.stdenv.hostPlatform.isAarch64;
 
-  # Cadence installation root. asusg16 (x86_64, native) uses the school's
-  # exact layout — /tools/cadence on the dedicated btrfs subvolume — so
-  # paths match the lab servers and shared cds.lib/setup files. macbook
-  # (aarch64) still keeps its tree under ~/.cadence, which the FEX rootfs
-  # and guest scripts are built around.
-  cdsBase = if isAarch64 then "$HOME/.cadence" else "/tools/cadence";
+  # Cadence installation root: the school's exact layout, /tools/cadence, on
+  # the dedicated @tools btrfs subvolume — on both hosts, so paths match the
+  # lab servers and any shared cds.lib / setup files.
+  cdsBase = "/tools/cadence";
 
   x86 = pkgs.pkgsCross.gnu64;
 

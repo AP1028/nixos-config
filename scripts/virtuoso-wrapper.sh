@@ -1,7 +1,7 @@
 #!/bin/sh
-# ~/.cadence/bin/virtuoso — user wrapper that sets up the Cadence runtime env
-# before exec'ing the 64-bit virtuoso binary. Install this at
-# ~/.cadence/bin/virtuoso (the cadence-env guest PATH puts ~/.cadence/bin
+# /tools/cadence/bin/virtuoso — user wrapper that sets up the Cadence runtime
+# env before exec'ing the 64-bit virtuoso binary. Install this at
+# /tools/cadence/bin/virtuoso (the cadence-env PATH puts /tools/cadence/bin
 # first, so this wrapper is what `cadence-env -c 'virtuoso'` actually runs).
 #
 # Two jobs:
@@ -19,10 +19,10 @@
 # under the others. /bin/cadence-env-cleanup (from cadence-env.nix) does the
 # reap with a "no more than MAX tcsh sessions" guard; this wrapper runs
 # before its own parent tcsh exits, so MAX=1 means "just us left".
-IC="$HOME/.cadence/IC251"
+IC="/tools/cadence/IC251"
 export LD_LIBRARY_PATH="$IC/share/oa/lib/lnx86/opt:$IC/tools.lnx86/lib/64bit:$IC/tools.lnx86/lib:$IC/tools.lnx86/sev/lib/64bit:$IC/tools.lnx86/hdf5/lib/64bit:$IC/tools.lnx86/lz4/lib/64bit:$IC/tools.lnx86/python/64bit/lib:$IC/tools.lnx86/TPtools/grpc/lib64:$IC/tools.lnx86/TPtools/boost/lib/64bit:$IC/tools.lnx86/extraction/lib/64bit:$IC/tools.lnx86/leveldb/lib/64bit:$IC/tools.lnx86/Qt/v5/64bit/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PATH="$IC/bin:$IC/tools/bin/64bit:$IC/tools/bin:$IC/tools/dfII/bin:$PATH"
-cd ~/.cadence/work_gpdk045 || exit 1
+cd /tools/cadence/work_gpdk045 || exit 1
 "$IC/tools.lnx86/dfII/bin/64bit/virtuoso" "$@"
 rc=$?
 # virtuoso spawns detached daemons (`dashboard -runAsDaemon`, the MPS

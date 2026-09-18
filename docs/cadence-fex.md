@@ -10,7 +10,7 @@ aarch64, **16K-page kernel**) by emulating x86_64 with FEX inside a muvm microVM
 cadence-env -c 'virtuoso'
   └─ muvm -i [-t] -- <guest> "$@"            # attach (boot if none: see below)
        └─ guest script sets env → exec tcsh -c 'virtuoso'
-            └─ ~/.cadence/bin/virtuoso sets Cadence LD_LIBRARY_PATH → exec
+            └─ /tools/cadence/bin/virtuoso sets Cadence LD_LIBRARY_PATH → exec
                IC251/tools.lnx86/dfII/bin/64bit/virtuoso   (x86_64 ELF)
 ```
 
@@ -165,11 +165,11 @@ never connected) or the OA platform init.
 
 1. **`cds_root` "can't determine installation root"** — `cds_root` resolves
    `virtuoso` via `$PATH` and walks parent dirs for `tools/bin/cds_root`. The
-   user wrapper `~/.cadence/bin/virtuoso` was **first in PATH** (outside the
+   user wrapper `/tools/cadence/bin/virtuoso` was **first in PATH** (outside the
    install tree), so `cds_root` found it and failed. Fix: the wrapper now
    re-orders `PATH` to put the install-tree bins first before exec'ing the
    64-bit binary. Tracked as `scripts/virtuoso-wrapper.sh` (install it at
-   `~/.cadence/bin/virtuoso`).
+   `/tools/cadence/bin/virtuoso`).
 2. **`cds_plat` reports the wrong platform** — it spawns `/bin/uname -m` (a
    native aarch64 binary) which returns `aarch64`, so `cds_plat` says `lna64`
    and `cds_root` prints `running cross platform: 'lnx86' on 'lna64'`. Fix:
@@ -235,14 +235,14 @@ the same way — now `cds_root` re-spawns at t≈6s and `cdsNameServer` at t≈1
 Other Cadence Qt tools (libSelect, layout, etc.) carry the same pattern and can
 be patched the same way if they also load slowly.
 
-Note: this patch is to the **installed Cadence tree** (`~/.cadence/IC251`), which
+Note: this patch is to the **installed Cadence tree** (`/tools/cadence/IC251`), which
 is not managed by Nix. A reinstall/re-extract of the Cadence install would undo
 it — re-run the script after reinstalls (it recreates its own backups).
 
 ### How to (re)apply the fix — from git-tracked content only
 
 Everything needed is in this repo; the only non-repo input is the Cadence
-install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
+install itself at `/tools/cadence/IC251` (installed separately, untouched by Nix).
 
 1. **Build/rebuild the environment** (one-off; installs `cadence-env` + FEX +
    muvm with the guest scripts and the FEX patches in `modules/env/`):
@@ -252,13 +252,13 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
    ```
 
 2. **Install the virtuoso wrapper** — fixes `cds_root` "can't determine
-   installation root" (the cadence-env guest PATH puts `~/.cadence/bin` first,
+   installation root" (the cadence-env guest PATH puts `/tools/cadence/bin` first,
    so this wrapper is what `cadence-env -c 'virtuoso'` runs); on exit it kills
    the daemons virtuoso leaves behind (`dashboard -runAsDaemon`, MPS
    `cdsNameServer`/`cdsMsgServer`/`cdsServIpc`, `clsbd`, …) — but only when it
    is the last session in the VM, so other sessions keep theirs:
    ```
-   install -m755 scripts/virtuoso-wrapper.sh ~/.cadence/bin/virtuoso
+   install -m755 scripts/virtuoso-wrapper.sh /tools/cadence/bin/virtuoso
    ```
 
 3. **Apply the launch-delay binary patches** (macbook/FEX only — unrelated to
@@ -273,7 +273,7 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
    Patches `tools.lnx86/dfII/bin/64bit/virtuoso` (11 sites),
    `tools/dfII/bin/64bit/libManager` (3 sites), and
    `tools.lnx86/Qt/v5/64bit/lib/libcdsQt5Core.so.5.15.9` (1 site) under
-   `~/.cadence/IC251`: each `QProcess::waitForStarted/Finished(30000)` immediate
+   `/tools/cadence/IC251`: each `QProcess::waitForStarted/Finished(30000)` immediate
    `0x7530` → `0x7d0` (2000 ms). `--revert` undoes it.
 
 4. ~~**Change the tools' minimize/exit to destroy/quit**~~ — **RETIRED / UNUSED**.
@@ -303,7 +303,7 @@ install itself at `~/.cadence/IC251` (installed separately, untouched by Nix).
 ### Test-harness gotcha (important — do NOT repeat this)
 
 My earlier "~17s launch" claims were **bogus**: several of my scripts did
-`export CDSBASE="$HOME/.cadence" CDS_INST_DIR="$CDSBASE/IC251" ...` in a **single**
+`export CDSBASE="/tools/cadence" CDS_INST_DIR="$CDSBASE/IC251" ...` in a **single**
 `export` statement. In POSIX shell the `$CDSBASE` in `CDS_INST_DIR` is expanded
 *before* the assignment, so `CDS_INST_DIR=/IC251` (empty `CDSBASE`). That makes
 virtuoso fail to find its install (`CMGR-7001`) and **skip the full init**, which
@@ -347,7 +347,7 @@ Qt 5.15 scale precedence (highest first): `QT_DEVICE_PIXEL_RATIO` >
 We pin the global scale (1.3/1.25) and clear everything above it.
 (`QT_ENABLE_HIGHDPI_SCALING`
 is a legacy Qt 5.0–5.5 knob — harmless, kept for consistency. The Cadence tools
-use their own Qt 5.15.9 under `~/.cadence/IC251/tools.lnx86/Qt/v5/64bit`, but
+use their own Qt 5.15.9 under `/tools/cadence/IC251/tools.lnx86/Qt/v5/64bit`, but
 `QT_SCALE_FACTOR` is honored by the xcb platform plugin regardless.)
 
 Verify inside the env:
@@ -465,7 +465,7 @@ Runtime env (nix):
 The launch-delay fix (binary patches, applied to the install tree by a script):
 - `scripts/patch-cadence-qprocess-timeout.py` — apply/check/revert the
   `0x7530`→`0x7d0` patches (virtuoso 11 sites, libManager 3, libcdsQt5Core 1).
-- `scripts/virtuoso-wrapper.sh` — installed at `~/.cadence/bin/virtuoso`
+- `scripts/virtuoso-wrapper.sh` — installed at `/tools/cadence/bin/virtuoso`
   (LD_LIBRARY_PATH + PATH reorder; see fix #1).
 
 Diagnostic tooling:

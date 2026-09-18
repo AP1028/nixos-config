@@ -14,7 +14,7 @@ The same `QCadenceStyle::cdsRoot` pattern is compiled into every Cadence Qt
 tool, so `libManager` (Library Manager) etc. had the same stall; each such
 binary needs its own sites patched.
 
-The patches are to the *installed* Cadence tree (`~/.cadence/IC251`), which
+The patches are to the *installed* Cadence tree (`/tools/cadence/IC251`), which
 is user data not managed by Nix, so they must be (re-)applied after a
 reinstall/re-extract of the install. Each site is a x86_64 `mov $0x7530,%esi`
 (`be 30 75 00 00`) — the timeout argument to `QProcess::waitForStarted/Finished`.
@@ -146,7 +146,7 @@ def main():
     if args and args[0] in ("--check", "--revert"):
         mode = args[0][2:]
         args = args[1:]
-    root = args[0] if args else os.path.expanduser("~/.cadence/IC251")
+    root = args[0] if args else "/tools/cadence/IC251"
     root = os.path.abspath(root)
     print(f"install root: {root}")
     if mode == "apply":

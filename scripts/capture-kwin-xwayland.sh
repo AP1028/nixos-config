@@ -10,7 +10,7 @@
 #
 # Run as root (ptrace_scope=1 blocks non-root attach to kwin/Xwayland):
 #   sudo-env -c 'setsid -f bash scripts/capture-kwin-xwayland.sh 15'
-# Output: ~/.cadence/freeze_dump.log
+# Output: /tools/cadence/freeze_dump.log
 DELAY="${1:-15}"
 sleep "$DELAY"
 KPID=$(pgrep -f "kwin_wayland --wayland-fd" | head -1)
@@ -33,4 +33,4 @@ XPID=$(pgrep -x Xwayland | head -1)
   dump Xwayland "$XPID" -ex "bt" -ex "thread apply all bt"
   dump virtuoso "$(pgrep -x virtuoso | head -1)" -ex "info threads" -ex "bt"
   dump libManager "$(pgrep -x libManager | head -1)" -ex "info threads" -ex "bt"
-} > "/home/tianyixia/.cadence/freeze_dump.log" 2>&1
+} > "/tools/cadence/freeze_dump.log" 2>&1
