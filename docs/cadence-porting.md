@@ -113,7 +113,7 @@ instead of `~/.cadence`. Only the root is nix-managed (`cdsBase` in
 2. **`~/.cshrc`** (asusg16 only; macbook has no cadence cshrc) —
    `setenv CADHOME /tools/cadence`; everything else derives from it (`CDS`,
    `CDSDIR`, `CDS_LIC_FILE`, `SPECTRE_HOME`). The FHS env's tcsh sources this
-   file, so `SPECTRE_HOME` ends up `${CADHOME}/spectre181` exactly as before.
+   file, so `SPECTRE_HOME` ends up `${CADHOME}/SPECTRE181` exactly as before.
 3. **`<root>/bin` wrappers** — both embed the root and are what PATH resolves
    to first (`<root>/bin` leads in the module's profile):
    - `virtuoso` — `cd <root>/work_gpdk045` then

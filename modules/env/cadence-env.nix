@@ -117,12 +117,12 @@
       chmod +x $out/bin/$1
     }
     make_launcher virtuoso "IC251/tools/dfII/bin/virtuoso"
-    make_launcher spectre "spectre251/bin/spectre"
+    make_launcher spectre "SPECTRE251/bin/spectre"
     # direct-ELF launcher: skips the ksh wrapper entirely — box64 runs the
     # x86_64 engine with the bundled private libs on its search path
     cat > $out/bin/spectre64 <<EOF
     #!/bin/sh
-    T="\$CDSBASE/spectre251/tools.lnx86"
+    T="\$CDSBASE/SPECTRE251/tools.lnx86"
     BOX64_LD_LIBRARY_PATH="\$T/lib/64bit:\$T/inca/lib/64bit:\$T/spectre/lib/64bit:\$T/tcltk-8.6.8/lib/64bit:\$T/mdl/lib/64bit:\$BOX64_LD_LIBRARY_PATH"
     export BOX64_LD_LIBRARY_PATH
     exec ${pkgs.box64}/bin/box64 "\$T/spectre/bin/64bit/spectre" "\$@"
@@ -244,7 +244,7 @@
     export CDS_INST_DIR="$CDSBASE/IC251"
     export IC_HOME="$CDS_INST_DIR"
     export CDSHOME="$CDS_INST_DIR"
-    export SPECTRE_HOME="$CDSBASE/spectre251"
+    export SPECTRE_HOME="$CDSBASE/SPECTRE251"
     export OA_HOME="$CDS_INST_DIR/share/oa"
     # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
     # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
@@ -624,7 +624,7 @@
       export CDS_INST_DIR="$CDSBASE/IC251"
       export IC_HOME="$CDS_INST_DIR"
       export CDSHOME="$CDS_INST_DIR"
-      export SPECTRE_HOME="$CDSBASE/spectre251"
+      export SPECTRE_HOME="$CDSBASE/SPECTRE251"
     export OA_HOME="$CDS_INST_DIR/share/oa"
     # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
     # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
