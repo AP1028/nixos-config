@@ -681,7 +681,9 @@
   cadence-env-kill = pkgs.writeShellScriptBin "cadence-env-kill" ''
     REAL_RUNTIME="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
     XDG_RUNTIME_DIR="$REAL_RUNTIME/cadence-muvm"
-    VMM_PAT="-f /nix/store/[a-z0-9]+-fex-cadence-rootfs"
+    # Starts with a non-dash token so pgrep/pkill cannot parse it as options
+    # (a pattern beginning with "-f " makes pgrep print its usage instead).
+    VMM_PAT="/bin/muvm .*-f /nix/store/[a-z0-9]+-fex-cadence-rootfs"
     pkill -TERM -f "$VMM_PAT" 2>/dev/null
     n=0
     while [ $n -lt 20 ] && pgrep -f "$VMM_PAT" >/dev/null 2>&1; do
@@ -724,7 +726,9 @@
         PROBE_ERR="$XDG_RUNTIME_DIR/probe.err"
         MUVM="${pkgs.muvm}/bin/muvm"
         SUDO=/run/wrappers/bin/sudo
-        VMM_PAT="-f /nix/store/[a-z0-9]+-fex-cadence-rootfs"
+        # Starts with a non-dash token so pgrep/pkill cannot parse it as
+        # options (a pattern beginning with "-f " makes pgrep print usage).
+        VMM_PAT="/bin/muvm .*-f /nix/store/[a-z0-9]+-fex-cadence-rootfs"
         CURRENT_ROOTFS="${fex-cadence-rootfs}"
 
         case "''${1:-}" in
