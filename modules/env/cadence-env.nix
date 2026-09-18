@@ -672,20 +672,24 @@
   # damage-extension circular list — see docs/cadence-fex.md.
   poller = "";
 
-  # Standalone VM stop command (also what `cadence-env --kill` runs). The
-  # VMM is matched by its unique -f rootfs argument — never by the muvm
-  # path, which is steam-arm64's binary too.
+  # Standalone VM stop command (also what `cadence-env --kill` runs). The VMM
+  # is matched by its -f rootfs argument in ANY generation, never by the muvm
+  # path (which is steam-arm64's binary too): a VM booted from an older system
+  # generation carries that generation's rootfs path, so matching only the
+  # current one would silently miss it. Steam's VMM has no -f
+  # fex-cadence-rootfs argument, so this pattern cannot hit it.
   cadence-env-kill = pkgs.writeShellScriptBin "cadence-env-kill" ''
     REAL_RUNTIME="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
     XDG_RUNTIME_DIR="$REAL_RUNTIME/cadence-muvm"
-    pkill -TERM -f "${fex-cadence-rootfs}" 2>/dev/null
+    VMM_PAT="-f /nix/store/[a-z0-9]+-fex-cadence-rootfs"
+    pkill -TERM -f "$VMM_PAT" 2>/dev/null
     n=0
-    while [ $n -lt 20 ] && pgrep -f "${fex-cadence-rootfs}" >/dev/null 2>&1; do
+    while [ $n -lt 20 ] && pgrep -f "$VMM_PAT" >/dev/null 2>&1; do
       sleep 0.5
       n=$((n + 1))
     done
-    if pgrep -f "${fex-cadence-rootfs}" >/dev/null 2>&1; then
-      pkill -KILL -f "${fex-cadence-rootfs}" 2>/dev/null
+    if pgrep -f "$VMM_PAT" >/dev/null 2>&1; then
+      pkill -KILL -f "$VMM_PAT" 2>/dev/null
     fi
     echo "cadence-env VM stopped."
   '';
@@ -720,7 +724,8 @@
         PROBE_ERR="$XDG_RUNTIME_DIR/probe.err"
         MUVM="${pkgs.muvm}/bin/muvm"
         SUDO=/run/wrappers/bin/sudo
-        VMM_PAT="${fex-cadence-rootfs}"
+        VMM_PAT="-f /nix/store/[a-z0-9]+-fex-cadence-rootfs"
+        CURRENT_ROOTFS="${fex-cadence-rootfs}"
 
         case "''${1:-}" in
           --help|-h)
@@ -800,6 +805,19 @@
             exit 1
           }
         else
+          # A VM booted from an older system generation keeps that generation's
+          # rootfs — and therefore its libs — so a rebuild that changes the
+          # rootfs (new x86 libs for newly installed tools) would stay
+          # invisible until the VM was restarted by hand. Restart it here.
+          running_root=$(pgrep -af "$VMM_PAT" | grep -oE "/nix/store/[a-z0-9]+-fex-cadence-rootfs" | head -1)
+          if [ -n "$running_root" ] && [ "$running_root" != "$CURRENT_ROOTFS" ]; then
+            echo "cadence-env: running VM is from an older generation — restarting it" >&2
+            stop_vm
+            boot_vm || {
+              echo "cadence-env: VM did not come up within 60s (log: $REAL_RUNTIME/cadence-env-vm.log)" >&2
+              exit 1
+            }
+          fi
           # Lock held: either still booting (a concurrent launch), or up.
           # Only a socket that never appears AND a failed probe is "wedged".
           if ! wait_socket 60; then
