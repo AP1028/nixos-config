@@ -476,6 +476,7 @@
       openjdk11
       libidn2
       libssh
+      curl # libcurl.so.4 — Quantus (quantus extraction bin) links it
       apr
       aprutil
       cyrus_sasl
