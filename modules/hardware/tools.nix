@@ -19,6 +19,11 @@
   baseOptions = lib.filter (o: !(lib.hasPrefix "subvol=" o)) config.fileSystems."/".options;
 
   mountUnit = "${builtins.replaceStrings ["/"] [""] mountPoint}.mount";
+
+  # Owner of the subvolume: the local.nix user and its primary group (both
+  # hosts define that user through modules/users/main-user.nix).
+  user = config.local.username;
+  group = config.users.users.${user}.group;
 in {
   fileSystems.${mountPoint} = {
     device = rootDevice;
@@ -58,13 +63,25 @@ in {
       else
         echo "btrfs subvolume ${subvol} already exists"
       fi
+
+      # Hand the subvolume root to the main user. This is done here, not just
+      # via systemd.tmpfiles, because tmpfiles-setup runs once at boot and can
+      # precede the FIRST mount of this subvolume (nixos-rebuild switch mounts
+      # it later, without restarting tmpfiles): the rule would then be applied
+      # to the hidden directory under the root subvolume and the visible
+      # subvolume root would stay root-owned. chown through the top-level
+      # mount reaches the same inode. Mode is set explicitly too, since the
+      # umask at creation time is not guaranteed (a tight umask yields 0700).
+      ${pkgs.coreutils}/bin/chown ${user}:${group} "$top/${subvol}"
+      ${pkgs.coreutils}/bin/chmod 0755 "$top/${subvol}"
     '';
   };
 
-  # btrfs creates the subvolume root as root-owned; hand it to the main user
-  # (local.nix). tmpfiles runs on every boot after local-fs, so this also
-  # fixes ownership if the subvolume is ever recreated.
+  # Fallback for the case where the mount fails (nofail): /tools then exists
+  # as a plain directory on the root subvolume, and this keeps it usable and
+  # correctly owned. The authoritative ownership fix is the chown in the
+  # create unit above, which does not depend on mount/tmpfiles ordering.
   systemd.tmpfiles.rules = [
-    "d ${mountPoint} 0755 ${config.local.username} ${config.users.users.${config.local.username}.group} -"
+    "d ${mountPoint} 0755 ${user} ${group} -"
   ];
 }
