@@ -30,14 +30,14 @@ additionally carries only the FEX launch-delay patch — see
   re-apply it after an IC reinstall per `docs/cadence-fex.md`.
 - **If a freeze ever reappears**: arm
   `scripts/capture-kwin-xwayland.sh` (see Diagnostics) and check
-  `/tools/cadence/freeze_dump.log`. If the spin still passes through
+  `/home/tianyixia/cadence-debug/freeze_dump.log`. If the spin still passes through
   `compRestoreWindow`, something re-broke the Xwayland patch; if it found a
   new door, see the loop-guard fallback below.
 
 ## Root cause (confirmed by backtrace, 2026-09-06)
 
 Captured live with `scripts/capture-kwin-xwayland.sh` while the DE was wedged
-(`/tools/cadence/freeze_dump.log` on asusg16; `docs/freeze-dump.log` is the
+(`/home/tianyixia/cadence-debug/freeze_dump.log` on asusg16; `docs/freeze-dump.log` is the
 macbook's earlier capture). Xwayland's single dispatch thread spins inside the
 teardown of the just-disconnected libManager client:
 
@@ -222,7 +222,7 @@ Notes from the round-2/3 disassembly (still true, historical):
 
 - Capture: `sudo-env -c 'setsid -f bash scripts/capture-kwin-xwayland.sh 15'`
   (single-shot delayed gdb attach to kwin + Xwayland + any Cadence clients →
-  `/tools/cadence/freeze_dump.log`; needs `sudo-lock` on asusg16). The macbook is
+  `/home/tianyixia/cadence-debug/freeze_dump.log`; needs `sudo-lock` on asusg16). The macbook is
   reachable over `ssh tianyixia@192.168.1.91` while its DE is frozen (sshd
   survives; the frozen DE kills only the local terminal).
 - **Heisenbug**: any *continuous* observation (CPU polling, periodic gdb)

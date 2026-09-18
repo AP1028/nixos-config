@@ -142,3 +142,12 @@ existing ADE/maestro states and generated netlists embed absolute
 `~/.cadence/...` paths (PDK model files), so old simulations need re-pointing
 — or a temporary `~/.cadence` symlink to `/tools/cadence` — before they can be
 re-run.
+
+**Clutter**: the FEX-debug artifacts that had accumulated in the tree
+(`diag*`, `execve*`, `strace*`, `stack*`, `maps*`, `qtimer*`, `cdsroot*`, … —
+139 files on macbook; `patch_log.txt` + the freeze dumps on asusg16) now live
+in `~/cadence-debug/`, and `scripts/capture-kwin-xwayland.sh` writes its dump
+there. What remains in the tree besides the tools: `backup_*` (design
+backups), `PORTING.md` (notes), `launch_virtuoso.sh` / `setup_ee477*.csh`
+(asusg16's csh env), the installer dir `iscape`, and Cadence's own runtime
+markers (`.cds_*`, `.mmsim_*`, `dfII/`).
