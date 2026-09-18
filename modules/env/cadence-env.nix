@@ -31,6 +31,13 @@
   # wrapped in box64 launchers. x86_64 hosts run the tools natively.
   isAarch64 = pkgs.stdenv.hostPlatform.isAarch64;
 
+  # Cadence installation root. asusg16 (x86_64, native) uses the school's
+  # exact layout — /tools/cadence on the dedicated btrfs subvolume — so
+  # paths match the lab servers and shared cds.lib/setup files. macbook
+  # (aarch64) still keeps its tree under ~/.cadence, which the FEX rootfs
+  # and guest scripts are built around.
+  cdsBase = if isAarch64 then "$HOME/.cadence" else "/tools/cadence";
+
   x86 = pkgs.pkgsCross.gnu64;
 
   # x86_64 counterparts of the libraries the Cadence tools need (subset;
@@ -235,7 +242,7 @@
     # rootfs /usr/lib64 (cdsgcc prepends its install dirs, preserving this).
     export LIBRARY_PATH="/usr/lib64''${LIBRARY_PATH:+:$LIBRARY_PATH}"
     # EE477 environment (equivalent of sourcing setup_ee477_ee577a_v2602.csh)
-    export CDSBASE="$HOME/.cadence"
+    export CDSBASE="${cdsBase}"
     export CDS_INST_DIR="$CDSBASE/IC251"
     export IC_HOME="$CDS_INST_DIR"
     export CDSHOME="$CDS_INST_DIR"
@@ -275,8 +282,8 @@
         *) PATH="$p:$PATH" ;;
       esac
     done
-    # user wrapper dir first: ~/.cadence/bin/virtuoso preloads the PDK libs
-    export PATH="$HOME/.cadence/bin:$PATH"
+    # user wrapper dir first: ${cdsBase}/bin/virtuoso preloads the PDK libs
+    export PATH="${cdsBase}/bin:$PATH"
     # muvm's attach path merges the CLIENT's PATH (host dirs) over the guest
     # base env; keep the guest tool dirs on PATH regardless (/bin holds the
     # tmpfs tool links: the uname shim, cadence-env-cleanup, ksh/tcsh/...).
@@ -615,7 +622,7 @@
         export BOX64_WRAPPED_LIBS="libc.so.6:libm.so.6:libdl.so.2:libpthread.so.0:librt.so.1:libutil.so.1:libgcc_s.so.1:libstdc++.so.6:libcrypto.so.3:libopenblas.so:liblapack.so.3"
       ''}
       # EE477 environment (equivalent of sourcing setup_ee477_ee577a_v2602.csh)
-      export CDSBASE="$HOME/.cadence"
+      export CDSBASE="${cdsBase}"
       export CDS_INST_DIR="$CDSBASE/IC251"
       export IC_HOME="$CDS_INST_DIR"
       export CDSHOME="$CDS_INST_DIR"
@@ -639,8 +646,8 @@
           *) PATH="$p:$PATH" ;;
         esac
       done
-      # user wrapper dir first: ~/.cadence/bin/virtuoso preloads the PDK libs
-      export PATH="$HOME/.cadence/bin:$PATH"
+      # user wrapper dir first: ${cdsBase}/bin/virtuoso preloads the PDK libs
+      export PATH="${cdsBase}/bin:$PATH"
       export PATH
     '';
     runScript = "tcsh";
