@@ -34,6 +34,7 @@ in {
     (pkgs.callPackage ../../../packages/deepseek-harness { })
     (pkgs.callPackage ../../../packages/amulet-map-editor { })
     (pkgs.callPackage ../../../packages/zcode { })
+    (pkgs.callPackage ../../../packages/virtuoso-cli { })
     brightnessctl
     dialog
     iproute2

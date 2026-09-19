@@ -5,26 +5,26 @@
   ...
 }: let
   # ── Helper derivations ──────────────────────────────────────────
-
   # Cadence's liblog4cxx (IC25.1) needs libapr-1.so.0. nixpkgs' apr has an
   # IFUNC relocation for `modf` (from libm) that crashes inside glibc 2.42's
   # eager-relocation path because libapr doesn't list libm in NEEDED.
   # Adding libm.so.6 to NEEDED fixes the crash (no LD_PRELOAD required —
   # Cadence's saSecurity rejects preloads).
-  cds-apr = pkg: pkgs.stdenv.mkDerivation {
-    pname = "cds-apr-libm";
-    version = pkg.version;
-    src = pkg;
-    nativeBuildInputs = [pkgs.patchelf];
-    unpackPhase = "true";
-    buildPhase = ''
-      mkdir -p $out/lib
-      cp -a $src/lib/libapr-1.so.0* $out/lib/
-      chmod +w $out/lib/libapr-1.so.0.*
-      patchelf --add-needed libm.so.6 $out/lib/libapr-1.so.0.*
-    '';
-    installPhase = "true";
-  };
+  cds-apr = pkg:
+    pkgs.stdenv.mkDerivation {
+      pname = "cds-apr-libm";
+      version = pkg.version;
+      src = pkg;
+      nativeBuildInputs = [pkgs.patchelf];
+      unpackPhase = "true";
+      buildPhase = ''
+        mkdir -p $out/lib
+        cp -a $src/lib/libapr-1.so.0* $out/lib/
+        chmod +w $out/lib/libapr-1.so.0.*
+        patchelf --add-needed libm.so.6 $out/lib/libapr-1.so.0.*
+      '';
+      installPhase = "true";
+    };
 
   # aarch64 hosts (macbook): Cadence tools are x86_64 binaries, so the FHS env
   # carries box64 + an x86_64 library tree and cadence entry points are
@@ -164,54 +164,55 @@
   # system libs under /usr/lib64; the rootfs provides those as symlinks into
   # the shared nix store (visible through the muvm guest), plus the aarch64
   # shells the Cadence ksh/tcsh launcher scripts are written in.
-  fex-cadence-rootfs = pkgs.runCommand "fex-cadence-rootfs" {
-    nativeBuildInputs = [pkgs.erofs-utils];
-  } ''
-    mkdir -p rootfs/lib64 rootfs/usr/lib64 rootfs/bin
-    ln -sf ${x86.glibc}/lib/ld-linux-x86-64.so.2 rootfs/lib64/ld-linux-x86-64.so.2
-    for p in ${lib.concatMapStringsSep " " (p: "${lib.getLib p}") (x86LibPkgs ++ fexExtraX86LibPkgs)}; do
-      if [ -d "$p/lib" ]; then
-        for f in "$p"/lib/*; do
-          [ -e "$f" ] || continue
-          case "$f" in
-            *.a|*.la|*.o|*gconv*) continue ;;
-          esac
-          ln -sf "$f" rootfs/usr/lib64/
-        done
-      fi
-    done
-    # glibc C headers for Verilog-A ahdlcmi compilation (Spectre's bundled
-    # cdsgcc include_next's <math.h> into /usr/include)
-    mkdir -p rootfs/usr/include
-    cp -a ${x86.glibc.dev}/include/. rootfs/usr/include/
-    # C runtime startfiles for the ahdlcmi link (`ld: cannot find crti.o`).
-    # The lib loop above deliberately skips *.o — right for runtime libs, but
-    # `gcc -shared` needs crti.o/crtn.o out of /usr/lib64; cross-glibc ships
-    # them in its out lib dir next to the .so linker scripts. (The scripts'
-    # GROUP() entries use absolute store paths, so libc_nonshared.a resolves
-    # through the virtiofs-mirrored /nix/store despite the *.a skip.)
-    for f in ${x86.glibc}/lib/*.o; do
-      [ -e "$f" ] && ln -sf "$f" rootfs/usr/lib64/
-    done
-    # aarch64 shells for the guest (Cadence launchers are ksh/tcsh scripts)
-    ln -sf ${pkgs.ksh}/bin/ksh rootfs/bin/ksh
-    ln -sf ${pkgs.tcsh}/bin/tcsh rootfs/bin/tcsh
-    ln -sf ${pkgs.bash}/bin/bash rootfs/bin/bash
-    ln -sf bash rootfs/bin/sh
-    # Cadence SLES12-era SONAME compat symlinks (mirrors the box64 FHS env)
-    ln -sf libldap.so.2 rootfs/usr/lib64/libldap_r-2.4.so.2
-    ln -sf liblber.so.2 rootfs/usr/lib64/liblber-2.4.so.2
-    ln -sf libapr-1.so.0.7.6 rootfs/usr/lib64/libapr-1.so.0.5.1
-    # saSecurity parses /proc/self/maps and requires the libc mapping to live
-    # under /usr/lib64/libc-* (nix-store paths are treated as tampering). A
-    # symlink resolves to the store path in maps, so copy the real glibc
-    # libc.so.6 over it; LD_LIBRARY_PATH starts with /usr/lib64 so the loader
-    # opens it there and the kernel records /usr/lib64/libc.so.6.
-    rm -f rootfs/usr/lib64/libc.so.6
-    cp ${x86.glibc}/lib/libc.so.6 rootfs/usr/lib64/libc.so.6
-    chmod 755 rootfs/usr/lib64/libc.so.6
-    mkfs.erofs $out rootfs/
-  '';
+  fex-cadence-rootfs =
+    pkgs.runCommand "fex-cadence-rootfs" {
+      nativeBuildInputs = [pkgs.erofs-utils];
+    } ''
+      mkdir -p rootfs/lib64 rootfs/usr/lib64 rootfs/bin
+      ln -sf ${x86.glibc}/lib/ld-linux-x86-64.so.2 rootfs/lib64/ld-linux-x86-64.so.2
+      for p in ${lib.concatMapStringsSep " " (p: "${lib.getLib p}") (x86LibPkgs ++ fexExtraX86LibPkgs)}; do
+        if [ -d "$p/lib" ]; then
+          for f in "$p"/lib/*; do
+            [ -e "$f" ] || continue
+            case "$f" in
+              *.a|*.la|*.o|*gconv*) continue ;;
+            esac
+            ln -sf "$f" rootfs/usr/lib64/
+          done
+        fi
+      done
+      # glibc C headers for Verilog-A ahdlcmi compilation (Spectre's bundled
+      # cdsgcc include_next's <math.h> into /usr/include)
+      mkdir -p rootfs/usr/include
+      cp -a ${x86.glibc.dev}/include/. rootfs/usr/include/
+      # C runtime startfiles for the ahdlcmi link (`ld: cannot find crti.o`).
+      # The lib loop above deliberately skips *.o — right for runtime libs, but
+      # `gcc -shared` needs crti.o/crtn.o out of /usr/lib64; cross-glibc ships
+      # them in its out lib dir next to the .so linker scripts. (The scripts'
+      # GROUP() entries use absolute store paths, so libc_nonshared.a resolves
+      # through the virtiofs-mirrored /nix/store despite the *.a skip.)
+      for f in ${x86.glibc}/lib/*.o; do
+        [ -e "$f" ] && ln -sf "$f" rootfs/usr/lib64/
+      done
+      # aarch64 shells for the guest (Cadence launchers are ksh/tcsh scripts)
+      ln -sf ${pkgs.ksh}/bin/ksh rootfs/bin/ksh
+      ln -sf ${pkgs.tcsh}/bin/tcsh rootfs/bin/tcsh
+      ln -sf ${pkgs.bash}/bin/bash rootfs/bin/bash
+      ln -sf bash rootfs/bin/sh
+      # Cadence SLES12-era SONAME compat symlinks (mirrors the box64 FHS env)
+      ln -sf libldap.so.2 rootfs/usr/lib64/libldap_r-2.4.so.2
+      ln -sf liblber.so.2 rootfs/usr/lib64/liblber-2.4.so.2
+      ln -sf libapr-1.so.0.7.6 rootfs/usr/lib64/libapr-1.so.0.5.1
+      # saSecurity parses /proc/self/maps and requires the libc mapping to live
+      # under /usr/lib64/libc-* (nix-store paths are treated as tampering). A
+      # symlink resolves to the store path in maps, so copy the real glibc
+      # libc.so.6 over it; LD_LIBRARY_PATH starts with /usr/lib64 so the loader
+      # opens it there and the kernel records /usr/lib64/libc.so.6.
+      rm -f rootfs/usr/lib64/libc.so.6
+      cp ${x86.glibc}/lib/libc.so.6 rootfs/usr/lib64/libc.so.6
+      chmod 755 rootfs/usr/lib64/libc.so.6
+      mkfs.erofs $out rootfs/
+    '';
 
   # Guest-side script: sets the Cadence environment then execs tcsh (so
   # `cadence-env -c '...'` behaves exactly like the FHS-env version).
@@ -232,6 +233,7 @@
     export CDS_LIC_USE_AGENT=0
     export VSM_FWK=VSM95011
     export VSM_ITK=VSM12141
+    export CDS_SKIP_OS_CHECK_ON_STARTUP=1
     # The x86_64 ld-linux (nixpkgs glibc) only searches its own store lib dir
     # by default; point it at the rootfs system libs.
     export LD_LIBRARY_PATH="/usr/lib64:/lib64''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -280,8 +282,24 @@
         *) PATH="$p:$PATH" ;;
       esac
     done
-    # user wrapper dir first: ${cdsBase}/bin/virtuoso preloads the PDK libs
-    export PATH="${cdsBase}/bin:$PATH"
+    # EE477 extras previously duplicated in ~/.cshrc (removed from there);
+    # same set as the FHS profile above.
+    export CDS_GPDK45="$CDSBASE/IC251/CDS_GPDK45"
+    export CADHOME="$CDSBASE"
+    export CDS="$CDS_INST_DIR" CDSDIR="$CDS_INST_DIR" CADENCE_DIR="$CDS_INST_DIR"
+    export CDS_ROOT="$CDS_INST_DIR" CDSROOT="$CDS_INST_DIR"
+    export CDS_SPECTRERF_FBENABLE=1
+    export CDS_SPECTRE_FBENABLE=1
+    export INC_HOME="$CDSBASE/INCISIVE152"
+    export QRC_HOME="$CDSBASE/QUANTUS251"
+    export PEGASUS_HOME="$CDSBASE/PEGASUS251"
+    # Managed virtuoso/iscape entry points first, then the user override dir
+    # ($CDSBASE/bin, scratch spot for temporary scripts), then the 64-bit
+    # launchers for the extra tools.
+    export PATH="${cadence-virtuoso}/bin:${cadence-iscape}/bin:${cdsBase}/bin:$PATH"
+    for p in "$INC_HOME/tools.lnx86/inca/bin/64bit" "$QRC_HOME/bin" "$PEGASUS_HOME/tools/bin"; do
+      case ":$PATH:" in *":$p:"*) ;; *) [ -d "$p" ] && PATH="$p:$PATH" ;; esac
+    done
     # muvm's attach path merges the CLIENT's PATH (host dirs) over the guest
     # base env; keep the guest tool dirs on PATH regardless (/bin holds the
     # tmpfs tool links: the uname shim, cadence-env-cleanup, ksh/tcsh/...).
@@ -386,114 +404,159 @@
     ln -s ${cadence-env-cleanup} /usr/bin/cadence-env-cleanup
   '';
 
+  # ── Managed entry points ────────────────────────────────────────
+  #
+  # Replaced the hand-copied wrappers in /tools/cadence/bin (removed). The
+  # profiles below put these bin dirs first on PATH inside the env, so
+  # `virtuoso`/`iscape` resolve here.
+  # x86_64: cd to the work area (cds.lib is found via cwd) and exec.
+  # aarch64 (FEX guest): the x86_64 binaries need the install-tree libs on
+  # LD_LIBRARY_PATH and cds_root must find the real binary via the reordered
+  # PATH; an exiting session reaps the daemons when it is the last one.
+  cadence-virtuoso =
+    if isAarch64
+    then
+      pkgs.writeShellScriptBin "virtuoso" ''
+        IC="$CDSBASE/IC251"
+        export LD_LIBRARY_PATH="$IC/share/oa/lib/lnx86/opt:$IC/tools.lnx86/lib/64bit:$IC/tools.lnx86/lib:$IC/tools.lnx86/sev/lib/64bit:$IC/tools.lnx86/hdf5/lib/64bit:$IC/tools.lnx86/lz4/lib/64bit:$IC/tools.lnx86/python/64bit/lib:$IC/tools.lnx86/TPtools/grpc/lib64:$IC/tools.lnx86/TPtools/boost/lib/64bit:$IC/tools.lnx86/extraction/lib/64bit:$IC/tools.lnx86/leveldb/lib/64bit:$IC/tools.lnx86/Qt/v5/64bit/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        export PATH="$IC/bin:$IC/tools/bin/64bit:$IC/tools/bin:$IC/tools/dfII/bin:$PATH"
+        cd "$HOME/work_gpdk045" || exit 1
+        "$IC/tools.lnx86/dfII/bin/64bit/virtuoso" "$@"
+        rc=$?
+        /bin/cadence-env-cleanup 1 2>/dev/null
+        exit $rc
+      ''
+    else
+      pkgs.writeShellScriptBin "virtuoso" ''
+        cd "$HOME/work_gpdk045" || exit 1
+        exec "$CDSBASE/IC251/tools/dfII/bin/virtuoso" "$@"
+      '';
+
+  # InstallScape launcher. iscape's bundled 32-bit JVM cannot run in the env,
+  # so iscape.sh falls back to the system JVM without -Djava.library.path;
+  # the LD_LIBRARY_PATH + LD_PRELOAD fix the native-lib lookup (the 2016-built
+  # libnativemethods has no PT_GNU_STACK and must be mapped at process startup
+  # under glibc >= 2.41).
+  cadence-iscape = pkgs.writeShellScriptBin "iscape" ''
+    ISCAPE_ROOT="$CDSBASE/iscape"
+    ISLIB="$(ls -d "$ISCAPE_ROOT"/iscape.*/lib 2>/dev/null | sort -V | tail -1)"
+    if [ -n "$ISLIB" ] && [ -f "$ISLIB/libnativemethods_lnx_64.so" ]; then
+      export LD_PRELOAD="$ISLIB/libnativemethods_lnx_64.so''${LD_PRELOAD:+:$LD_PRELOAD}"
+      export LD_LIBRARY_PATH="$ISLIB''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+    exec "$ISCAPE_ROOT/iscape/bin/iscape.sh" "$@"
+  '';
+
   # ── FHS environment ─────────────────────────────────────────────
 
   cadence-env-raw = pkgs.buildFHSEnv {
     name = "cadence-env";
-    targetPkgs = pkgs: (with pkgs; [
-      glibc
-      zlib
-      zstd
-      systemd
-      pcre2
-      nss
-      nspr
-      gcc-unwrapped.lib
-      stdenv.cc.cc.lib
-      bash
-      tcsh
-      ksh
-      coreutils
-      procps
-      xvfb
-      gawk
-      perl
-      python3
-      libX11
-      libXext
-      libXrender
-      libXtst
-      libXi
-      libXrandr
-      libXcursor
-      libXScrnSaver
-      libXcomposite
-      libXdamage
-      libXfixes
-      libxcb
-      libxshmfence
-      libpciaccess
-      pciutils
-      libusb1
-      motif
-      fontconfig
-      freetype
-      libGLU
-      libglvnd
-      glib
-      pango
-      gtk2
-      gtk3
-      alsa-lib
-      xwayland
-      nettools
-      iproute2
-      libnsl
-      ncurses5
-      libxcrypt-legacy
-      expat
-      libpng
-      libjpeg
-      krb5
-      e2fsprogs
-      numactl # libnuma.so.1 — Spectre 25.1 links it, not bundled with the tool
-      psmisc # pstree/killall — Spectre APS supervisor shells out to pstree
-      glibc.dev # glibc C headers (/usr/include/math.h ...) — needed by Spectre's
-                # bundled cdsgcc when compiling Verilog-A ahdlcmi modules
-      libICE
-      libSM
-      libXmu
-      libXt
-      libelf
-      elfutils
-      libpng12
-      libXft
-      libXinerama
-      libuuid
-      qt5.qtx11extras
-      qt5.qtbase
-      libxkbcommon
-      dbus
-      xcbutilwm
-      xcbutilimage
-      xcbutilkeysyms
-      xcbutilrenderutil
-      libxml2
-      libXaw
-      libtool
-      xdpyinfo
-      mesa-demos
-      openjdk11
-      libidn2
-      libssh
-      curl # libcurl.so.4 — Quantus (quantus extraction bin) links it
-      apr
-      aprutil
-      cyrus_sasl
-      openldap
-      file
-      sqlite
-      xkeyboard_config # Provides the layout data for XKB
-      lsb-release
-    ] ++ lib.optionals isAarch64 [
-      box64
-      cadence-box64-bins
-      # box64 wraps these heavy libs NATIVELY (ARM64) when present; the x86_64
-      # virtuoso links them, so supply the aarch64 versions in the env.
-      openssl # libcrypto.so.3
-      openblas # libblas.so / liblapack.so
-      lapack
-    ]);
+    targetPkgs = pkgs: (with pkgs;
+      [
+        glibc
+        zlib
+        zstd
+        systemd
+        pcre2
+        nss
+        nspr
+        gcc-unwrapped.lib
+        stdenv.cc.cc.lib
+        bash
+        tcsh
+        ksh
+        coreutils
+        procps
+        xvfb
+        gawk
+        perl
+        python3
+        libX11
+        libXext
+        libXrender
+        libXtst
+        libXi
+        libXrandr
+        libXcursor
+        libXScrnSaver
+        libXcomposite
+        libXdamage
+        libXfixes
+        libxcb
+        libxshmfence
+        libpciaccess
+        pciutils
+        libusb1
+        motif
+        fontconfig
+        freetype
+        libGLU
+        libglvnd
+        glib
+        pango
+        gtk2
+        gtk3
+        alsa-lib
+        xwayland
+        nettools
+        iproute2
+        libnsl
+        ncurses5
+        libxcrypt-legacy
+        expat
+        libpng
+        libjpeg
+        krb5
+        e2fsprogs
+        numactl # libnuma.so.1 — Spectre 25.1 links it, not bundled with the tool
+        psmisc # pstree/killall — Spectre APS supervisor shells out to pstree
+        glibc.dev # glibc C headers (/usr/include/math.h ...) — needed by Spectre's
+        # bundled cdsgcc when compiling Verilog-A ahdlcmi modules
+        libICE
+        libSM
+        libXmu
+        libXt
+        libelf
+        elfutils
+        libpng12
+        libXft
+        libXinerama
+        libuuid
+        qt5.qtx11extras
+        qt5.qtbase
+        libxkbcommon
+        dbus
+        xcbutilwm
+        xcbutilimage
+        xcbutilkeysyms
+        xcbutilrenderutil
+        libxml2
+        libXaw
+        libtool
+        xdpyinfo
+        mesa-demos
+        openjdk11
+        libidn2
+        libssh
+        curl # libcurl.so.4 — Quantus (quantus extraction bin) links it
+        apr
+        aprutil
+        cyrus_sasl
+        openldap
+        file
+        sqlite
+        xkeyboard_config # Provides the layout data for XKB
+        lsb-release
+      ]
+      ++ lib.optionals isAarch64 [
+        box64
+        cadence-box64-bins
+        # box64 wraps these heavy libs NATIVELY (ARM64) when present; the x86_64
+        # virtuoso links them, so supply the aarch64 versions in the env.
+        openssl # libcrypto.so.3
+        openblas # libblas.so / liblapack.so
+        lapack
+      ]);
     multiPkgs = pkgs: (with pkgs; [
       libxml2
       zlib
@@ -509,106 +572,113 @@
       sqlite
     ]);
 
-    extraBuildCommands = ''
-      # Cadence's saSecurity parses /proc/self/maps and requires the libc
-      # mapping to live under /usr/lib64/libc-* or /lib64/libc-* (nix-store
-      # paths are treated as tampering). Place a real libc file at the
-      # standard path so the kernel records /usr/lib64/libc.so.6 in the maps.
-      rm -f $out/usr/lib64/libc.so.6
-      cp ${pkgs.glibc.out}/lib/libc.so.6 $out/usr/lib64/libc.so.6
-      chmod 755 $out/usr/lib64/libc.so.6
-      mkdir -p $out/usr/lib64
-      # patched apr under the name Cadence's SuSE/SLES12 symlink expects
-      ln -sf ${cds-apr pkgs.apr}/lib/libapr-1.so.0.7.6 $out/usr/lib64/libapr-1.so.0.5.1
-      ln -sf ${cds-apr pkgs.apr}/lib/libapr-1.so.0.7.6 $out/usr/lib64/libapr-1.so.0
-      # old-SONAME OpenLDAP compat for Cadence's liblog4cxx
-      ln -sf ${pkgs.openldap}/lib/libldap.so.2 $out/usr/lib64/libldap_r-2.4.so.2
-      ln -sf ${pkgs.openldap}/lib/liblber.so.2 $out/usr/lib64/liblber-2.4.so.2
-      # Virtuoso ADE simulation looks for Xvfb at /usr/bin (EXPLORER-9512).
-      # xvfb is already in targetPkgs; pin the exact path so the check can
-      # never regress.
-      ln -sf ${pkgs.xvfb}/bin/Xvfb $out/usr/bin/Xvfb
-      # Cadence launcher wrappers (.cdnWrapperIndep) run cds_plat, a csh
-      # script with a #!/bin/csh shebang. tcsh is csh-compatible; provide the
-      # name in the env's bin dir (in the FHS sandbox /bin -> /usr/bin).
-      ln -sf ${pkgs.tcsh}/bin/tcsh $out/usr/bin/csh
-    '' + lib.optionalString isAarch64 ''
-      # x86_64 multiarch lib tree for box64 (Cadence tools are x86_64).
-      # NOTE: $out/lib is a usrmerge symlink (-> /usr/lib -> /usr/lib64 on
-      # aarch64), so create the tree under the real directory.
-      mkdir -p $out/usr/lib64/x86_64-linux-gnu
-      for d in ${lib.concatMapStringsSep " " (p: "${p}/lib") x86LibPkgs}; do
-        if [ -d "$d" ]; then
-          cp -a "$d"/. $out/usr/lib64/x86_64-linux-gnu/
-          # cp -a preserves the source dir's (read-only) mode onto the
-          # destination dir; restore write permission for the next copy.
-          chmod -R u+w $out/usr/lib64/x86_64-linux-gnu
-        fi
-      done
+    extraBuildCommands =
+      ''
+        # Cadence's saSecurity parses /proc/self/maps and requires the libc
+        # mapping to live under /usr/lib64/libc-* or /lib64/libc-* (nix-store
+        # paths are treated as tampering). Place a real libc file at the
+        # standard path so the kernel records /usr/lib64/libc.so.6 in the maps.
+        rm -f $out/usr/lib64/libc.so.6
+        cp ${pkgs.glibc.out}/lib/libc.so.6 $out/usr/lib64/libc.so.6
+        chmod 755 $out/usr/lib64/libc.so.6
+        mkdir -p $out/usr/lib64
+        # patched apr under the name Cadence's SuSE/SLES12 symlink expects
+        ln -sf ${cds-apr pkgs.apr}/lib/libapr-1.so.0.7.6 $out/usr/lib64/libapr-1.so.0.5.1
+        ln -sf ${cds-apr pkgs.apr}/lib/libapr-1.so.0.7.6 $out/usr/lib64/libapr-1.so.0
+        # old-SONAME OpenLDAP compat for Cadence's liblog4cxx
+        ln -sf ${pkgs.openldap}/lib/libldap.so.2 $out/usr/lib64/libldap_r-2.4.so.2
+        ln -sf ${pkgs.openldap}/lib/liblber.so.2 $out/usr/lib64/liblber-2.4.so.2
+        # Virtuoso ADE simulation looks for Xvfb at /usr/bin (EXPLORER-9512).
+        # xvfb is already in targetPkgs; pin the exact path so the check can
+        # never regress.
+        ln -sf ${pkgs.xvfb}/bin/Xvfb $out/usr/bin/Xvfb
+        # Cadence launcher wrappers (.cdnWrapperIndep) run cds_plat, a csh
+        # script with a #!/bin/csh shebang. tcsh is csh-compatible; provide the
+        # name in the env's bin dir (in the FHS sandbox /bin -> /usr/bin).
+        ln -sf ${pkgs.tcsh}/bin/tcsh $out/usr/bin/csh
+      ''
+      + lib.optionalString isAarch64 ''
+        # x86_64 multiarch lib tree for box64 (Cadence tools are x86_64).
+        # NOTE: $out/lib is a usrmerge symlink (-> /usr/lib -> /usr/lib64 on
+        # aarch64), so create the tree under the real directory.
+        mkdir -p $out/usr/lib64/x86_64-linux-gnu
+        for d in ${lib.concatMapStringsSep " " (p: "${p}/lib") x86LibPkgs}; do
+          if [ -d "$d" ]; then
+            cp -a "$d"/. $out/usr/lib64/x86_64-linux-gnu/
+            # cp -a preserves the source dir's (read-only) mode onto the
+            # destination dir; restore write permission for the next copy.
+            chmod -R u+w $out/usr/lib64/x86_64-linux-gnu
+          fi
+        done
 
-      # box64 0.4.2 wraps ANY lib with an ARM64 twin in the env natively, and
-      # native-wrapped libs cannot provide DATA symbols (widget class records,
-      # _XtInheritTranslations, ...) to emulated code — the emulated Motif/Xm
-      # stack needs those. Remove the ARM64 X/UI libs so box64 falls back to
-      # emulating the x86_64 versions from the multiarch tree. (Nix-store
-      # binaries like Xvfb don't use /usr/lib64, so they are unaffected.)
-      rm -f $out/usr/lib64/libX11.so* $out/usr/lib64/libX11-xcb.so* \
-            $out/usr/lib64/libXau.so* $out/usr/lib64/libxcb.so* \
-            $out/usr/lib64/libXdmcp.so* $out/usr/lib64/libXext.so* \
-            $out/usr/lib64/libXft.so* $out/usr/lib64/libXmu.so* \
-            $out/usr/lib64/libXrender.so* $out/usr/lib64/libXss.so* \
-            $out/usr/lib64/libXt.so* $out/usr/lib64/libXtst.so* \
-            $out/usr/lib64/libXi.so* $out/usr/lib64/libXrandr.so* \
-            $out/usr/lib64/libXcursor.so* $out/usr/lib64/libXcomposite.so* \
-            $out/usr/lib64/libXdamage.so* $out/usr/lib64/libXfixes.so* \
-            $out/usr/lib64/libXScrnSaver.so* $out/usr/lib64/libXp.so* \
-            $out/usr/lib64/libXinerama.so* $out/usr/lib64/libXaw.so* \
-            $out/usr/lib64/libXm.so* $out/usr/lib64/libxkbcommon.so* \
-            $out/usr/lib64/libxcb-*.so* 2>/dev/null || true
-    '';
+        # box64 0.4.2 wraps ANY lib with an ARM64 twin in the env natively, and
+        # native-wrapped libs cannot provide DATA symbols (widget class records,
+        # _XtInheritTranslations, ...) to emulated code — the emulated Motif/Xm
+        # stack needs those. Remove the ARM64 X/UI libs so box64 falls back to
+        # emulating the x86_64 versions from the multiarch tree. (Nix-store
+        # binaries like Xvfb don't use /usr/lib64, so they are unaffected.)
+        rm -f $out/usr/lib64/libX11.so* $out/usr/lib64/libX11-xcb.so* \
+              $out/usr/lib64/libXau.so* $out/usr/lib64/libxcb.so* \
+              $out/usr/lib64/libXdmcp.so* $out/usr/lib64/libXext.so* \
+              $out/usr/lib64/libXft.so* $out/usr/lib64/libXmu.so* \
+              $out/usr/lib64/libXrender.so* $out/usr/lib64/libXss.so* \
+              $out/usr/lib64/libXt.so* $out/usr/lib64/libXtst.so* \
+              $out/usr/lib64/libXi.so* $out/usr/lib64/libXrandr.so* \
+              $out/usr/lib64/libXcursor.so* $out/usr/lib64/libXcomposite.so* \
+              $out/usr/lib64/libXdamage.so* $out/usr/lib64/libXfixes.so* \
+              $out/usr/lib64/libXScrnSaver.so* $out/usr/lib64/libXp.so* \
+              $out/usr/lib64/libXinerama.so* $out/usr/lib64/libXaw.so* \
+              $out/usr/lib64/libXm.so* $out/usr/lib64/libxkbcommon.so* \
+              $out/usr/lib64/libxcb-*.so* 2>/dev/null || true
+      '';
 
     profile = ''
-      export XKB_CONFIG_ROOT=/usr/share/X11/xkb
-      export IN_FHS_ENV="cadence-env"
-      unset http_proxy https_proxy ftp_proxy rsync_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY RSYNC_PROXY ALL_PROXY no_proxy NO_PROXY
-      # C.UTF-8 (not plain C): a POSIX-locale JVM maps filenames as ASCII and
-      # blows up on any non-ASCII path (InstallScape file chooser, Java NIO).
-      export LANG=C.UTF-8 LC_ALL=C.UTF-8
-      export __GLX_VENDOR_LIBRARY_NAME=mesa
-      export LIBGL_DRIVERS_PATH="/run/opengl-driver/lib/dri:/run/opengl-driver-32/lib/dri"
-      if [ -d /run/opengl-driver/share/glvnd/egl_vendor.d ]; then
-        export __EGL_VENDOR_LIBRARY_DIRS="/run/opengl-driver/share/glvnd/egl_vendor.d"
-        export __GLX_VENDOR_LIBRARY_DIRS="/run/opengl-driver/share/glvnd/glx_vendor.d"
-      fi
-      export XLIB_SKIP_ARGB_VISUALS="1"
-      # HiDPI: the Cadence tools are X11 apps shown through Xwayland; scale the
-      # Qt UI by 1.25 (the asusg16 panel DPI) instead of the default 1x. Unlike
-      # the muvm guest (which starts with a clean env), the FHS env inherits the
-      # host's Plasma session env, which may carry per-screen/auto-scale Qt vars
-      # that override QT_SCALE_FACTOR. Clear them so the explicit factor wins.
-      unset QT_AUTO_SCREEN_SCALE_FACTOR
-      unset QT_SCREEN_SCALE_FACTORS
-      unset QT_DEVICE_PIXEL_RATIO
-      export QT_ENABLE_HIGHDPI_SCALING=1
-      export QT_SCALE_FACTOR=1.25
-      export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
-      # Cadence's bundled Qt5 exports every window menubar to the Plasma
-      # global-menu widget: upstream Qt5 creates a QDBusMenuBar whenever the
-      # com.canonical.AppMenu.Registrar service is on the session bus
-      # (code inside libcdsQt5XcbQpa; there is no env kill-switch in Qt5),
-      # and the export breaks when new windows open, leaving no menu
-      # anywhere. Point the session bus at a dead address so Qt's DBus
-      # connection fails: no registrar → menubars stay attached to the app
-      # windows. Cadence tools don't use the session bus for anything else
-      # (the muvm/FEX guest runs fine without one).
-      export DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent-cadence-env-no-dbus"
-      # saSecurity requires the licensing-agent mode disabled and the VSM
-      # framework vars set before it will attempt the license checkout.
-      export CDS_LIC_USE_AGENT=0
-      export VSM_FWK=VSM95011
-      export VSM_ITK=VSM12141
-      export LD_LIBRARY_PATH="/usr/lib64:/usr/lib:/run/opengl-driver/lib:/run/opengl-driver-32/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-      ${lib.optionalString isAarch64 ''
+        export XKB_CONFIG_ROOT=/usr/share/X11/xkb
+        export IN_FHS_ENV="cadence-env"
+        unset http_proxy https_proxy ftp_proxy rsync_proxy all_proxy HTTP_PROXY HTTPS_PROXY FTP_PROXY RSYNC_PROXY ALL_PROXY no_proxy NO_PROXY
+        # C.UTF-8 (not plain C): a POSIX-locale JVM maps filenames as ASCII and
+        # blows up on any non-ASCII path (InstallScape file chooser, Java NIO).
+        export LANG=C.UTF-8 LC_ALL=C.UTF-8
+        export __GLX_VENDOR_LIBRARY_NAME=mesa
+        export LIBGL_DRIVERS_PATH="/run/opengl-driver/lib/dri:/run/opengl-driver-32/lib/dri"
+        if [ -d /run/opengl-driver/share/glvnd/egl_vendor.d ]; then
+          export __EGL_VENDOR_LIBRARY_DIRS="/run/opengl-driver/share/glvnd/egl_vendor.d"
+          export __GLX_VENDOR_LIBRARY_DIRS="/run/opengl-driver/share/glvnd/glx_vendor.d"
+        fi
+        export XLIB_SKIP_ARGB_VISUALS="1"
+        # HiDPI: the Cadence tools are X11 apps shown through Xwayland; scale the
+        # Qt UI by 1.25 (the asusg16 panel DPI) instead of the default 1x. Unlike
+        # the muvm guest (which starts with a clean env), the FHS env inherits the
+        # host's Plasma session env, which may carry per-screen/auto-scale Qt vars
+        # that override QT_SCALE_FACTOR. Clear them so the explicit factor wins.
+        unset QT_AUTO_SCREEN_SCALE_FACTOR
+        unset QT_SCREEN_SCALE_FACTORS
+        unset QT_DEVICE_PIXEL_RATIO
+        export QT_ENABLE_HIGHDPI_SCALING=1
+        export QT_SCALE_FACTOR=1.25
+        export QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough
+        # Cadence's bundled Qt5 exports every window menubar to the Plasma
+        # global-menu widget: upstream Qt5 creates a QDBusMenuBar whenever the
+        # com.canonical.AppMenu.Registrar service is on the session bus
+        # (code inside libcdsQt5XcbQpa; there is no env kill-switch in Qt5),
+        # and the export breaks when new windows open, leaving no menu
+        # anywhere. Point the session bus at a dead address so Qt's DBus
+        # connection fails: no registrar → menubars stay attached to the app
+        # windows. Cadence tools don't use the session bus for anything else
+        # (the muvm/FEX guest runs fine without one).
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent-cadence-env-no-dbus"
+        # saSecurity requires the licensing-agent mode disabled and the VSM
+        # framework vars set before it will attempt the license checkout.
+        export CDS_LIC_USE_AGENT=0
+        export VSM_FWK=VSM95011
+        export VSM_ITK=VSM12141
+        # Licensing + host checks (previously supplied by ~/.cshrc — now here).
+        export CDS_LIC_FILE="${cdsBase}/license/license.dat"
+        export CDS_LIC_ONLY=1
+        export W3264_NO_HOST_CHECK=1
+        export CDS_SKIP_OS_CHECK_ON_STARTUP=1
+        export LD_LIBRARY_PATH="/usr/lib64:/usr/lib:/run/opengl-driver/lib:/run/opengl-driver-32/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        ${lib.optionalString isAarch64 ''
         # x86_64 Cadence tools run under box64; point it at the multiarch tree.
         export BOX64_LD_LIBRARY_PATH="/lib/x86_64-linux-gnu''${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
         export BOX64_LOG=0
@@ -620,34 +690,52 @@
         # (X11/Xt/Motif/GL) is emulated from the x86_64 tree.
         export BOX64_WRAPPED_LIBS="libc.so.6:libm.so.6:libdl.so.2:libpthread.so.0:librt.so.1:libutil.so.1:libgcc_s.so.1:libstdc++.so.6:libcrypto.so.3:libopenblas.so:liblapack.so.3"
       ''}
-      # EE477 environment (equivalent of sourcing setup_ee477_ee577a_v2602.csh)
-      export CDSBASE="${cdsBase}"
-      export CDS_INST_DIR="$CDSBASE/IC251"
-      export IC_HOME="$CDS_INST_DIR"
-      export CDSHOME="$CDS_INST_DIR"
-      export SPECTRE_HOME="$CDSBASE/SPECTRE251"
-    export OA_HOME="$CDS_INST_DIR/share/oa"
-    # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
-    # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
-    # oaGetLibPath/sysname pick the aarch64 OA platform "lna64_rhel80" instead.
-    # Pin the OA platform name to the x86_64 one.
-    export OA_SYSNAME=linux_rhel80
-      export CDS_AUTO_64BIT=ALL
-      export CDS_Netlisting_Mode=Analog
-      export SPECTRE_DEFAULTS=-E
-    # IC paths BEFORE $SPECTRE_HOME/bin: the spectre tree ships generic
-    # utilities (cds_root, cdspython, cdslmd, ...) that would otherwise shadow
-    # the IC25.1 versions. spectre/aps themselves only exist in SPECTRE's bin,
-    # so putting it last loses nothing.
-    for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin" "$SPECTRE_HOME/bin"; do
-        case ":$PATH:" in
-          *":$p:"*) ;;
-          *) PATH="$p:$PATH" ;;
-        esac
-      done
-      # user wrapper dir first: ${cdsBase}/bin/virtuoso preloads the PDK libs
-      export PATH="${cdsBase}/bin:$PATH"
-      export PATH
+        # EE477 environment (equivalent of sourcing setup_ee477_ee577a_v2602.csh)
+        export CDSBASE="${cdsBase}"
+        export CDS_INST_DIR="$CDSBASE/IC251"
+        export IC_HOME="$CDS_INST_DIR"
+        export CDSHOME="$CDS_INST_DIR"
+        export SPECTRE_HOME="$CDSBASE/SPECTRE251"
+      export OA_HOME="$CDS_INST_DIR/share/oa"
+      # The OA libs are the x86_64 build (share/oa/lib/linux_rhel80_64), but the
+      # launcher scripts run natively (aarch64) so `uname -m` reports aarch64 and
+      # oaGetLibPath/sysname pick the aarch64 OA platform "lna64_rhel80" instead.
+      # Pin the OA platform name to the x86_64 one.
+      export OA_SYSNAME=linux_rhel80
+        export CDS_AUTO_64BIT=ALL
+        export CDS_Netlisting_Mode=Analog
+        export SPECTRE_DEFAULTS=-E
+      # IC paths BEFORE $SPECTRE_HOME/bin: the spectre tree ships generic
+      # utilities (cds_root, cdspython, cdslmd, ...) that would otherwise shadow
+      # the IC25.1 versions. spectre/aps themselves only exist in SPECTRE's bin,
+      # so putting it last loses nothing.
+      for p in "$IC_HOME/bin" "$IC_HOME/tools/bin" "$IC_HOME/tools/dfII/bin" "$SPECTRE_HOME/bin"; do
+          case ":$PATH:" in
+            *":$p:"*) ;;
+            *) PATH="$p:$PATH" ;;
+          esac
+        done
+        # EE477 extras previously duplicated in ~/.cshrc (removed from there):
+        # the PDK root ($CDS_GPDK45 — cds.lib and maestro modelFiles reference
+        # it so the same files work on the lab machines, which use ~ee577),
+        # school-layout compat aliases, and the Incisive/Quantus/Pegasus tools.
+        export CDS_GPDK45="$CDSBASE/IC251/CDS_GPDK45"
+        export CADHOME="$CDSBASE"
+        export CDS="$CDS_INST_DIR" CDSDIR="$CDS_INST_DIR" CADENCE_DIR="$CDS_INST_DIR"
+        export CDS_ROOT="$CDS_INST_DIR" CDSROOT="$CDS_INST_DIR"
+        export CDS_SPECTRERF_FBENABLE=1
+        export CDS_SPECTRE_FBENABLE=1
+        export INC_HOME="$CDSBASE/INCISIVE152"
+        export QRC_HOME="$CDSBASE/QUANTUS251"
+        export PEGASUS_HOME="$CDSBASE/PEGASUSDFM232"
+        # Managed virtuoso/iscape entry points first; $CDSBASE/bin stays as the
+        # scratch spot for temporary unmanaged scripts; then the 64-bit
+        # launchers for the extra tools (tools/bin/irun is a 32-bit ELF).
+        export PATH="${cadence-virtuoso}/bin:${cadence-iscape}/bin:${cdsBase}/bin:$PATH"
+        for p in "$INC_HOME/tools.lnx86/inca/bin/64bit" "$QRC_HOME/bin" "$PEGASUS_HOME/tools/bin"; do
+          case ":$PATH:" in *":$p:"*) ;; *) [ -d "$p" ] && PATH="$p:$PATH" ;; esac
+        done
+        export PATH
     '';
     runScript = "tcsh";
   };

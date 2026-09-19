@@ -22,7 +22,7 @@
 IC="/tools/cadence/IC251"
 export LD_LIBRARY_PATH="$IC/share/oa/lib/lnx86/opt:$IC/tools.lnx86/lib/64bit:$IC/tools.lnx86/lib:$IC/tools.lnx86/sev/lib/64bit:$IC/tools.lnx86/hdf5/lib/64bit:$IC/tools.lnx86/lz4/lib/64bit:$IC/tools.lnx86/python/64bit/lib:$IC/tools.lnx86/TPtools/grpc/lib64:$IC/tools.lnx86/TPtools/boost/lib/64bit:$IC/tools.lnx86/extraction/lib/64bit:$IC/tools.lnx86/leveldb/lib/64bit:$IC/tools.lnx86/Qt/v5/64bit/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export PATH="$IC/bin:$IC/tools/bin/64bit:$IC/tools/bin:$IC/tools/dfII/bin:$PATH"
-cd /tools/cadence/work_gpdk045 || exit 1
+cd "$HOME/work_gpdk045" || exit 1
 "$IC/tools.lnx86/dfII/bin/64bit/virtuoso" "$@"
 rc=$?
 # virtuoso spawns detached daemons (`dashboard -runAsDaemon`, the MPS
