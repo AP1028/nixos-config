@@ -118,6 +118,67 @@ The circular damage list used to appear (or not) at session startup as a
 first close. With the blit bypass the race no longer matters — the traversal
 cannot spin.
 
+## TODO: same corruption now crashes Xwayland (2026-09-20 analysis, not yet fixed)
+
+**Status: diagnosed, no fix applied yet.** The blit bypass removed the *spin*
+but not the underlying damage-list corruption. Since 2026-09-18 Xwayland
+instead dies with SIGSEGV walking the same corrupt list from other doors
+(three cores: 9/18 23:35 PID 2265, 9/19 23:35 PID 83004, 9/20 00:56 PID 2338 —
+all `xwayland-comp-restore-bypass`, cores still in `coredumpctl`).
+
+Crash stacks seen:
+
+- `ProcShmPutImage -> damagePutImage -> damageRegionProcessPending` (9/18, 9/20)
+- `xwl_present_execute -> present_copy_region -> damageCopyArea ->
+  damageRegionProcessPending` (9/19)
+
+Mechanism (confirmed from cores):
+
+1. The corrupt list is the **shared screen pixmap's** damage list (rootless
+   0x0 fb pixmap, serial 1 — the window pixmap of every unredirected/unmapped
+   window). The patch is NOT implicated: `compRestoreWindow`/`damageCopyArea`
+   only *walk* lists; records are only unlinked in `DamageUnregister`,
+   `DamageDestroy`, `damageSetWindowPixmap`, `damageDestroyPixmap`.
+2. In all three cores the screen pixmap's damage slot
+   (`pixmap->devPrivates + 0x98`) points at a freed `DamageRec` (0x80 malloc
+   chunk, memory since reused — pixel data in the 9/20 core). The stale
+   pointer is referenced nowhere else in the heap: a record was destroyed
+   while still linked, i.e. its window's pixmap changed away from the screen
+   pixmap without `damageSetWindowPixmap()` moving it.
+3. Not an OOB private slot: `pScreen->totalPixmapSize = 0xe8` (0xa0-byte
+   privates, slot in-bounds and zeroed at alloc), so the value was written by
+   `damageInsertDamage()`.
+4. Trigger: any damage-wrapped draw op on a window whose pixmap is the screen
+   pixmap. Virtuoso does `ShmPutImage` on an unmapped window at launch, which
+   is why it looks Virtuoso-specific. The client crashes in `coredumpctl` are
+   collateral (X connection loss).
+
+Next steps (when picked up):
+
+- [ ] Report upstream (xorg/xserver, xwayland-24.1 branch): "DamageRec
+      destroyed while still linked on the shared screen-pixmap damage list;
+      UAF in `damageRegionProcessPending`" with the three cores and the list
+      chain dump (`0x644186a3c260 -> 0x644185c89170 -> 0x190700008051`).
+- [ ] Find the unlink bug (prime suspect: `damageSetWindowPixmap` /
+      `damageRemoveDamage` desync when a window's pixmap changes without its
+      records being on the expected list; `xwl_window_update_surface_window`
+      / `xwl_unrealize_window` leak records on non-toplevel surface windows).
+- [x] Mitigation: `packages/patch-xwayland-damage-walk.py` (wired into
+      `packages/patched-xwayland.nix`) hardens `damageRegionProcessPending`.
+      Before each node is used, two stubs verify that it looks like a
+      DamageRec on the expected screen (`pScreen == pDrawable->pScreen`,
+      `damageLevel <= 4`, `reportAfter <= 1`) and bail out of the walk
+      otherwise; the checks run before `pNext` is followed, so a garbage node
+      is never dereferenced. Stubs live in the zero padding at the end of the
+      executable PT_LOAD; sites are found from symbols/patterns (no baked-in
+      addresses), so a nixpkgs bump either keeps working or fails the build.
+      The stub logic is unit-tested by executing the generated code against
+      fake records (valid / unaligned / wrong screen / bad level / bad
+      reportAfter all behave). aarch64 is not implemented yet — the script
+      skips with a warning, so the macbook still gets the blit bypass only.
+- [ ] Do **not** revert the blit bypass; the freeze returns and the
+      corruption stays.
+
 ## RETIRED: client-side workarounds (OUTDATED / UNUSED — do not apply)
 
 Everything below was tried before the root cause was found. It "worked" only

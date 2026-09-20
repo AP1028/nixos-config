@@ -540,6 +540,9 @@
         libidn2
         libssh
         curl # libcurl.so.4 — Quantus (quantus extraction bin) links it
+        zeromq # libzmq.so.5 — qrcToOA (extracted-view writer) links it; present
+        # as a system lib on the viterbi RHEL servers, so the crash only shows
+        # up locally ("runUserCmd", status 139, empty av_extracted)
         apr
         aprutil
         cyrus_sasl

@@ -1,4 +1,10 @@
-# Xwayland with the composite restore blit disabled.
+# Xwayland with two binary patches for the Cadence damage-list bug.
+#
+# 1. patch-xwayland-comp-restore.py: NOP the GC CopyArea blit inside
+#    compRestoreWindow. This stopped the DE freeze (docs/cadence-freeze.md).
+# 2. patch-xwayland-damage-walk.py: harden damageRegionProcessPending so the
+#    same corrupt damage list that used to spin now cannot crash the server
+#    (it is reached from other doors, e.g. ShmPutImage -> damagePutImage).
 #
 # Root cause of the Cadence DE-freeze (docs/cadence-freeze.md): when a client whose
 # composite damage chain got corrupted disconnects, Xwayland's single dispatch
@@ -39,12 +45,13 @@
 runCommand "xwayland-comp-restore-bypass" {
   nativeBuildInputs = [python3];
   meta = with lib; {
-    description = "Xwayland with the compRestoreWindow blit NOPed (Cadence DE-freeze workaround)";
+    description = "Xwayland with the compRestoreWindow blit NOPed and the damage walk hardened (Cadence workarounds)";
     platforms = platforms.linux;
   };
 } ''
   install -Dm755 ${xwayland}/bin/Xwayland $out/bin/Xwayland
   python3 ${./patch-xwayland-comp-restore.py} $out/bin/Xwayland
+  python3 ${./patch-xwayland-damage-walk.py} $out/bin/Xwayland
 
   # sanity: the patched binary must still run
   $out/bin/Xwayland -version >/dev/null
