@@ -146,11 +146,18 @@ RAMBlock import path or in those rails. Upstream's own note in
 ("an 8 GiB-or-larger guest on a host whose importable heap is smaller … dies,
 while the same guest with `REIMS_VGPU_GUEST_IMPORT=off` works").
 
-**Workaround for this host:** boot with `REIMS_VGPU_GUEST_IMPORT=off` (slower —
-the copying rails instead of zero-copy — but stable). The `reims-vgpu-boot`
-wrapper now defaults it to `off`; set `REIMS_VGPU_GUEST_IMPORT=on` to opt back
-in. Final soak verification with the wrapper: **7/8 boots reached the login
-window and survived a 45-60 s soak**, against roughly 1/3 with imports on.
+**Fixed (2026-09-21) by upstream PRs, patched into the package:** [#81 "Fix
+format texel accounting in direct guest writeback"](https://github.com/steelbrain/reims-vgpu/pull/81)
+— this host's failing geometry was exactly that PR's repro
+(`R32G32B32A32_UINT 1504x6016`, `144769024` active bytes; the planner treated
+a 16-byte texel as 4 bytes and the copy overshot into unrelated guest memory)
+— and [#79 "settle queued guest writes before the guest takes its pages
+back"](https://github.com/steelbrain/reims-vgpu/pull/79) (stacked on #78).
+With both applied and host-pointer imports **on**, **7/7 boot+soak runs
+survived** (4×45 s + 3×90 s) where the unpatched build managed about 1/3. The
+wrapper no longer forces the slow copying rail; `REIMS_VGPU_GUEST_IMPORT=off`
+remains a fallback. The patches are in `packages/reims-vgpu/pr81.patch` and
+`pr79.patch` and should be dropped once the PRs merge upstream.
 
 Ruled out along the way: the import chunk size (a 1 GiB `IMPORT_SPAN_CEILING`
 build behaved the same), the page-table coverage probe (no map-side
