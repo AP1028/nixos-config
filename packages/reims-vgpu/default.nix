@@ -171,6 +171,14 @@ let
       # after the guest has released the pages. Same defect class as #81.
       patch -p1 -d reims-vgpu < ${./pr79.patch}
 
+      # Local: advertise two more panel timings (16:10 and 21:9) alongside the
+      # stock 1920x1080 / 1440x1080 / 1280x1024 / 3840x2160 seed list. The
+      # timing table is a plain array and the descriptor's count is written
+      # dynamically, so the guest sees six modes.
+      substituteInPlace reims-vgpu/crates/reims-vgpu/src/runtime/drain/mod.rs \
+        --replace-fail '(DISPLAY_MODE3_W, DISPLAY_MODE3_H),' \
+                       '(DISPLAY_MODE3_W, DISPLAY_MODE3_H), (2560, 1600), (3440, 1440),'
+
       cd reims-vgpu/vendor/qemu
       ./configure \
         --target-list=x86_64-softmmu \
