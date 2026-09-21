@@ -147,9 +147,20 @@ RAMBlock import path or in those rails. Upstream's own note in
 while the same guest with `REIMS_VGPU_GUEST_IMPORT=off` works").
 
 **Workaround for this host:** boot with `REIMS_VGPU_GUEST_IMPORT=off` (slower —
-the copying rails instead of zero-copy — but stable). Under test: lowering
-`IMPORT_SPAN_CEILING` from 2 GiB to 1 GiB, because the imports this host
-requests are exactly 2 GiB chunks.
+the copying rails instead of zero-copy — but stable). The `reims-vgpu-boot`
+wrapper now defaults it to `off`; set `REIMS_VGPU_GUEST_IMPORT=on` to opt back
+in. Final soak verification with the wrapper: **7/8 boots reached the login
+window and survived a 45-60 s soak**, against roughly 1/3 with imports on.
+
+Ruled out along the way: the import chunk size (a 1 GiB `IMPORT_SPAN_CEILING`
+build behaved the same), the page-table coverage probe (no map-side
+divergence), and every narrowing switch listed above.
+
+Still open: an intermittent boot failure that predates the workaround — the
+guest sometimes never reaches the login window (stuck before it, or an early
+hang; the screen shows OpenCore's picker with the `macOS` volume and `REL:`
+footer). The user saw this as the "stop sign → OpenCore → no autoboot" case.
+It is unrelated to the import rail and needs its own investigation.
 
 ## How the package was made (things that bit)
 
