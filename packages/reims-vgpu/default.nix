@@ -304,6 +304,24 @@ let
       sed -i -e 's/^ensure_rust_tools$/:/' -e 's/^build_reims_vgpu_efi$/:/' \
         "$out/libexec/reims-vgpu/boot-x86.sh"
 
+      # Local addition: `--persistent`. The harness is snapshot-revert by
+      # design (--testing/--interactive discard their clone, --capture only
+      # persists on a clean shutdown), which loses a session when the guest
+      # crashes on the way out. --persistent boots the provisioned masters in
+      # vm/disks + vm/ovmf write-through instead: every change lands on the
+      # disk as it happens, nothing is promoted or discarded.
+      substituteInPlace "$out/libexec/reims-vgpu/boot-x86.sh" \
+        --replace-fail '    --capture) BOOT_CLASS="capture"; shift ;;' \
+          '    --capture) BOOT_CLASS="capture"; shift ;;
+    --persistent) BOOT_CLASS="persistent"; shift ;;' \
+        --replace-fail '  [ "$BOOT_CLASS" = "capture" ] || die \' \
+          '  [ "$BOOT_CLASS" = "capture" ] || [ "$BOOT_CLASS" = "persistent" ] || die \' \
+        --replace-fail 'if [ "$BOOT_CLASS" = "interactive" ] || [ "$BOOT_CLASS" = "capture" ]; then' \
+          'if [ "$BOOT_CLASS" = "interactive" ] || [ "$BOOT_CLASS" = "capture" ] || [ "$BOOT_CLASS" = "persistent" ]; then' \
+        --replace-fail '    [ "$BOOT_CLASS" = "capture" ] && echo "boot-x86.sh: qemu exited rc=$rc (not clean) — snapshot NOT updated"' \
+          '    [ "$BOOT_CLASS" = "capture" ] && echo "boot-x86.sh: qemu exited rc=$rc (not clean) — snapshot NOT updated"
+    [ "$BOOT_CLASS" = "persistent" ] && echo "boot-x86.sh: persistent boot exited rc=$rc — masters left in place"'
+
       runHook postInstall
     '';
 
