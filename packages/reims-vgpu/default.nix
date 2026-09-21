@@ -316,6 +316,13 @@ let
     --persistent) BOOT_CLASS="persistent"; shift ;;' \
         --replace-fail '  [ "$BOOT_CLASS" = "capture" ] || die \' \
           '  [ "$BOOT_CLASS" = "capture" ] || [ "$BOOT_CLASS" = "persistent" ] || die \' \
+        --replace-fail '  HAVE_SNAPSHOT=1
+fi' '  HAVE_SNAPSHOT=1
+fi
+# --persistent ignores rails and snapshots entirely: the masters ARE the disk.
+if [ "$BOOT_CLASS" = "persistent" ]; then
+  HAVE_SNAPSHOT=0
+fi' \
         --replace-fail 'if [ "$BOOT_CLASS" = "interactive" ] || [ "$BOOT_CLASS" = "capture" ]; then' \
           'if [ "$BOOT_CLASS" = "interactive" ] || [ "$BOOT_CLASS" = "capture" ] || [ "$BOOT_CLASS" = "persistent" ]; then' \
         --replace-fail '    [ "$BOOT_CLASS" = "capture" ] && echo "boot-x86.sh: qemu exited rc=$rc (not clean) — snapshot NOT updated"' \
