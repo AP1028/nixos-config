@@ -157,6 +157,20 @@ let
         --replace-fail 'directory = "cargo-vendor-dir"' "directory = \"${cargoDeps}\""
       export CARGO_NET_OFFLINE=true
 
+      # PR #81 ("Fix format texel accounting in direct guest writeback"): the
+      # compute direct-writeback path plans 4096-byte runs as 4-byte texels for
+      # a 16-byte-per-texel R32G32B32A32_UINT image, so a copy overshoots its
+      # region and writes GPU data into unrelated guest memory. This host's
+      # failing boots produce exactly that image (1504x6016 R32G32B32A32_UINT,
+      # 144769024 active bytes). Applied here until it lands upstream.
+      patch -p1 -d reims-vgpu < ${./pr81.patch}
+
+      # PR #79 ("settle queued guest writes before the guest takes its pages
+      # back", stacked on PR #78's dependency-graph compaction): closes an
+      # ordering hole where GPU writes through the host-pointer import land
+      # after the guest has released the pages. Same defect class as #81.
+      patch -p1 -d reims-vgpu < ${./pr79.patch}
+
       cd reims-vgpu/vendor/qemu
       ./configure \
         --target-list=x86_64-softmmu \
@@ -311,12 +325,10 @@ let
       pkgs.spirv-tools
     ]}:$PATH"
 
-    # Host workaround (asusg16): with host-pointer imports enabled the guest
-    # kernel panics seconds after the login window on roughly 60% of boots
-    # (NVIDIA 595.99 / RTX 5080). With the importing rails off the same guest
-    # survives (5/5 in a soak harness) at the cost of the copying rails.
-    # See docs/reims-vgpu.md. Set REIMS_VGPU_GUEST_IMPORT=on to opt back in.
-    export REIMS_VGPU_GUEST_IMPORT="''${REIMS_VGPU_GUEST_IMPORT:-off}"
+    # Host-pointer imports stay on: PR #81 + #79 (patched into the build above)
+    # fix the guest panic this host hit on ~60% of boots, and imports are the
+    # fast rail (the copying fallback measured ~1.8 Hz against ~30 Hz here).
+    # REIMS_VGPU_GUEST_IMPORT=off remains available as a fallback.
 
     exec ${bootScript}/libexec/reims-vgpu/boot-x86.sh "$@"
   '';

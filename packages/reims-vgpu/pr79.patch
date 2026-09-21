@@ -1,0 +1,570 @@
+diff --git a/crates/reims-vgpu-core/src/depend.rs b/crates/reims-vgpu-core/src/depend.rs
+index 79e9c7001..220fe5a37 100644
+--- a/crates/reims-vgpu-core/src/depend.rs
++++ b/crates/reims-vgpu-core/src/depend.rs
+@@ -68,10 +68,26 @@ pub struct Census {
+ 
+ /// The live hazard state.
+ ///
+-/// Holds only accesses whose transactions have not retired. Retiring is the
+-/// caller's obligation and is what keeps this bounded; nothing here evicts on
+-/// its own, because an eviction would silently drop an edge a later
+-/// transaction was owed.
++/// Answers only from accesses whose transactions have not retired. Retiring is
++/// the caller's obligation and is what keeps the *live* set bounded; nothing
++/// here evicts on its own, because an eviction would silently drop an edge a
++/// later transaction was owed.
++///
++/// # Retired slots are bounded by the live ones
++///
++/// A retired access keeps its slot and its index entries until compaction, and
++/// every candidate list `gather` hands back still names it, so each retired
++/// slot costs one comparison on every later admission that reaches its bucket.
++/// Left to a caller, that compaction never came: a session that admitted and
++/// retired sixty transactions a second for forty minutes was spending nine
++/// tenths of its drain thread walking dead slots, and the walk grew with the
++/// session's age rather than with its working set.
++///
++/// So the graph owns the bound. `admit` compacts once the retired slots
++/// outnumber the live ones, which charges each retirement a constant amount
++/// of rebuild work and keeps every candidate list within twice the working
++/// set. The rebuild reuses its buffers, so a warm admission still makes no
++/// trip into the allocator beyond the structural ones named on `scratch`.
+ #[derive(Debug, Default)]
+ pub struct DependencyGraph {
+     entries: Vec<Entry>,
+@@ -97,6 +113,24 @@ pub struct DependencyGraph {
+     /// signature owns.
+     scratch: Vec<usize>,
+     waits: Vec<IngressOrdinal>,
++    /// Slots whose transaction has retired and that compaction has not yet
++    /// dropped. `entries.len() - dead` is the live count.
++    dead: usize,
++    /// Old slot index to new, filled by `compact` and kept for its capacity.
++    remap: Vec<usize>,
++}
++
++/// Drop every index that maps to no live slot and renumber the rest, in
++/// place, so a rebuild makes no trip into the allocator.
++fn remap_buckets<K>(buckets: &mut HashMap<K, Vec<usize>>, remap: &[usize]) {
++    for bucket in buckets.values_mut() {
++        bucket.retain_mut(|idx| {
++            let new = remap[*idx];
++            *idx = new;
++            new != usize::MAX
++        });
++    }
++    buckets.retain(|_, bucket| !bucket.is_empty());
+ }
+ 
+ impl DependencyGraph {
+@@ -113,7 +147,15 @@ impl DependencyGraph {
+     /// Live accesses, for a test or a report. Not a bound anything enforces.
+     #[must_use]
+     pub fn live_accesses(&self) -> usize {
+-        self.entries.iter().filter(|e| e.live).count()
++        self.entries.len() - self.dead
++    }
++
++    /// Slots held, live and retired, for a test or a report. What every
++    /// admission's candidate lists are drawn from, and the figure the
++    /// amortised compaction keeps within twice [`Self::live_accesses`].
++    #[must_use]
++    pub fn entries(&self) -> usize {
++        self.entries.len()
+     }
+ 
+     /// Admit one transaction's accesses and return the ordinals it must wait
+@@ -141,6 +183,14 @@ impl DependencyGraph {
+                 .is_none_or(|last| ordinal > last.ordinal),
+             "transactions are admitted in ingress order; {ordinal:?} arrived after a later one"
+         );
++        // Charged to the admission that grows the graph, not to the
++        // completion that retired the slots. Retired slots may only ever
++        // reach parity with the live ones, so the rebuild is amortised to a
++        // constant per retirement and every candidate list stays within twice
++        // the working set.
++        if self.dead > self.live_accesses() {
++            self.compact();
++        }
+         // Taken out so the gathering below can borrow the indexes; put back
+         // before returning, so the next admission finds the capacity this one
+         // grew. Both are cleared here rather than at the end, because a
+@@ -261,31 +311,53 @@ impl DependencyGraph {
+     /// that retires early publishes a hazard it still owes.
+     pub fn retire(&mut self, ordinal: IngressOrdinal) {
+         for &idx in self.by_ordinal.get(&ordinal).into_iter().flatten() {
+-            self.entries[idx].live = false;
++            let entry = &mut self.entries[idx];
++            if entry.live {
++                entry.live = false;
++                self.dead += 1;
++            }
+         }
+         self.by_ordinal.remove(&ordinal);
+     }
+ 
+-    /// Drop retired entries and rebuild the indexes.
++    /// Drop retired entries and renumber the indexes.
+     ///
+     /// Separate from [`Self::retire`] because retirement is on the completion
+     /// path and this is not: an index rebuild in a completion handler is work
+     /// charged to the thing that finished rather than to the thing that grew.
++    /// [`Self::admit`] calls this on its own once retired slots outnumber live
++    /// ones; a caller may still call it early, and calling it changes no
++    /// answer and no census total — compaction is bookkeeping, and it did not
++    /// admit anything.
++    ///
++    /// Everything happens in place. The slot vector is retained, every index
++    /// bucket is renumbered through a remap the graph keeps for its capacity,
++    /// and empty buckets are dropped, so a warm compaction makes no trip into
++    /// the allocator.
+     pub fn compact(&mut self) {
+-        let live: Vec<_> = self.entries.iter().copied().filter(|e| e.live).collect();
+-        self.entries.clear();
+-        self.by_backing.clear();
+-        self.by_heap.clear();
+-        self.by_domain.clear();
+-        self.domain_only.clear();
+-        self.by_ordinal.clear();
+-        // The census is a running total across the graph's life and is not
+-        // rebuilt: compaction is bookkeeping, and it did not admit anything.
+-        let saved = self.census;
+-        for e in live {
+-            self.insert(e.ordinal, e.intent);
++        if self.dead == 0 {
++            return;
+         }
+-        self.census = saved;
++        let mut remap = std::mem::take(&mut self.remap);
++        remap.clear();
++        remap.resize(self.entries.len(), usize::MAX);
++        let mut next = 0;
++        for (old, entry) in self.entries.iter().enumerate() {
++            if entry.live {
++                remap[old] = next;
++                next += 1;
++            }
++        }
++        self.entries.retain(|entry| entry.live);
++        debug_assert_eq!(self.entries.len(), next);
++        remap_buckets(&mut self.by_backing, &remap);
++        remap_buckets(&mut self.by_heap, &remap);
++        remap_buckets(&mut self.by_domain, &remap);
++        remap_buckets(&mut self.domain_only, &remap);
++        // Retired ordinals already left this index; its buckets only move.
++        remap_buckets(&mut self.by_ordinal, &remap);
++        self.dead = 0;
++        self.remap = remap;
+     }
+ }
+ 
+@@ -526,6 +598,64 @@ mod tests {
+         );
+     }
+ 
++    /// **A steady working set keeps the graph the size of the working set.**
++    ///
++    /// The defect this pins: retirement cleared a flag and left the slot, so a
++    /// session that admitted and retired the same few resources for forty
++    /// minutes handed every admission a candidate list the length of the
++    /// session, and the drain thread spent nine tenths of its time walking
++    /// retired slots. Nobody called `compact`, because nothing made anyone.
++    ///
++    /// The bound is checked after every admission, not only at the end: a
++    /// graph that compacted once at the end would also pass a final reading.
++    #[test]
++    fn a_steady_working_set_keeps_the_graph_bounded_without_a_caller_compacting() {
++        let mut g = DependencyGraph::new();
++        let intents = [
++            intent(AccessKey::Whole(res(1)), AccessMode::Write),
++            intent(AccessKey::Whole(res(2)), AccessMode::Read),
++            intent(AccessKey::DomainOnly, AccessMode::Unknown),
++            intent(
++                AccessKey::Heap(HeapId {
++                    id: 3,
++                    membership_generation: 1,
++                }),
++                AccessMode::Read,
++            ),
++        ];
++        const IN_FLIGHT: u64 = 4;
++        for n in 1..=4096u64 {
++            let waits = g.admit(ord(n), &intents);
++            if n > 1 {
++                assert!(
++                    waits.contains(&ord(n - 1)),
++                    "ordinal {n} still meets the live writer just before it"
++                );
++            }
++            assert!(
++                waits.iter().all(|w| w.0 + IN_FLIGHT >= n),
++                "ordinal {n} waited for a retired transaction: {waits:?}"
++            );
++            // The bound holds at admission, which is when candidate lists are
++            // walked: the retirements below may push retired slots past the
++            // live ones, and the next admission is what pays to drop them.
++            assert!(
++                g.entries() <= 2 * g.live_accesses(),
++                "after admitting ordinal {n}: {} slots for {} live accesses",
++                g.entries(),
++                g.live_accesses()
++            );
++            if n > IN_FLIGHT {
++                g.retire(ord(n - IN_FLIGHT));
++            }
++            assert_eq!(
++                g.live_accesses(),
++                intents.len() * n.min(IN_FLIGHT) as usize,
++                "the live set is the in-flight window"
++            );
++        }
++    }
++
+     /// Ordering bought with ignorance is counted apart from ordering bought
+     /// with knowledge, so a census can say which one a workload is paying.
+     #[test]
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs b/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
+index 89cdfef3c..ab10cb709 100644
+--- a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
+@@ -3706,6 +3706,22 @@ impl GuestPageTarget {
+     fn rows_are_dense(&self) -> bool {
+         self.pitch_bytes() == u64::from(self.width) * self.bytes_per_texel()
+     }
++
++    /// `Some((need, have))` when the texels this target describes do not fit
++    /// the guest pages its runs cover.
++    ///
++    /// The relation `plan_guest_copy` is documented to leave to its caller:
++    /// `references_for_runs` clips a window to the pages it was given and
++    /// never refuses a short one, so a target can name more texels than it has
++    /// pages for. The render rail checks this before planning
++    /// (`GuestWriteDecline::WindowTooSmall`); the compute rail called the
++    /// planner directly and did not. Neutral in its answer so a caller outside
++    /// the engine can name its own refusal.
++    pub(crate) fn window_shortfall(&self) -> Option<(u64, u64)> {
++        let need = self.extent_end();
++        let have = self.window_bytes();
++        (need > have).then_some((need, have))
++    }
+ }
+ 
+ /// Copy a resident target straight into the guest's pages, with no host copy of
+@@ -4050,6 +4066,17 @@ pub(super) enum GuestWriteSource<'a> {
+     RingEntry,
+ }
+ 
++/// Arm the write debt and its page ledger without a device or a ledger entry,
++/// for a test of a caller that must settle before handing pages back. With no
++/// device context the settle has nothing to wait on and clears the flag, which
++/// is exactly the observable a caller's test needs: the flag going down proves
++/// the caller asked.
++#[cfg(test)]
++pub(crate) fn arm_guest_write_debt_for_tests(pages: &[u64]) {
++    arm_guest_write_pages(pages);
++    GUEST_WRITE_DEBT.store(true, std::sync::atomic::Ordering::Release);
++}
++
+ pub(super) fn record_guest_write_debt(
+     pools: &mut pools::ResourcePools,
+     source: GuestWriteSource<'_>,
+diff --git a/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs b/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
+index 56843beeb..a744050f9 100644
+--- a/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
+@@ -158,6 +158,22 @@ pub(super) fn direct_destination<M: HostMemory + HostOps>(
+         Some(pages),
+     ) {
+         Ok(licence) => {
++            if let Some((need, have)) = licence.target.window_shortfall() {
++                if crate::observe::first_sight(
++                    "compute_dst_window_too_small",
++                    u64::from(tex.binding),
++                ) {
++                    crate::observe::fail(format!(
++                        "compute_dst_window_too_small bind={} gva={gva:#x} dims={width}x{height} \
++                         fmt={pixel_format:#x} need={need} have={have} (the storage image names \
++                         more texels than its guest pages hold; a direct landing would write \
++                         past them, so it takes the pooled readback)",
++                        tex.binding
++                    ));
++                }
++                crate::runtime::drain::note_store_route("compute_dst_host_window_too_small");
++                return ComputeImageDestination::Host;
++            }
+             crate::runtime::drain::note_store_route("compute_dst_guest_pages");
+             // A split of the line above, so the two add up to it. Worth counting
+             // separately because the resident half is the half that needs the
+@@ -248,6 +264,22 @@ pub(super) fn mapper_ref_texture_destination<M: HostMemory + HostOps>(
+         },
+     ) {
+         Ok(licence) => {
++            if let Some((need, have)) = licence.target.window_shortfall() {
++                if crate::observe::first_sight(
++                    "compute_dst_window_too_small",
++                    u64::from(tex.binding),
++                ) {
++                    crate::observe::fail(format!(
++                        "compute_dst_window_too_small bind={} mid={mapping_id} dims={width}x{height} \
++                         need={need} have={have} (the storage image names more texels than its \
++                         guest pages hold; a direct landing would write past them, so it takes \
++                         the pooled readback)",
++                        tex.binding
++                    ));
++                }
++                crate::runtime::drain::note_store_route("compute_dst_host_window_too_small");
++                return ComputeImageDestination::Host;
++            }
+             crate::runtime::drain::note_store_route("compute_dst_guest_pages");
+             crate::runtime::drain::note_store_route(if tex.rail.residency.is_some() {
+                 "compute_dst_guest_pages_mapper_ref_texture_resident"
+diff --git a/crates/reims-vgpu/src/runtime/drain/mod.rs b/crates/reims-vgpu/src/runtime/drain/mod.rs
+index 0f1c451b9..7afb4c7c0 100644
+--- a/crates/reims-vgpu/src/runtime/drain/mod.rs
++++ b/crates/reims-vgpu/src/runtime/drain/mod.rs
+@@ -5118,6 +5118,111 @@ fn observe_page_table_nodes<H: HostMemory + HostOps>(
+ /// to happen before the packet is applied. A range that no longer translates
+ /// resolves to fewer pages than it spans, and that is not an error here — those
+ /// pages are already gone and there is nothing left to watch.
++/// Hold the guest's hand-back of pages until every writeback this device has
++/// queued into them has landed.
++///
++/// The guest frees a span's pages before it submits the `UnmapMemory` that
++/// names it, on the strength of the completion it already read for the work
++/// that used them. A GPU-direct writeback is recorded into the command stream
++/// and not waited on, so between that completion and the copy landing there is
++/// a window in which the kernel can reuse the page — and the copy then lands in
++/// whatever it put there. One macOS 15 guest panicked in `kevent_register`
++/// with `RGBA16Float` texels inside a kqueue object, with every
++/// write-after-release guard at zero, because those guards run when a write is
++/// planned and nothing runs when it lands.
++///
++/// This is the release-side twin of the reader-side settles: cheap when the
++/// debt flag is clear (one atomic load, the common case), and a bounded fence
++/// wait otherwise. The page walk runs only when something is outstanding, and
++/// on this packet it often finds nothing — the guest unwired the span first —
++/// which reads as `Unnamed` and settles unconditionally, the fail-safe
++/// direction. An `Overlap` is the finding itself: a write still in flight into
++/// pages the guest has already released, reported once per task on the
++/// always-on channel so a later panic can be attributed rather than guessed.
++fn settle_released_span<H: HostMemory + HostOps>(
++    state: &DeviceState,
++    host: &H,
++    task_id: u32,
++    gva: u64,
++    length: u64,
++) {
++    use crate::runtime::render_writeback::SettleSite;
++    let backend = crate::backend::selected();
++    if !backend.guest_writes_outstanding() {
++        return;
++    }
++    let pages: Vec<u64> = crate::runtime::gva_mem::task_gva_page_gpa_set(
++        host,
++        &state.tasks,
++        task_id,
++        gva,
++        length,
++        state.page_shift,
++    )
++    .into_iter()
++    .collect();
++    let reach = if pages.is_empty() {
++        crate::backend::GuestWriteReach::Unnamed
++    } else {
++        backend.guest_writes_reaching(&pages)
++    };
++    settle_release(SettleSite::GuestRelease, reach, || {
++        format!(
++            "guest_release_reaches_outstanding_write family=unmap_memory task={task_id} \
++             gva={gva:#x} len={length:#x} pages={} (a writeback this device queued has not \
++             landed and the guest has already released these pages; settled here, which is \
++             the last point that can hold it)",
++            pages.len()
++        )
++    });
++}
++
++/// [`settle_released_span`] for `DeleteIOSurfaceBacking2`, whose pages are the
++/// mapping's own list rather than a span to walk.
++fn settle_released_mapping(state: &DeviceState, mapping_id: u32) {
++    use crate::runtime::render_writeback::SettleSite;
++    let backend = crate::backend::selected();
++    if !backend.guest_writes_outstanding() {
++        return;
++    }
++    let reach = match state.mapping_reach_pages(mapping_id) {
++        Some(pages) if !pages.is_empty() => backend.guest_writes_reaching(&pages),
++        _ => crate::backend::GuestWriteReach::Unnamed,
++    };
++    settle_release(SettleSite::BackingRelease, reach, || {
++        format!(
++            "guest_release_reaches_outstanding_write family=delete_iosurface_backing2 \
++             mid={mapping_id} (a writeback this device queued has not landed and the guest \
++             has already released this mapping's pages; settled here)"
++        )
++    });
++}
++
++/// The shared tail of the two release settles: count the answer under the
++/// site, report an overlap once per site, and wait unless the writeback is
++/// provably elsewhere.
++fn settle_release(
++    site: crate::runtime::render_writeback::SettleSite,
++    reach: crate::backend::GuestWriteReach,
++    finding: impl FnOnce() -> String,
++) {
++    use crate::backend::GuestWriteReach as Reach;
++    note_store_route(match reach {
++        Reach::Disjoint => site.route_disjoint(),
++        Reach::Overlap => site.route_overlap(),
++        Reach::Unnamed => site.route_unnamed(),
++    });
++    if reach == Reach::Overlap
++        && crate::observe::first_sight("guest_release_reaches_outstanding_write", site as u64)
++    {
++        crate::observe::fail(finding());
++    }
++    if reach == Reach::Disjoint {
++        return;
++    }
++    crate::runtime::render_writeback::settle_guest_writes(site);
++}
++
+ fn note_released_or_remapped<H: HostMemory + HostOps>(
+     state: &mut DeviceState,
+     host: &H,
+@@ -5421,6 +5526,12 @@ fn apply_map_family<H: HostMemory + HostOps>(
+         // views so the next ensure_gva_view re-walks. Does not invent
+         // PTEs and does not destroy host_gva_surfaces content.
+         if gva != 0 && length != 0 {
++            // Before anything else, because everything else here forgets the
++            // span: a writeback this device queued into these pages must land
++            // before the guest's allocator hands them to someone else.
++            if matches!(family, MapFamily::UnmapMemory) {
++                settle_released_span(state, host, task_id, gva, length);
++            }
+             // Held bind resolutions over this range name pages the guest
+             // has just remapped. Retired by range, which is exactly what
+             // this notify carries.
+@@ -5483,6 +5594,9 @@ fn apply_map_family<H: HostMemory + HostOps>(
+         // resolve proves which incarnation this delete was for
+         // (fingerprint compare in mapper::resolve). A second delete
+         // with no resolve between is genuinely dead: tear down fully.
++        // Same obligation as the unmap arm, keyed by the mapping whose pages
++        // are going back: a queued writeback into them must land first.
++        settle_released_mapping(state, object_id);
+         let mode = if state.mapping_backing_condemned(object_id) {
+             let _ = state.unmap_surface(object_id);
+             "dead"
+diff --git a/crates/reims-vgpu/src/runtime/drain/tests.rs b/crates/reims-vgpu/src/runtime/drain/tests.rs
+index a8fb6152c..48ffd9f18 100644
+--- a/crates/reims-vgpu/src/runtime/drain/tests.rs
++++ b/crates/reims-vgpu/src/runtime/drain/tests.rs
+@@ -4238,6 +4238,48 @@ fn unmap_memory_retains_gva_host_cache_for_sample() {
+     assert_eq!(state.retired_views, vec![(0xfeed_0000, 0x10000)]);
+ }
+ 
++/// The guest hands a span's pages back on the strength of a completion it read
++/// before a writeback this device queued into them has landed, and the kernel
++/// can reuse the page before the copy arrives. The unmap is the last point that
++/// can hold that write, so it settles whenever a writeback is outstanding and
++/// the span cannot be proven disjoint — here the task has no page table, so the
++/// walk names nothing and the answer is `Unnamed`, the fail-safe direction.
++///
++/// Vulkan rail by name: the write debt is the Vulkan engine's, and with no
++/// device context its settle has nothing to wait on and clears the flag, which
++/// is the observable that proves the release asked.
++#[cfg(feature = "backend-vulkan")]
++#[test]
++fn unmap_memory_settles_an_outstanding_writeback_before_the_pages_go_back() {
++    use crate::backend::vulkan::engine;
++    use crate::model::CHILD_OP_UNMAP_MEMORY;
++    use crate::protocol::endian::{st32, st64};
++
++    let mut host = FakeHost::new();
++    let mut state = DeviceState::new(DeviceId(1), PAGE_SHIFT_X86);
++    engine::arm_guest_write_debt_for_tests(&[0x1234_5000]);
++    assert!(engine::guest_writes_outstanding());
++
++    let mut unmap_pl = vec![0u8; 20];
++    st32(&mut unmap_pl[0..4], 1);
++    st64(&mut unmap_pl[4..12], 0x2c22000);
++    st64(&mut unmap_pl[12..20], 0x10000);
++    let unmap = Packet {
++        opcode: CHILD_OP_UNMAP_MEMORY,
++        stamp_waits: Vec::new(),
++        total_size: PACKET_HEADER_LEN + 20,
++        completion_stamp: 0,
++        payload: unmap_pl,
++        next_head: 0,
++    };
++    process_child_packet(&mut state, &mut host, 2, &unmap);
++
++    assert!(
++        !engine::guest_writes_outstanding(),
++        "the release must settle a writeback it cannot prove disjoint"
++    );
++}
++
+ /// RE pageBacking Invalidate: clr hostValid → bump content_generation.
+ #[test]
+ fn invalidate_resources_bumps_mapping_content_generation() {
+diff --git a/crates/reims-vgpu/src/runtime/mapper/mod.rs b/crates/reims-vgpu/src/runtime/mapper/mod.rs
+index 835e7c90c..7d7c0d4e5 100644
+--- a/crates/reims-vgpu/src/runtime/mapper/mod.rs
++++ b/crates/reims-vgpu/src/runtime/mapper/mod.rs
+@@ -2101,7 +2101,7 @@ pub(crate) fn note_physical_page_write_footprint(
+     footprint.visit_window(off, len, crate::observe::footprint::note_written_range);
+ }
+ 
+-fn note_page_write_footprint(
++pub(crate) fn note_page_write_footprint(
+     page_size: u64,
+     off: u64,
+     len: u64,
+diff --git a/crates/reims-vgpu/src/runtime/render_writeback/mod.rs b/crates/reims-vgpu/src/runtime/render_writeback/mod.rs
+index 1c6cd890e..95e62fff9 100644
+--- a/crates/reims-vgpu/src/runtime/render_writeback/mod.rs
++++ b/crates/reims-vgpu/src/runtime/render_writeback/mod.rs
+@@ -714,6 +714,20 @@ settle_sites! {
+     MappingBytesWrite => "settle_mapping_bytes_write",
+     /// `mapper::read_mapping_bytes`.
+     MappingBytesRead => "settle_mapping_bytes_read",
++    /// `drain::apply_map_family` on `UnmapMemory` — the guest handing a GVA
++    /// span's pages back to its allocator. Not a reader: the pages are about
++    /// to belong to someone else, and a writeback still queued into them lands
++    /// in whatever the kernel puts there next. A macOS 15 guest panicked with
++    /// `RGBA16Float` texels inside a kqueue object after exactly that, while
++    /// every write-after-release guard stayed at zero — they all fire at plan
++    /// time, and the GPU landing hundreds of microseconds later calls none of
++    /// them. The guest unwires the span before it submits this packet, so this
++    /// settle is already late for a copy that has landed; it is the last point
++    /// that can hold one that has not.
++    GuestRelease => "settle_guest_release",
++    /// `drain::apply_map_family` on `DeleteIOSurfaceBacking2` — the same
++    /// hand-back for a mapping's pages, keyed by mapping instead of by span.
++    BackingRelease => "settle_backing_release",
+ }
+ 
+ /// Block until every guest-page write this device has submitted has executed.
+diff --git a/crates/reims-vgpu/src/runtime/render_writeback/vulkan.rs b/crates/reims-vgpu/src/runtime/render_writeback/vulkan.rs
+index 082051978..2441bf350 100644
+--- a/crates/reims-vgpu/src/runtime/render_writeback/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/render_writeback/vulkan.rs
+@@ -862,6 +862,14 @@ pub(crate) fn licence_gva_plane<M: HostMemory + HostOps>(
+     // under-recorded — the direction that costs a re-read instead of a wrong
+     // frame.
+     state.note_host_wrote_pages(gpas.to_vec());
++    // The boot-wide write footprint, so a panic's page number can be looked up
++    // against this rail too. The mapper-ref licence marks it; this one did not,
++    // and a page this rail wrote read as "never written by this device".
++    // Marked over the copy's extent within the walked pages, before the
++    // submit — the over-recording direction, as the mapper's own note says.
++    crate::runtime::mapper::note_page_write_footprint(page_size, in_page, extent, |i| {
++        gpas.get(i).map(|&gpa| Some(gpa))
++    });
+     Ok(GvaPlaneLicence {
+         target,
+         gpas: gpas.to_vec(),
