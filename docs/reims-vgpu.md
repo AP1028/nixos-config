@@ -53,6 +53,38 @@ What works:
   guest's first WindowServer frame is presented
   (`first guest frame presented via rail resident (same-device zero-copy)`).
 
+### OpenCore auto-boot (fixed 2026-09-21)
+
+The imported guest did not boot unattended: OpenCore's picker defaulted to its
+own ESP entry ("EFI"), which just re-runs OpenCore, so every boot needed a
+manual Right-Arrow + Enter. Cause: OSX-KVM's `config.plist` ships
+`Misc/Security/ScanPolicy = 0`, i.e. scan every filesystem and device, so the
+OpenCore disk's `\EFI\BOOT\BOOTX64.EFI` is scanned and becomes the first (and
+therefore default) entry. OpenCore's documented macOS-only policy is
+`0x10F0103` — the two locks plus APFS and SATA/SAS/SCSI/NVMe/PCI, with no ESP
+— which removes the EFI entry and leaves macOS as the only entry, so the 2 s
+timeout boots it.
+
+Applied offline to the OpenCore image (partition 1 starts at sector 2048):
+
+```sh
+qemu-img convert -f qcow2 -O raw OpenCore.qcow2 OpenCore.raw
+mcopy -i OpenCore.raw@@1048576 ::/EFI/OC/config.plist config.plist
+python3 - <<'PY'
+import plistlib
+d = plistlib.load(open('config.plist','rb'))
+d['Misc']['Security']['ScanPolicy'] = 0x10F0103
+plistlib.dump(d, open('config.plist','wb'))
+PY
+mcopy -o -i OpenCore.raw@@1048576 config.plist ::/EFI/OC/config.plist
+qemu-img convert -f raw -O qcow2 OpenCore.raw OpenCore-patched.qcow2
+```
+
+The result is the snapshot `base-autoboot` (now `current`); `base` is kept as
+the unpatched history. Verified: a `--testing` boot reaches macOS with no
+keypress. Any future re-import of an OSX-KVM OpenCore image needs this edit
+again (or boot once, set Startup Disk, and `--capture` a new snapshot).
+
 What fails, every time, with `--device reims-vgpu-pci`:
 
 - The guest never reaches the desktop. It gets as far as the first
