@@ -266,6 +266,48 @@ reims-vgpu-boot --rail macos-13 --interactive --device reims-vgpu-pci   # accele
 reims-vgpu-boot --rail macos-13 --testing     --device reims-vgpu-pci   # 7-min, auto-revert
 ```
 
+### Persistence
+
+The harness is **snapshot-revert by design**: `--testing` and `--interactive`
+boot a throwaway COW clone and discard it on exit, and `--capture` only
+promotes the clone to a new snapshot on a *clean* guest shutdown. A session
+that crashes on the way out is lost.
+
+For a normal persistent VM there is a locally patched boot class,
+`--persistent`:
+
+```sh
+reims-vgpu-boot --rail macos-13 --persistent --device reims-vgpu-pci
+```
+
+It ignores rails and snapshots and boots the provisioned masters write-through:
+
+| File | Path |
+|---|---|
+| Guest disk | `~/reims-vgpu/vm/disks/macos.img` |
+| OpenCore | `~/reims-vgpu/vm/disks/OpenCore.qcow2` |
+| OVMF vars | `~/reims-vgpu/vm/ovmf/OVMF_VARS-1920x1080.fd` |
+
+Everything lands on those files as it happens — verified by writing a file in
+the guest, `SIGKILL`ing QEMU, rebooting, and finding the file still there. The
+masters were seeded from the `base-autoboot` snapshot with `cp --reflink=auto`
+(free on btrfs). To reset the machine, re-copy them from a snapshot. The
+revert classes remain available and are the right choice for experiments.
+
+### The 2026-09-21 shutdown freeze
+
+One long session ended in a "freeze": QEMU was actually **SIGABRT**ing in
+`qemu_alloc_stack` — its `mmap` for a coroutine stack failed during the guest
+shutdown's disk flush (`dma_blk_write` → `blk_aio_pwritev` →
+`qemu_coroutine_create` → `qemu_alloc_stack` → `abort`). The process then hung
+in the kernel's coredump path, because the core's ELF note exceeded
+`kernel.core_file_note_size_limit` (the dump was 10.3 GB), which is what the
+desktop saw as a freeze. Host had 52 GiB free, `vm.max_map_count` was already
+1 MiB and there was no OOM, so the cause of the failed `mmap` is still open
+(likely VMA exhaustion over a long session; a long watch of
+`/proc/<qemu>/maps` is the instrument). `--persistent` means a crash like this
+no longer costs the session's work.
+
 - The display is a **Rust-owned winit + Vulkan window** ("Reims vGPU") opened
   by the device itself; QEMU is started with `-display none`. On KDE Wayland
   it grabs `Meta`/`Alt`/`Ctrl` chords for the guest — **`Ctrl+Alt+Esc`
