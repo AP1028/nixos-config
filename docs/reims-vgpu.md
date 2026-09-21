@@ -113,6 +113,44 @@ console path:
 reims-vgpu-boot --rail macos-13 --interactive --device vmware-svga
 ```
 
+### Guest panic narrowed to the host-pointer import rail (2026-09-21)
+
+With the device the guest reaches the **login window in ~20 s** (the compositor
+renders through reims-vgpu: presents at 24-30 Hz), then the guest kernel panics
+~4-6 s later in roughly 60 % of boots. A serial capture (`debug=0x8 -v` in
+`boot-args`) shows a NULL page fault in the kernel — one capture was
+`vnode_getiocount` ← APFS `getattrlistbulk` in a `com.apple.Mobile*` task — and
+the earlier "wedges" were the panic rendezvous (other CPUs spinning). The
+`vmware-svga` arm boots and stays at the login screen (3/3 controls).
+
+Measured with a boot+60 s-soak harness (`/tmp/opencode/reims-debug/`):
+
+- default (host-pointer imports on): ~60 % of boots die within seconds of the
+  login window; 2/2 died in the final control window.
+- `REIMS_VGPU_GUEST_IMPORT=off`: **5/5 survived**, across separate runs.
+- Narrowing switches that did *not* help: `LAZY_WRITEBACK=off`,
+  `STAMP_COALESCE=off`, `SHARED_TARGET=off`, `GPU_STAMP=off`,
+  `PUSH_DESCRIPTORS=off`, `DYNAMIC_RENDERING=off`, `BUFFER_EXTENT=off`,
+  `PRESENT_DEPTH=1`, `SWAPCHAIN_FIFO=on`, `UNUSED_BINDS=off`,
+  `SAMPLED_IDENTITY=off`, `PAGE_GUARDS=off`, `BATCH_DRAWS=1`, 4 vCPUs.
+- `REIMS_VGPU_WINDOW=0` is not usable: the guest never reaches WindowServer
+  (the device's presentation is what the guest's display path waits on).
+- The device reports no declines and the page-table coverage probe
+  (`RANGE_COVERAGE=on`) shows no map-side divergence, so this is not the
+  known guest page-table assertion class.
+
+The packed-alias rails (`zc_packed_alias_import`, `zc_packed_ramblock`) only
+run when host-pointer imports are on, so the corruption is either in the
+RAMBlock import path or in those rails. Upstream's own note in
+`packed_alias_import_align` describes a sibling failure of the same shape
+("an 8 GiB-or-larger guest on a host whose importable heap is smaller … dies,
+while the same guest with `REIMS_VGPU_GUEST_IMPORT=off` works").
+
+**Workaround for this host:** boot with `REIMS_VGPU_GUEST_IMPORT=off` (slower —
+the copying rails instead of zero-copy — but stable). Under test: lowering
+`IMPORT_SPAN_CEILING` from 2 GiB to 1 GiB, because the imports this host
+requests are exactly 2 GiB chunks.
+
 ## How the package was made (things that bit)
 
 Recorded so a future bump does not have to rediscover them:

@@ -311,6 +311,13 @@ let
       pkgs.spirv-tools
     ]}:$PATH"
 
+    # Host workaround (asusg16): with host-pointer imports enabled the guest
+    # kernel panics seconds after the login window on roughly 60% of boots
+    # (NVIDIA 595.99 / RTX 5080). With the importing rails off the same guest
+    # survives (5/5 in a soak harness) at the cost of the copying rails.
+    # See docs/reims-vgpu.md. Set REIMS_VGPU_GUEST_IMPORT=on to opt back in.
+    export REIMS_VGPU_GUEST_IMPORT="''${REIMS_VGPU_GUEST_IMPORT:-off}"
+
     exec ${bootScript}/libexec/reims-vgpu/boot-x86.sh "$@"
   '';
 in
