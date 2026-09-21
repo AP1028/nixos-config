@@ -1,5 +1,5 @@
-# DeepSeek Harness (dsh) — built from the upstream monorepo at dsh-v0.1.0-rc.8
-# (commit 141eb6fef83422698aef7a981029e843e8161534).
+# DeepSeek Harness (dsh) — built from the upstream monorepo at dsh-v0.1.6-alpha.2
+# (commit ddefc45fbc7f8e46dd73185e68295696d1297887).
 #
 # Uses the upstream pnpm-lock.yaml via fetchPnpmDeps and builds the TS/web
 # workspace with pnpmBuildHook. The whole tree is shipped because dsh resolves
@@ -12,12 +12,13 @@
 # - #553134: npm-artifact packaging; this config replaces that with upstream
 #   source now that a matching public tag exists.
 # - #554081: simplified pnpm build + web boot test; we keep its install layout
-#   and add back native landlock, Nix bash, slim Node runtime, and richer
+#   and add back native landlock, Nix bash, official Node runtime, and richer
 #   install checks.
 #
 # Update notes: bump `version`, `rev`/`hash`, and the `fetchPnpmDeps` hash. The
 # source tarball has no .git, so also update `DSH_CLIENT_COMMIT_HASH` in
-# `preBuild` to the new pinned commit.
+# `preBuild` to the new pinned commit. Bump `nodeRuntimeVersion` (and its hash)
+# when upstream moves to a Node release the current runtime cannot run.
 
 {
   lib,
@@ -25,9 +26,12 @@
   bashInteractive,
   fetchFromGitHub,
   fetchPnpmDeps,
+  fetchurl,
+  glibc,
   makeBinaryWrapper,
   nodejs_24,
   nodejs-slim_24,
+  patchelf,
   pkgsStatic,
   pnpm_11,
   pnpmBuildHook,
@@ -36,18 +40,64 @@
 }:
 
 let
-  runtimeNode = nodejs-slim_24;
-  runtimePnpm = pnpm_11.override { nodejs-slim = runtimeNode; };
+  # dsh's profile resolution loads internal Node modules through
+  # node-addon-require-builtin, whose native addon pattern-matches the getter
+  # code inside the running Node executable. The Nixpkgs-built Node is not
+  # recognized (GCC emits an extra `xor edi,edi` before the getter's `ret`),
+  # so the runtime is the official upstream build, patched to run on NixOS.
+  # The Nixpkgs Node still drives the pnpm build.
+  nodeRuntimeVersion = "24.19.0";
+
+  runtimeNode = stdenv.mkDerivation {
+    pname = "dsh-runtime-node";
+    version = nodeRuntimeVersion;
+
+    src = fetchurl {
+      url = "https://nodejs.org/dist/v${nodeRuntimeVersion}/node-v${nodeRuntimeVersion}-linux-x64.tar.xz";
+      hash = "sha256-FLNC5xIE+BG95hU76OBLYq72PCNv75K1X5yDFUtAlkc=";
+    };
+
+    nativeBuildInputs = [ patchelf ];
+
+    dontConfigure = true;
+    dontBuild = true;
+    dontStrip = true;
+    dontPatchELF = true;
+
+    installPhase = ''
+      runHook preInstall
+
+      mkdir -p $out/bin
+      cp bin/node $out/bin/node
+      patchelf \
+        --set-interpreter ${stdenv.cc.bintools.dynamicLinker} \
+        --set-rpath ${lib.makeLibraryPath [ glibc stdenv.cc.cc.lib ]} \
+        $out/bin/node
+
+      runHook postInstall
+    '';
+
+    meta = {
+      description = "Node.js runtime for dsh (official upstream build)";
+      homepage = "https://nodejs.org";
+      license = lib.licenses.mit;
+      mainProgram = "node";
+      platforms = [ "x86_64-linux" ];
+      sourceProvenance = with lib.sourceTypes; [ binaryNativeCode ];
+    };
+  };
+
+  runtimePnpm = pnpm_11.override { nodejs-slim = nodejs-slim_24; };
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "deepseek-harness";
-  version = "0.1.0-rc.8";
+  version = "0.1.6-alpha.2";
 
   src = fetchFromGitHub {
     owner = "deepseek-ai";
     repo = "deepseek-harness";
-    rev = "141eb6fef83422698aef7a981029e843e8161534";
-    hash = "sha256-FzToX43k6upXkwTxTYXHRK5IdatxibxeZgZBpuDE7S4=";
+    rev = "ddefc45fbc7f8e46dd73185e68295696d1297887";
+    hash = "sha256-zoO7+AFR5KiNgmA+4agclQm7oPiE+T0WgMCM0j4Vcdw=";
   };
 
   # fetchPnpmDeps downloads the entire dependency tree (several GB of
@@ -67,7 +117,7 @@ stdenv.mkDerivation (finalAttrs: {
     inherit (finalAttrs) pname version src;
     pnpm = pnpm_11;
     fetcherVersion = 4;
-    hash = "sha256-+PsdK9u3ZKv4XtSc8tBKKP48J/95/CGTMIUf8Q8dbok=";
+    hash = "sha256-ec8cTYvji3Xw5+vkETJk62aZ8Ku0YEU9rrUvgcmT6LY=";
   }).overrideAttrs (old: {
     installPhase = ''
       runHook preInstall
@@ -137,7 +187,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   postPatch = ''
     # Nixpkgs' static musl compiler replaces upstream's expected musl-gcc.
-    substituteInPlace native/landlock-run/scripts/build.ts \
+    substituteInPlace native/system/scripts/build.ts \
       --replace-fail \
         "'musl-gcc'" \
         "'${lib.getExe pkgsStatic.stdenv.cc}'"
@@ -176,11 +226,11 @@ stdenv.mkDerivation (finalAttrs: {
   preBuild = ''
     # Source tarballs do not include .git; supply the pinned commit hash that
     # scripts/client-build-environment.ts embeds into client artifacts.
-    export DSH_CLIENT_COMMIT_HASH=141eb6f
+    export DSH_CLIENT_COMMIT_HASH=ddefc45
   '';
 
   postBuild = ''
-    pnpm --dir native/landlock-run run build:native
+    pnpm --dir native/system run build:native
   '';
 
   installPhase = ''
@@ -260,8 +310,14 @@ stdenv.mkDerivation (finalAttrs: {
       sleep 0.1
     done
     test -n "''${webUrl:-}"
+    # The token URL answers with a 303 that mints the session cookie; the
+    # index itself is then served from the clean root URL.
     WEB_URL="$webUrl" ${lib.getExe runtimeNode} <<'NODE'
-    const response = await fetch(process.env.WEB_URL);
+    const root = new URL(process.env.WEB_URL);
+    const landing = await fetch(root, { redirect: "manual" });
+    const cookie = landing.headers.getSetCookie()[0]?.split(";")[0];
+    if (landing.status !== 303 || cookie === undefined) process.exit(1);
+    const response = await fetch(new URL("/", root), { headers: { cookie } });
     if (!response.ok || !(await response.text()).includes("<html")) process.exit(1);
     NODE
 
@@ -293,9 +349,24 @@ stdenv.mkDerivation (finalAttrs: {
     });
     NODE
 
-    landlock="$app/native/landlock-run/packages/linux-x64/bin/landlock-run"
+    landlock="$app/native/system/packages/linux-x64/bin/landlock-run"
     test -x "$landlock"
     "$landlock" --probe | grep -Eq '^landlock: (fully|partially) enforced$'
+
+    flockGlibc="$app/native/system/packages/linux-x64/bin/glibc/system.node"
+    flockMusl="$app/native/system/packages/linux-x64/bin/musl/system.node"
+    test -f "$flockGlibc" -a -f "$flockMusl"
+    (cd "$app" && ${lib.getExe runtimeNode} --input-type=module <<'NODE'
+    import { closeSync, mkdtempSync, openSync } from "node:fs";
+    import { tmpdir } from "node:os";
+    import { join } from "node:path";
+    const { tryLockExclusive } = await import("@deepseek-ai/node-addon-system/flock");
+    const dir = mkdtempSync(join(tmpdir(), "dsh-flock-"));
+    const fd = openSync(join(dir, "lock"), "w");
+    await tryLockExclusive(fd);
+    closeSync(fd);
+    NODE
+    )
 
     if find "$app" -type l ! -exec test -e {} \; -print -quit | grep -q .; then
       find "$app" -type l ! -exec test -e {} \; -print >&2
