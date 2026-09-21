@@ -1,0 +1,187 @@
+# Reims vGPU on asusg16
+
+Reims vGPU (`github:steelbrain/reims-vgpu`) is an alpha research project that
+gives an **unmodified macOS guest** accelerated graphics under QEMU. macOS
+ships the driver itself (`AppleParavirtGPU.kext`); this project provides the
+QEMU device that driver binds to and executes the guest's GPU command stream
+through Vulkan on the host. Nothing is installed in the guest.
+
+This document records what is packaged in this repo, what was set up by hand,
+and what remains imperative.
+
+## What is packaged, and what is not
+
+| Piece | Where it lives | Built by |
+|---|---|---|
+| `qemu-system-x86_64` (QEMU fork + `reims-vgpu-pci` device, Rust staticlib linked in, Vulkan backend) | nix store | `packages/reims-vgpu/default.nix` |
+| `reims-vgpu-gop.rom` (UEFI GOP PCI option ROM) | nix store | same file |
+| `reims-vgpu-boot` (wrapper around upstream `vm/boot-x86.sh`) | nix store | same file |
+| macOS guest disk, OpenCore, OVMF vars, snapshot rails, logs | `~/reims-vgpu/vm/` (mutable, never in the store) | OSX-KVM + the boot harness |
+| OSX-KVM provisioning clone | `~/OSX-KVM/` | manual |
+
+The upstream project has **no packaging**: `vm/boot-x86.sh` is written to be
+run from a git clone and rebuilds both the QEMU fork and the option ROM on
+every boot. The package turns those two build steps into pinned derivations
+and patches a store copy of the boot script so it uses them instead:
+
+- `QEMU_BIN_DEFAULT` → the store QEMU,
+- `_reims_vgpu_gop_default` → the store ROM,
+- the `ensure_rust_tools` / `build_reims_vgpu_efi` calls → `:` (no cargo or
+  rustup needed at boot time; the two lines are replaced with `sed` anchored
+  to the bare call lines, so the function definitions stay intact).
+
+Pinned revisions (in `flake.nix`, both source-only inputs, `flake = false`):
+
+- `reims-vgpu` — `69a57dd69a6958e946c03b73e02db331f330f435` (master, 2026-09-03)
+- `qemu-reims-vgpu` — `bd88218da09b86ed9c78bf5f9354168812a7ba6b`, the exact
+  commit the superproject's `vendor/qemu` gitlink points at.
+
+Bump both together and re-check `packages/reims-vgpu/reims-vgpu-efi.Cargo.lock`
+if the UEFI crate's dependencies changed.
+
+## How the package was made (things that bit)
+
+Recorded so a future bump does not have to rediscover them:
+
+- **Rust**: the host workspace (`crates/*`) vendors through
+  `rustPlatform.importCargoLock`; the only git dependency is `metal2vulkan`,
+  whose `outputHashes` entry is the fetchgit hash of its revision. The UEFI
+  crate is a **separate workspace with no `Cargo.lock` upstream**; the lock
+  next to `default.nix` was generated once (`cargo generate-lockfile`) and is
+  copied into the tree before building.
+- **rust-overlay** is required only for `x86_64-unknown-uefi` std, which
+  nixpkgs' rustc does not ship.
+- **QEMU subprojects**: `configure` hard-requires `subprojects/keycodemapdb`,
+  and `tests/fp` (always configured, gated on TCG) pulls in
+  `berkeley-softfloat-3` / `berkeley-testfloat-3`. The sandbox has no network,
+  so all three are fetched with `fetchgit` and dropped into place, with
+  QEMU's meson glue from `subprojects/packagefiles/` overlaid on the two
+  float libraries (what a wrap's `patch_directory` would do). `--disable-download`
+  makes a missing subproject a configure error instead of a network attempt.
+- **Python**: QEMU's configure builds its own venv and installs its vendored
+  meson wheel; `mkvenv` needs `distlib`/`packaging`, and the "tooling" group
+  wants `setuptools`/`wheel`/`pip` visible so it does not reach for PyPI.
+  Hence `python3.withPackages`.
+- **RPATH**: QEMU's meson install drops the build-tree rpath, so
+  `autoPatchelfHook` is needed to point the binary back at its store
+  libraries.
+- **Runtime dlopens**: the Rust staticlib loads `libvulkan.so.1` (ash), winit
+  loads its windowing libraries, and `metal2vulkan` spawns `llvm-dis` and
+  `spirv-val` per uncached shader. None of those are `DT_NEEDED`, so the QEMU
+  wrapper prepends `LD_LIBRARY_PATH` (vulkan-loader, wayland, libxkbcommon)
+  and `PATH` (llvm, spirv-tools).
+- **Bash scripts lose their shebang interpreter in the sandbox**
+  (`/usr/bin/env` does not exist); the UEFI ROM builder is invoked via `bash`.
+
+## Provisioning the macOS guest (the manual part)
+
+`macOS 13 Ventura` is the version the project recommends; the disk is
+**512 GiB thin** (qcow2 only grows with what macOS actually writes).
+
+1. **Fetch the installer media** (Ventura = menu entry 6):
+
+   ```sh
+   git clone --depth 1 --recursive https://github.com/kholia/OSX-KVM ~/OSX-KVM
+   cd ~/OSX-KVM
+   ./fetch-macOS-v2.py          # choose 6 (Ventura); ~700 MB download + verify
+   dmg2img -i BaseSystem.dmg BaseSystem.img
+   qemu-img create -f qcow2 mac_hdd_ng.img 512G
+   ```
+
+2. **Install macOS** — interactive, needs the GUI window and keyboard:
+
+   ```sh
+   cd ~/OSX-KVM && ./OpenCore-Boot.sh
+   ```
+
+   In Disk Utility: erase/format the 512 GiB disk as APFS, then install.
+   Expect several reboots and the Setup Assistant. Afterwards, inside the
+   guest: enable **Remote Login** (System Settings → General → Sharing),
+   disable sleep/screensaver, and optionally install an SSH key.
+
+3. **Place the artifacts** where `reims-vgpu-boot` expects them:
+
+   ```sh
+   mkdir -p ~/reims-vgpu/vm/disks ~/reims-vgpu/vm/ovmf
+   cp ~/OSX-KVM/mac_hdd_ng.img          ~/reims-vgpu/vm/disks/macos.img
+   cp ~/OSX-KVM/OpenCore/OpenCore.qcow2 ~/reims-vgpu/vm/disks/OpenCore.qcow2
+   cp ~/OSX-KVM/OVMF_CODE_4M.fd         ~/reims-vgpu/vm/ovmf/OVMF_CODE_4M.fd
+   cp ~/OSX-KVM/OVMF_VARS-1920x1080.fd  ~/reims-vgpu/vm/ovmf/OVMF_VARS-1920x1080.fd
+   ```
+
+   `OVMF_VARS` is the NVRAM that the installer wrote to — copy the **post-
+   install** file, not the pristine template. The `.img` name is a misnomer:
+   the file stays qcow2 and the boot script passes `format=qcow2`.
+
+4. **Freeze the first immutable snapshot** (boots writable; a clean guest
+   shutdown captures it):
+
+   ```sh
+   mkdir -p ~/reims-vgpu/vm/disks/rails/macos-13
+   reims-vgpu-boot --rail macos-13 --capture --device vmware-svga
+   ```
+
+## Day-to-day use
+
+```sh
+reims-vgpu-boot --rail macos-13 --interactive --device reims-vgpu-pci   # accelerated GUI
+reims-vgpu-boot --rail macos-13 --testing     --device reims-vgpu-pci   # 7-min, auto-revert
+```
+
+- The display is a **Rust-owned winit + Vulkan window** ("Reims vGPU") opened
+  by the device itself; QEMU is started with `-display none`. On KDE Wayland
+  it grabs `Meta`/`Alt`/`Ctrl` chords for the guest — **`Ctrl+Alt+Esc`
+  releases them**.
+- Every boot clones the selected snapshot with `cp --reflink=auto` (btrfs on
+  `/home`, so clones are metadata-only) and **throws the clone away on exit**.
+  Only `--capture` plus a clean guest shutdown persists anything.
+- `--testing` is the agent/measurement boot: 420 s hard kill, capture-then-
+  revert, distinct exit codes (124 wedge, 125 firmware abort, 126 guest
+  panic).
+- SSH into the guest is forwarded to `localhost:2222`; serial logs, QMP
+  sockets and trace logs land in `~/reims-vgpu/vm/disks/run/`; the always-on
+  device failure log is `/tmp/reims-vgpu-fail.log`.
+
+## State layout
+
+```
+~/reims-vgpu/vm/
+├── disks/
+│   ├── macos.img                 # provisioned master (only used to bootstrap)
+│   ├── OpenCore.qcow2
+│   ├── rails/macos-13/snapshots/<label>/{macos.img,OpenCore.qcow2,OVMF_VARS.fd[,OVMF_CODE.fd]}
+│   │   └── current -> <label>
+│   ├── rails/current -> macos-13
+│   └── run/                      # per-boot clones, serial-*.log, qmp-*.sock, trace-*.log
+└── ovmf/
+    ├── OVMF_CODE_4M.fd
+    └── OVMF_VARS-1920x1080.fd    # vars template (post-install NVRAM)
+```
+
+Override the root with `REIMS_VGPU_VM_DIR=... reims-vgpu-boot ...`; every
+`DISKS_DIR` / `OVMF_DIR` / `RAILS_DIR` / `RUN_DIR` / `QEMU_BIN` /
+`REIMS_VGPU_GOP_ROM` variable from upstream still applies.
+
+## What is deliberately still manual
+
+1. The macOS install itself (interactive, Apple-licensed, tens of GB).
+2. The first snapshot capture (a clean guest shutdown).
+3. Guest-side configuration (Remote Login, no sleep).
+4. Nothing here distributes macOS images, IPSWs or OpenCore/OVMF blobs.
+
+## Troubleshooting
+
+- `reims-vgpu-boot: no rail 'X'` — create the rail first:
+  `mkdir -p ~/reims-vgpu/vm/disks/rails/X` (the bootstrap path requires an
+  empty rail and `--capture`).
+- Host window shows nothing / no Vulkan: check that the NVIDIA ICD is visible
+  (`/run/opengl-driver/share/vulkan/icd.d/nvidia_icd.json`) and that
+  `XDG_DATA_DIRS` reaches `/run/opengl-driver/share`; the loader discovers
+  ICDs there.
+- Shader translation errors mention `llvm-dis`/`spirv-val`: the wrapper puts
+  both on `PATH`; running upstream's `vm/boot-x86.sh` by hand needs
+  `llvm` and `spirv-tools` on `PATH` (they are in `environment.systemPackages`
+  for that reason).
+- Disk only grows: there is no `discard=unmap` on the drives, so guest-side
+  deletes do not shrink the qcow2. Shut down and run
+  `qemu-img convert -O qcow2 macos.img macos-shrunk.img` to reclaim.

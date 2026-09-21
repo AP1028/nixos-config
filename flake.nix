@@ -82,6 +82,28 @@
       url = "github:utensils/comfyui-nix/60cf396864c09e954f23b31c4637c2bb65ebe085";
       inputs.nixpkgs.url = "github:NixOS/nixpkgs/f13ff45afd1bb73e640eaa08a7066dbed07e3238";
     };
+
+    # Reims vGPU (github:steelbrain/reims-vgpu) — experimental paravirtual GPU
+    # for macOS guests, alpha upstream. Source-only inputs: the project ships
+    # no flake.nix, so these are pinned trees, not flakes. The revs are the
+    # ones packages/reims-vgpu was written against; qemu-reims-vgpu is the
+    # commit the superproject's vendor/qemu gitlink points at. Bump both
+    # deliberately together. See docs/reims-vgpu.md.
+    reims-vgpu = {
+      url = "github:steelbrain/reims-vgpu/69a57dd69a6958e946c03b73e02db331f330f435";
+      flake = false;
+    };
+    qemu-reims-vgpu = {
+      url = "github:steelbrain/qemu-reims-vgpu/bd88218da09b86ed9c78bf5f9354168812a7ba6b";
+      flake = false;
+    };
+
+    # Only for rust-bin: the GOP option ROM builds for x86_64-unknown-uefi,
+    # whose std nixpkgs' rustc does not ship.
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs @ {

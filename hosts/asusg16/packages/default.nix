@@ -5,6 +5,7 @@
 {
   pkgs,
   lib,
+  inputs,
   ...
 }: let
   docSkillsNode = pkgs.callPackage ../../../packages/document-skills-node { };
@@ -35,6 +36,21 @@ in {
     (pkgs.callPackage ../../../packages/amulet-map-editor { })
     (pkgs.callPackage ../../../packages/zcode { })
     (pkgs.callPackage ../../../packages/virtuoso-cli { })
+    # Reims vGPU: experimental paravirtual GPU for macOS guests. The QEMU fork
+    # and UEFI option ROM are built from pinned sources; the macOS guest disk
+    # itself is provisioned by hand with OSX-KVM and lives outside the store.
+    # Boot with `reims-vgpu-boot ...`; see docs/reims-vgpu.md.
+    (pkgs.callPackage ../../../packages/reims-vgpu {
+      src = inputs.reims-vgpu;
+      qemuSrc = inputs.qemu-reims-vgpu;
+      rustOverlay = inputs.rust-overlay;
+    })
+    # OSX-KVM provisioning: converts the fetched BaseSystem.dmg to a raw image.
+    dmg2img
+    # Runtime shader-translation tools (metal2vulkan spawns them; boot-x86.sh
+    # preflights them). Also in the reims-vgpu-boot wrapper's PATH.
+    llvm
+    spirv-tools
     brightnessctl
     dialog
     iproute2
