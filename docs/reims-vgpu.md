@@ -39,6 +39,48 @@ Pinned revisions (in `flake.nix`, both source-only inputs, `flake = false`):
 Bump both together and re-check `packages/reims-vgpu/reims-vgpu-efi.Cargo.lock`
 if the UEFI crate's dependencies changed.
 
+## Status on asusg16 (2026-09-21)
+
+The host side is built, installed and verified; **the accelerated device does
+not boot this guest on this host yet.**
+
+What works:
+
+- The nix-built QEMU fork boots the imported macOS 13.7.8 guest to a full
+  desktop with `--device vmware-svga` (control test: Dock + WindowServer up).
+- The device itself initialises: GOP ROM installs, host window opens, Vulkan
+  device selection succeeds (NVIDIA RTX 5080 and Intel Arc both tried), the
+  guest's first WindowServer frame is presented
+  (`first guest frame presented via rail resident (same-device zero-copy)`).
+
+What fails, every time, with `--device reims-vgpu-pci`:
+
+- The guest never reaches the desktop. It gets as far as the first
+  WindowServer frame (Apple logo + progress bar ~30 %), then either the guest
+  kernel wedges — 7 of 8 vCPUs spinning at the same kernel RIP
+  (`ffffff80125bb1d2`), host ~600 % CPU, window frozen on the last frame
+  (`host_window_loop … draws_fresh=0 draws_stale=10`) — or QEMU exits cleanly
+  (guest reboot turned into an exit by `-action reboot=shutdown`).
+- Tried and identical every time: `REIMS_VGPU_DMABUF=off`, Intel Arc ICD
+  (`VK_ICD_FILENAMES=…/intel_icd.x86_64.json`), NVIDIA forced via
+  `nvidia-offload`, tmux pty vs detached launch, 8 vCPUs (the script's cap).
+- Upstream master has not moved since the pinned rev (`69a57dd`), and the open
+  upstream issues in this family (e.g. #30, "Vulkan present loop stalls …
+  NVIDIA/Linux") describe the same host class, so this looks like a device
+  defect rather than local setup.
+
+Evidence kept: `/tmp/opencode/reims-wedge-qmp.txt` (QMP register dump at the
+wedge), `/tmp/opencode/reims-wedge-fail.log` (device fail log copy),
+`/tmp/opencode/reims-*.log` (per-boot serial/host logs), plus
+`/tmp/reims-vgpu-fail.log` (always-on device channel).
+
+Until upstream fixes it, the usable boot on this host is the non-accelerated
+console path:
+
+```sh
+reims-vgpu-boot --rail macos-13 --interactive --device vmware-svga
+```
+
 ## How the package was made (things that bit)
 
 Recorded so a future bump does not have to rediscover them:
@@ -121,6 +163,14 @@ Recorded so a future bump does not have to rediscover them:
    reims-vgpu-boot --rail macos-13 --capture --device vmware-svga
    ```
 
+   **What was actually done here** was the import path from the upstream
+   README instead of a capture boot, because the guest was already installed:
+   the post-install `mac_hdd_ng.img`, `OpenCore.qcow2`, `OVMF_VARS.fd` and
+   `OVMF_CODE.fd` were copied with `cp --reflink=auto` (free on btrfs) into
+   `vm/disks/rails/macos-13/snapshots/base/`, `chmod 444`, and
+   `snapshots/current -> base`. No capture boot is needed when the guest was
+   provisioned outside the harness.
+
 ## Day-to-day use
 
 ```sh
@@ -138,9 +188,17 @@ reims-vgpu-boot --rail macos-13 --testing     --device reims-vgpu-pci   # 7-min,
 - `--testing` is the agent/measurement boot: 420 s hard kill, capture-then-
   revert, distinct exit codes (124 wedge, 125 firmware abort, 126 guest
   panic).
-- SSH into the guest is forwarded to `localhost:2222`; serial logs, QMP
-  sockets and trace logs land in `~/reims-vgpu/vm/disks/run/`; the always-on
-  device failure log is `/tmp/reims-vgpu-fail.log`.
+- SSH into the guest is forwarded to `localhost:2222` and is set up as host
+  alias `macos-vm` in `~/.ssh/config` (user `tianyixia`, key
+  `~/.ssh/id_ed25519`), which is the name the project's own probe scripts
+  expect. In `--testing` boots the serial log is
+  `~/reims-vgpu/vm/disks/run/serial-*.log`; in `--interactive` boots serial is
+  muxed onto the launcher's stdout, so run it from a terminal/tmux if you want
+  to see it. QMP sockets and trace logs land in the same `run/` directory, and
+  the always-on device failure log is `/tmp/reims-vgpu-fail.log`.
+- Because the interactive class muxes the monitor onto stdio, do **not**
+  detach it with stdin on `/dev/null` — the stdio monitor hits EOF and QEMU
+  exits cleanly. Use a real terminal or `tmux new-session -d …`.
 
 ## State layout
 
