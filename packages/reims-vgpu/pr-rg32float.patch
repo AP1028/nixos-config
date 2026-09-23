@@ -241,6 +241,33 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs b/crates/reims-v
      }
  
      fn render_target_layout_supported(
+diff --git a/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs b/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
+--- a/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
+@@ -687,6 +687,11 @@
+                 // is the member a guest was measured binding.
+                 p::MTL_FORMAT_RGB10A2_UNORM,
+                 p::MTL_FORMAT_RG11B10_FLOAT,
++                // Two 32-bit floats, the scene intermediate a driven title
++                // samples in its full-screen composite. `R32G32_SFLOAT` is the
++                // guest's own word, so the sampled bind is native and nothing
++                // converts.
++                p::MTL_FORMAT_RG32_FLOAT,
+                 p::MTL_FORMAT_BGR10A2_UNORM,
+                 // The BC block-compressed families, in `EXPECTED`'s order.
+                 // Named unconditionally here because `sampled_pixels` is a
+@@ -798,6 +803,11 @@
+                 // GPU-direct copy and, since the readback learned to carry its
+                 // own texel, the copying arm as well.
+                 p::MTL_FORMAT_RG16_UINT,
++                // The scene intermediate above, admitted as an attachment for
++                // the same reason it is admitted as a sample: a driven title
++                // renders its scene into one and refuses every such pass
++                // (`rt_resolve reason=rt_linear_format`) without it.
++                p::MTL_FORMAT_RG32_FLOAT,
+                 // Admitted since the two arms became one answer. The contract
+                 // has said a half-float render target is renderable since one
+                 // could be created at that format; only this side still refused
 diff --git a/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs b/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
 --- a/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
 +++ b/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs

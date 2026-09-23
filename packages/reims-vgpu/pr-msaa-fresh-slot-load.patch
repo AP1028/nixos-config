@@ -1,0 +1,135 @@
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
+--- a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
+@@ -3794,23 +3794,41 @@
+             }
+         };
+     let _multisample_source_image = if req.multisample_resolve {
+-        let (image, _view, framebuffer) = pools.acquire_multisample_target(
+-            ctx,
+-            super::pools::MultisampleTargetKey {
+-                width: req.width,
+-                height: req.height,
+-                format: color0_format,
+-                samples: raster_sample_count,
+-                compatibility: pass_key.framebuffer_compatibility(),
+-                resolve_view: target_view,
+-                depth_view: depth_attachment.as_ref().map(|depth| depth.view),
+-                transient_depth: depth_attachment
+-                    .as_ref()
+-                    .is_some_and(|depth| depth.owned.is_some()),
+-            },
+-            render_pass,
+-            counters,
+-        )?;
++        let msaa_key = super::pools::MultisampleTargetKey {
++            width: req.width,
++            height: req.height,
++            format: color0_format,
++            samples: raster_sample_count,
++            compatibility: pass_key.framebuffer_compatibility(),
++            resolve_view: target_view,
++            depth_view: depth_attachment.as_ref().map(|depth| depth.view),
++            transient_depth: depth_attachment
++                .as_ref()
++                .is_some_and(|depth| depth.owned.is_some()),
++        };
++        // A multisample scratch that does not exist yet cannot honour a
++        // `Preserve`: the image is created with `UNDEFINED` contents, so loading
++        // it would feed the resolve whatever the driver left in fresh memory.
++        // The slot's own liveness is asked *here* because this is where the key
++        // exists — the resolve and depth views it names are resolved above this
++        // point and not where the pass is first chosen — and the answer picks
++        // the pass: a fresh slot under a preserving record begins with a clear
++        // (defined, and the value the guest's own load would have produced had
++        // the attachment been cleared), a live slot keeps the load. Refusing the
++        // record instead lost the whole pass: the driven title's scene composite
++        // is exactly this shape (a full-screen resolve whose first record
++        // declares `Load`).
++        let msaa_pass = if matches!(pass_key.color0_load, super::caches::Color0Load::Preserve)
++            && !pools.multisample_slot_is_live(&msaa_key)
++        {
++            let mut fresh = pass_key;
++            fresh.color0_load = super::caches::Color0Load::Clear;
++            caches.get_or_create_pass(ctx, fresh, counters, pools)?
++        } else {
++            render_pass
++        };
++        let (image, _view, framebuffer) =
++            pools.acquire_multisample_target(ctx, msaa_key, msaa_pass, counters)?;
+         target_fb = framebuffer;
+         Some(image)
+     } else {
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs b/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
+--- a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
+@@ -3999,6 +3999,20 @@
+         Ok(self.targets.get(&map_key).unwrap())
+     }
+ 
++    /// Whether the live multisample scratch is the one `key` describes.
++    ///
++    /// One predicate for two questions, so they cannot drift: [`Self::
++    /// acquire_multisample_target`] reuses the slot exactly when this answers
++    /// true, and `execute_draw_request` asks it *before* the acquisition to
++    /// decide whether a pass that declared `Preserve` can honour that. A fresh
++    /// image has no prior content, so a preserving pass over one must begin with
++    /// a clear rather than load an image created `UNDEFINED`.
++    pub(crate) fn multisample_slot_is_live(&self, key: &MultisampleTargetKey) -> bool {
++        self.multisample_target
++            .as_ref()
++            .is_some_and(|slot| slot.key == *key && !key.transient_depth)
++    }
++
+     /// Acquire the discard-only source of a multisample resolve pass.
+     ///
+     /// One slot is sufficient: Metal's resolve-only store action makes the
+@@ -4012,10 +4026,12 @@
+         render_pass: vk::RenderPass,
+         counters: &EngineCounters,
+     ) -> Result<(vk::Image, vk::ImageView, vk::Framebuffer), DrawError> {
+-        if let Some(slot) = self.multisample_target.as_ref() {
+-            if slot.key == key && !key.transient_depth {
+-                return Ok((slot.image, slot.view, slot.framebuffer));
+-            }
++        if self.multisample_slot_is_live(&key) {
++            let slot = self
++                .multisample_target
++                .as_ref()
++                .expect("the liveness predicate just answered true");
++            return Ok((slot.image, slot.view, slot.framebuffer));
+         }
+         if let Some(old) = self.multisample_target.take() {
+             self.dispose(&ctx.device, DeferredHandle::Framebuffer(old.framebuffer));
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+--- a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -9228,19 +9228,15 @@
+                     },
+                 ));
+             }
+-            // A LOAD on the multisample scratch is only answerable while the
+-            // slot that holds it is still open, which is exactly what a
+-            // continuing record is: the engine keeps one multisample target per
+-            // key and reuses it, so the second and later records of one MSAA
+-            // render pass load what the first wrote. A *new* record asking LOAD
+-            // would read an undeclared scratch image, and that stays refused.
+-            if color.load_action == MTL_LOAD_ACTION_LOAD && !req.continues_render_pass {
+-                return Err(DrawError::Unsupported(
+-                    crate::backend::vulkan::engine::reason::DrawReason::MultisampleLoadActionUnsupported {
+-                        load_action: color.load_action,
+-                    },
+-                ));
+-            }
++            // A LOAD on the multisample scratch is answerable in both shapes,
++            // and the engine is what answers it: the scratch is one slot per
++            // key, reused exactly while the key matches, and `execute_draw_request`
++            // picks the pass's load op from that slot's liveness — the load when
++            // the image is the live one, a clear when it is fresh. Refusing a
++            // record the engine can serve cost the driven title's whole scene
++            // composite (a full-screen MSAA resolve whose first record declares
++            // `Load`).
++            let _ = color.load_action;
+         }
+         resources.viewports = req
+             .viewports

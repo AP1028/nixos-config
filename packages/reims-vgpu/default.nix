@@ -471,6 +471,20 @@ let
       # dimension needs sixteen bits, not thirty-two.
       patch -p1 -d reims-vgpu < ${./pr-rg32float.patch}
 
+      # The remaining Star Birds pass class: full-screen MSAA resolve records
+      # whose *first* record declares `Load` (`multisample_load_action_unsupported`,
+      # four a boot, 3- and 6-vertex draws into 1920x1080 targets). The engine
+      # keeps one multisample scratch per key and reuses it while the key
+      # matches, so a first-in-packet record can be honouring a load the packet
+      # boundary merely hides — but a *fresh* image cannot: it is created with
+      # `UNDEFINED` contents. The pass's load op is therefore chosen from the
+      # slot's own liveness, at the one place the key exists (the resolve and
+      # depth views it names are resolved above where the pass is first picked):
+      # a live slot keeps the load, a fresh one begins with a clear, and the
+      # runtime stops refusing the record. `multisample_slot_is_live` is the one
+      # predicate both the acquisition and this choice use, so they cannot drift.
+      patch -p1 -d reims-vgpu < ${./pr-msaa-fresh-slot-load.patch}
+
 
 
 
