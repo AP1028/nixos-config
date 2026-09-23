@@ -984,3 +984,56 @@ before the interesting part of the session. Catching it needs a temporal witness
 each presented frame against the previous one) rather than a single-frame measure.
 `present_black` fired 4 times this boot (1 of the 40 dumps was black), which is the
 "black flash" class the earlier cycles also saw.
+
+## Star Birds cycle 10 (fresh-attachment clear): the red was the guest's wallpaper
+
+One cycle on the integrated rail with `REIMS_VGPU_VK_DEVICE_TYPE=integrated` and the
+present dump on, aimed at the launch transition rather than a single frame (a 40-frame
+host burst plus the dumps).
+
+**The fix.** A record that declares a preserving load (`MTLLoadActionDontCare`) and
+arrives with nothing this device can offer was begun with `DONT_CARE` over `UNDEFINED`,
+which over a freshly created image means the pass presents whatever the pool's memory
+last held. `slot0_begin` now asks the registry (`content_ready`, the same bit that
+decides whether a `LOAD` is answerable) and gives the stale case a defined clear, while
+an attachment that does hold the guest's own earlier output keeps the `DONT_CARE`
+reading — the invariant `caches.rs`'s four `color0_load_tests` assert, untouched, since
+clearing there is the author's measured 461 draws / 2 107 399 texels of live guest
+content. The witness says the case is real and how often:
+
+```
+color0_preserve_unhonoured   51   (one boot; first-sight lines name Gva 256×256 and
+                                   Gva 93×93 colour residents, all elected=Clear)
+```
+
+**The red is not stale content, and this is the correction.** The change was written up
+as the fix for a red overlay the dumps appeared to show (full-frame `red_rows=1003/1080`
+at present 320, breaking into 5→15 bands, `mean=(228,139,59)` — the orange the user
+described where red met the ocean). Reading the resident the window actually presented
+and *looking at it* settles it: `dumps-fresh/present-dump-3.ppm` is macOS 13's own
+Ventura wallpaper (the orange/red swirl) with Steam's "Updating Steam… Verifying
+installation…" sheet over it and the Dock below. The pre-fix dumps show the same image
+at the same presents. So the red bands are the guest's desktop, presented correctly, and
+no visible defect was ever caused by the load-op case — the code comments and
+`default.nix` now say so instead of claiming an artifact.
+
+**What this cycle did not test.** Steam was updating itself for the whole window
+("Verifying installation…"), so the title never reached its menu: 8 pipeline
+declarations, 1 `draw_prepare_pipeline_missing`, and the last dump still the desktop.
+The game path — menu, 3D artwork, the scene pass — was not exercised, and the
+`REIMS_VGPU_PRESENT_DUMP` sampling (`call % 256`, 40 dumps ≈ 10 000 presents) spent its
+six dumps on boot and the desktop.
+
+**Method note, worth keeping.** The per-row census that "found" the artifact cannot tell
+the guest's own red wallpaper from stale red rows; both are rows of red-saturated mean.
+The metric was right and the conclusion drawn from it was wrong. Only the pixels
+themselves distinguish them, so a colour census is a *locator* (it says which frames to
+open) and never a verdict.
+
+**Still open, unchanged by this cycle.** The user-visible red biting into the game's
+frame and mixing with the ocean's blue into orange, which the user also saw on the
+NVIDIA rail before any of these changes; the missing 3D artwork in the menu (cycle 8 got
+the menu to render, the scene geometry is still refused or absent); `present_black`
+(2 this boot); and the three temporary diagnostics that must come out before anything is
+offered upstream.
+

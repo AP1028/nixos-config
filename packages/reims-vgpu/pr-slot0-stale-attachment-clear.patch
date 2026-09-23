@@ -1,5 +1,5 @@
 diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
-@@ -3058,25 +3058,44 @@
+@@ -3058,25 +3058,51 @@
      } else {
          req.target_rgba8.as_ref().map(|v| v.as_slice())
      };
@@ -16,16 +16,23 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-
 +    // `UNDEFINED` — and it is lawful only while the attachment holds something
 +    // that belongs to this guest. `MTLLoadActionDontCare` permits an undefined
 +    // result; it does not promise the previous tenant's pixels, and over an
-+    // image this pool has just created those are exactly what the texels are. A
-+    // driven title showed it: the launch splash's rows surviving into its menu
-+    // as red bands whose boundary was wherever the guest's partial repaint
-+    // stopped, and whole frames of the previous surface at a full-screen
-+    // transition. So the stale half of the case takes the answer the
-+    // multisample scratch already takes for a fresh slot — a *defined* clear —
-+    // while the half that keeps a guest's own prior contents is left alone,
-+    // because clearing there is the measured harm `Color0Load::Clear`'s arm
-+    // records: 461 partial draws and 2 107 399 texels of live guest content
-+    // overwritten in one boot.
++    // image this pool has just created those are exactly what the texels are.
++    //
++    // That is a hole in what a pass may present, not an artifact anyone watched
++    // happen: this change was first credited with a red overlay a driven title
++    // showed at its launch, and the resident the window actually presented was
++    // then read back and looked at — it held the guest's own desktop wallpaper
++    // and the Steam update sheet (`REIMS_VGPU_PRESENT_DUMP`), so the red was
++    // the guest's, and nothing here claims a visible defect it did not cause.
++    // What the case does have is a frequency: `color0_preserve_unhonoured` fired
++    // 51 times in one Star Birds boot, naming the guest's own 256x256 and 93x93
++    // colour residents among others.
++    //
++    // The stale half therefore takes the answer the multisample scratch already
++    // takes for a fresh slot — a *defined* clear — while the half that keeps a
++    // guest's own prior contents is left alone, because clearing there is the
++    // measured harm `Color0Load::Clear`'s arm records: 461 partial draws and
++    // 2 107 399 texels of live guest content overwritten in one boot.
 +    //
 +    // Which half this is comes from the registry, asked before the slot exists:
 +    // `content_ready` is the same bit that decides whether a `LOAD` is
@@ -60,7 +67,7 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-
      let mut pass_key = PassKey::single(color0_load, color0_format);
      pass_key.host_accessible_color0 = req.guest_target_memory.is_some();
      for (i, sec) in req.secondary_targets.iter().enumerate() {
-@@ -3724,6 +3743,17 @@
+@@ -3724,6 +3750,17 @@
                      },
                  ));
              }
@@ -78,7 +85,7 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-
              let primary_image = t.image;
              let primary_view = attachment_view;
              let primary_access = t.access;
-@@ -6575,6 +6605,56 @@
+@@ -6575,6 +6612,56 @@
  mod tests {
      use super::*;
  
@@ -135,7 +142,7 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-
      fn sampled_identity() -> TargetIdentity {
          TargetIdentity::Surface {
              id: 7,
-@@ -8649,3 +8729,72 @@
+@@ -8649,3 +8736,72 @@
          assert_eq!(checked, COMPARES.len() * OPS.len() * 2);
      }
  }
@@ -167,10 +174,10 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-
 +/// The draw that reaches this is the one that used to render with `DONT_CARE`:
 +/// the guest asked to keep what the attachment held, the device has nothing to
 +/// keep, and — for the case the fix answers — the image is freshly created, so
-+/// its texels are whatever the pool last used that memory for. A driven title
-+/// showed exactly that: the launch splash's rows surviving into its menu. The
-+/// pass then begins with a defined clear, and this is the witness that says how
-+/// often the case is real: first-sight per identity, plus an always-on counter.
++/// its texels are whatever the pool last used that memory for. Nothing visible
++/// is claimed for it: the case is named here so its frequency is measured rather
++/// than inferred, and one Star Birds boot measured 51 of them (first-sight per
++/// identity, plus an always-on counter).
 +///
 +/// `elected` is what the pass was actually built with, because this call site
 +/// sits after `registry_ensure` and the early election sits before it. A

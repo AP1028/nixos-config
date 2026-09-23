@@ -479,18 +479,23 @@ let
       # with `DONT_CARE` over `UNDEFINED`, on the argument that clearing would
       # invent a colour the guest never supplied. Over an image the pool has just
       # created the texels are not the guest's at all — they are the previous
-      # tenant's, and a driven title showed exactly that: the launch splash's
-      # rows surviving into its menu as red bands whose boundary was wherever the
-      # guest's partial repaint stopped, and whole frames of the previous surface
-      # at a full-screen transition. Which case this is comes from the registry's
-      # `content_ready`, the same bit that decides whether a `LOAD` is
-      # answerable: a residency the guest has never written begins with a defined
-      # clear, while one that does hold the guest's own earlier output keeps the
-      # `DONT_CARE` reading — the measured 461 partial draws and 2 107 399 texels
-      # of live guest content that a blanket clear overwrote. The stale case is
-      # counted as `color0_preserve_unhonoured`, with the elected answer in the
-      # line so the residual (an image recreated between the two questions) is
-      # measured rather than assumed away.
+      # tenant's — so the pass may present whatever that memory last held.
+      #
+      # Not a defect anyone watched happen: the change was first credited with a
+      # red overlay at a title's launch, and reading the resident the window
+      # actually presented showed the guest's own desktop wallpaper and the Steam
+      # update sheet, so the red was the guest's. What the case has instead is a
+      # frequency — `color0_preserve_unhonoured` fired 51 times in one Star Birds
+      # boot — and a lawful-but-undiagnosed risk that this closes.
+      #
+      # Which case this is comes from the registry's `content_ready`, the same
+      # bit that decides whether a `LOAD` is answerable: a residency the guest has
+      # never written begins with a defined clear, while one that does hold the
+      # guest's own earlier output keeps the `DONT_CARE` reading — the measured
+      # 461 partial draws and 2 107 399 texels of live guest content that a
+      # blanket clear overwrote. The stale case is counted with the elected
+      # answer in the line, so the residual (an image recreated between the two
+      # questions) is measured rather than assumed away.
       patch -p1 -d reims-vgpu < ${./pr-slot0-stale-attachment-clear.patch}
 
       # Which GPU the rail binds, selectable at run time: this host's discrete

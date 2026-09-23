@@ -157,8 +157,7 @@ grep -a m2v_store_gva /tmp/reims-vgpu-draw.log | tail -5
 Counters worth reading first, per symptom:
 
 - **Draws refused / nothing renders**: `linux_m2v_draw reason=…`, `rt_resolve reason=…`,
-  `blit_fail reason=…`, `draw_encode_fail`, `draw_fail_clear_fallback`.
-- **Black window with draws succeeding**: `sampled_direct_declined`,
+  `blit_fail reason=…`, `draw_encode_fail`, `draw_fail_clear_fallback`.- **Black window with draws succeeding**: `sampled_direct_declined`,
   `sampled_admit_no_identity`, `wbdebt_texture_owes_nothing{,_resolved,_unresolved}`,
   `gva_resident_authoritative`, `gvarung_resident`, `chain_gva_debt_armed` /
   `chain_gva_debt_declined`, and the stored-frame content above.
@@ -171,6 +170,41 @@ Opt-in probes: boot with `REIMS_VGPU_DIAG_CHAIN_READBACK=1` to get
 `diag_sample_probe` (each depth-sample candidate plus `debt=` at that address) and
 forced chain readbacks. It is expensive; use it for one cycle when the debt/identity
 question is open.
+
+### 4.5 A census locates; only the pixels decide
+
+`REIMS_VGPU_PRESENT_DUMP=<dir>` writes the resident the window is about to present as a
+P6 PPM. It answers "what did the device actually put on screen", which no counter can,
+but a *derived metric* over it is a locator and never a verdict. Real case, cycle 10:
+
+```sh
+# per-row census: how many rows are red-saturated, in how many bands
+python3 /tmp/opencode/ppm-rows.py /tmp/opencode/dumps-fresh
+present-dump-3.ppm 1920x1080 mean=(230,142,61) red_rows=822/1080 bands=3 flips=5
+```
+
+That reads like a stale-frame artifact and was written up as one — full-frame red bands
+at the launch transition, the exact orange the user described where red met the ocean's
+blue. Opening the same file showed macOS 13's own **Ventura wallpaper** (an orange/red
+swirl) with Steam's update sheet over it. The guest's legitimate desktop has the same
+row signature as corruption invented by the device, because the metric only knows
+"rows whose mean is red-dominant".
+
+So: use counts to choose *which* frames to open, then open them (`ffmpeg -i x.ppm
+x.png`, then read the image). Corollaries from the same cycle:
+
+- **Capture the transition, not a frame.** The interesting event is at a transition; a
+  single capture 20 s after "the game process exists" can miss it entirely. A burst
+  (`for i in $(seq -w 1 40); do spectacle -b -n -f -o shot-$i.png; sleep 2; done &`)
+  started *before* the launch covers the window, and the present dumps' own sampling
+  window has to be wide enough to reach it — `call % 32` spent all forty dumps on the
+  pre-paint frames of a boot, `call % 256` reaches ten thousand presents.
+- **Check the guest is doing what you think.** Cycle 10's title never launched: Steam
+  was updating itself ("Updating Steam… Verifying installation…"), which the dump showed
+  and no counter did. A cycle that measures the wrong workload still produces numbers.
+- **`spectacle -f` captures the whole host screen**, VM window included, so its frames
+  need cropping before any per-row logic means anything; the device's own dumps have no
+  such problem.
 
 ---
 
