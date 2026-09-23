@@ -1,7 +1,7 @@
 diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/src/host_window/present.rs
 --- a/crates/reims-vgpu/src/host_window/present.rs
 +++ b/crates/reims-vgpu/src/host_window/present.rs
-@@ -1376,7 +1376,58 @@
+@@ -1376,7 +1376,63 @@
      /// Present one frame through the running rail, or decide there is
      /// nothing to present.
      ///
@@ -17,8 +17,13 @@ diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/sr
 +#[cfg(feature = "backend-vulkan")]
 +fn dump_present_resident(resident: Option<&crate::backend::window::WindowResident>) {
 +    use std::sync::atomic::{AtomicU32, Ordering};
++    // Sampled across the boot, not the first N: the first presents of a boot are
++    // the pre-paint black frames, and what needs looking at is the frame the
++    // window shows once the guest has content (a game menu, a black window).
++    static CALLS: AtomicU32 = AtomicU32::new(0);
 +    static DUMPS: AtomicU32 = AtomicU32::new(0);
-+    if DUMPS.load(Ordering::Relaxed) >= 4 {
++    let call = CALLS.fetch_add(1, Ordering::Relaxed);
++    if call % 32 != 0 || DUMPS.load(Ordering::Relaxed) >= 40 {
 +        return;
 +    }
 +    let Some(crate::backend::window::WindowResident::Vulkan(src)) = resident else {
@@ -61,7 +66,7 @@ diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/sr
      /// presenter before the loop ends, and an attach that failed never stored a
      /// window at all. Both already named themselves where they happened, so a
      /// redraw arriving after either is expected control flow and stays quiet.
-@@ -1385,6 +1436,13 @@
+@@ -1385,6 +1441,13 @@
              return;
          }
          let frame = self.frames.lock().ok().and_then(|guard| guard.clone());
