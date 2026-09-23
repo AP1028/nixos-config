@@ -433,18 +433,6 @@ let
       # and the `unorm8_to_snorm_byte` doc correction.
       patch -p1 -d reims-vgpu < ${./pr-assessment-fixes.patch}
 
-      # Star Birds' black window: the compositor reads a mapping's guest pages
-      # (the gather rail pays `pay_for_mapping`), while the game's frames are
-      # deferred into residents armed as GVA-keyed debts keyed by `(task, ref)`.
-      # A mapping-keyed lookup cannot see those, so the payment found nothing
-      # and the gather read pages the render never wrote
-      # (`wbdebt_texture_owes_nothing_unresolved`, and every `diag_sample_probe`
-      # answering `debt=None`). Aliasing across the id namespaces is real, so a
-      # mapping that owes nothing while GVA debts exist settles the ledger —
-      # the `pay_all` doctrine the module already states for "cannot name"
-      # readers. Counted as `wbdebt_mapping_pays_gva_alias` so the cost and the
-      # frequency of the real alias are both visible.
-      patch -p1 -d reims-vgpu < ${./pr-starbirds-mapping-gva-alias.patch}
 
       # DIAGNOSTIC (temporary, opt-in via REIMS_VGPU_PRESENT_DUMP=<dir>): write
       # the resident the host window is about to present as a P6 PPM, so the
@@ -484,6 +472,35 @@ let
       # runtime stops refusing the record. `multisample_slot_is_live` is the one
       # predicate both the acquisition and this choice use, so they cannot drift.
       patch -p1 -d reims-vgpu < ${./pr-msaa-fresh-slot-load.patch}
+
+      # The same class at slot 0's own load op, minus the multisample scratch: a
+      # record that declares a preserving load (`MTLLoadActionDontCare`, then a
+      # partial repaint) and arrives with nothing this device can offer was begun
+      # with `DONT_CARE` over `UNDEFINED`, on the argument that clearing would
+      # invent a colour the guest never supplied. Over an image the pool has just
+      # created the texels are not the guest's at all — they are the previous
+      # tenant's, and a driven title showed exactly that: the launch splash's
+      # rows surviving into its menu as red bands whose boundary was wherever the
+      # guest's partial repaint stopped, and whole frames of the previous surface
+      # at a full-screen transition. Which case this is comes from the registry's
+      # `content_ready`, the same bit that decides whether a `LOAD` is
+      # answerable: a residency the guest has never written begins with a defined
+      # clear, while one that does hold the guest's own earlier output keeps the
+      # `DONT_CARE` reading — the measured 461 partial draws and 2 107 399 texels
+      # of live guest content that a blanket clear overwrote. The stale case is
+      # counted as `color0_preserve_unhonoured`, with the elected answer in the
+      # line so the residual (an image recreated between the two questions) is
+      # measured rather than assumed away.
+      patch -p1 -d reims-vgpu < ${./pr-slot0-stale-attachment-clear.patch}
+
+      # Which GPU the rail binds, selectable at run time: this host's discrete
+      # GPU has a 16 GB device-local heap and the integrated one ~46 GB of
+      # unified memory, and which is the better rail is a question to measure.
+      # `REIMS_VGPU_VK_DEVICE_TYPE=integrated|discrete|virtual|cpu` and
+      # `REIMS_VGPU_VK_DEVICE_NAME=<substring>` narrow the ranked field; a filter
+      # that matches nothing logs `vk_device_preference_unmatched` and falls back
+      # to the ranking, so a typo cannot leave the device with no GPU.
+      patch -p1 -d reims-vgpu < ${./pr-igpu-preference.patch}
 
 
 

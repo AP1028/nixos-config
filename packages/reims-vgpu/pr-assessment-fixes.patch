@@ -166,23 +166,30 @@ diff --git a/crates/reims-vgpu/src/runtime/blit_exec/tests.rs b/crates/reims-vgp
 diff --git a/crates/reims-vgpu/src/runtime/drain/mod.rs b/crates/reims-vgpu/src/runtime/drain/mod.rs
 --- a/crates/reims-vgpu/src/runtime/drain/mod.rs
 +++ b/crates/reims-vgpu/src/runtime/drain/mod.rs
-@@ -2620,10 +2620,21 @@
+@@ -2620,10 +2620,27 @@
              }
              state.pending_stamp_page_writes.insert(index, value);
          } else {
-+            // `Settled` means the caller writes the word, and this caller had
-+            // been dropping the point instead: the rail answered "nothing is in
-+            // flight for this slot", the page stayed behind the plane's point,
-+            // and the guest's channel re-read the fence forever. Everything owed
-+            // guest RAM has landed before this answer (that is what the rail
-+            // quiesces for), so the inline write cannot outrun the work.
-             note_store_route("diag_stamp_reissue_settled");
-+            if let Some(off) = stamp_slot_offset(index, state.page_size()) {
-+                let gpa = state.pfn_gpa(state.gfx.fifo_base_page) + off;
-+                let page_size = state.page_size() as usize;
-+                note_stamp_direction(host, gpa, index, value);
-+                land_stamp_page(state, host, index, value, gpa, page_size, "stamp_visible_reissued");
-+                note_store_route("stamp_page_reissued_inline");
+-            note_store_route("diag_stamp_reissue_settled");
++            // `Settled` means *the caller writes the word*, so dropping the
++            // point here can leave the page behind the ordering plane's point —
++            // a guest fence that never lands. Writing it here instead is worse:
++            // this rail's own measurement is that an inline write from a
++            // *deferred* publication fires the guest's fence before the work it
++            // completes, which showed up as corruption across the guest's
++            // desktop. The repair this point needs is a settle that covers the
++            // work the word announces, and that witness does not exist yet — so
++            // the point is dropped and named, once per slot, rather than
++            // released early.
++            note_store_route("stamp_page_reissue_settled_dropped");
++            if crate::observe::first_sight("stamp_page_reissue_dropped", u64::from(index)) {
++                crate::observe::fail(format!(
++                    "stamp_page_reissue_dropped index={index} value={value} \
++                     (the ordered write was superseded and the rail answered Settled, which \
++                      names the caller as the writer; writing the page here would release the \
++                      guest's fence before the work it announces, so the point is dropped and \
++                      the page may trail the plane — a stall here is this line)"
++                ));
 +            }
          }
 -        // A non-`Queued` answer means the rail ordered it inline or wrote the
@@ -190,7 +197,16 @@ diff --git a/crates/reims-vgpu/src/runtime/drain/mod.rs b/crates/reims-vgpu/src/
      }
  }
  
-@@ -3393,21 +3404,44 @@
+@@ -3244,7 +3261,7 @@
+ /// publishing there would release, twelve thousand times a boot, work ordered
+ /// behind GPU work that had not finished. Submission is not completion.
+ ///
+-/// So the plane is told at the three places a word is *observed to have
++/// So the plane is told at the places a word is *observed to have
+ /// landed*: the two arms that write it into the page inline, and the drain's
+ /// own read of the slot when it evaluates a wait — which is what covers the
+ /// queued arm, because a queued word nobody waits on is one no admitted
+@@ -3393,21 +3410,44 @@
      let gpa = state.pfn_gpa(state.gfx.fifo_base_page) + off;
      let page_size = state.page_size() as usize;
      note_stamp_direction(host, gpa, index, stamp_value);
@@ -349,16 +365,47 @@ diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/sr
          return Some((w, h, SampledSourceRequest::Target(identity, format)));
      }
      None
-@@ -4806,6 +4821,7 @@
+@@ -4799,27 +4814,45 @@
+ /// surface, so a writeback debt armed by mapping can be paid by the ref a
+ /// sample names.
+ ///
+-/// Conservative by construction: the first physical page of the buffer must
+-/// appear in a mapping's page list, and exactly one mapping may claim it. A
++/// Conservative by construction: the buffer's **first and last** physical pages
++/// must both appear in one mapping's page list, that list must be at least as
++/// long as the buffer's own page list, and exactly one mapping may claim it. A
+ /// miss or an ambiguity latches nothing, which is the behaviour this rail had
+ /// before the latch existed.
++///
++/// The two-point form is the cheap witness that the mapping *covers* the buffer
++/// rather than merely touching it: aliasing across id namespaces is real here, so
++/// a shared endpoint — or a page that a shorter mapping happens to contain — must
++/// not be enough to hand this reference another surface's debt and land that
++/// surface's frame into these pages.
  fn latch_linear_sample_mapping(
      latch: &mut std::collections::BTreeMap<(u32, u32), u32>,
      mappings: &std::collections::BTreeMap<u32, crate::model::MappingEntry>,
 +    page_shift: u32,
      task_id: u32,
      texture_ref: u32,
-     first_page: Option<u64>,
-@@ -4815,11 +4831,15 @@
+-    first_page: Option<u64>,
++    pages: &[u64],
+ ) {
+-    let Some(first_page) = first_page else {
++    let (Some(&first_page), Some(&last_page)) = (pages.first(), pages.last()) else {
+         return;
      };
++    let contains = |mapping: &crate::model::MappingEntry, wanted: u64| {
++        // A `page_entries` word is `(valid | PFN << PAGE_ENTRY_PFN_SHIFT)`, not
++        // an address. Comparing it with a page-aligned GPA directly is a
++        // predicate between two vocabularies that never coincide — a valid
++        // entry always has bit 0 set and a GPA never does — so the latch could
++        // never fire and a mapping-keyed debt was never paid through the ref.
++        mapping.page_entries.iter().any(|&page| {
++            reims_vgpu_protocol::iosurface_pages::entry_gpa_shift(page, page_shift)
++                == Some(wanted)
++        })
++    };
      let mut found: Option<u32> = None;
      for (&mid, mapping) in mappings.iter() {
 -        if mapping
@@ -366,23 +413,22 @@ diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/sr
 -            .iter()
 -            .any(|&page| u64::from(page) == first_page)
 -        {
-+        // A `page_entries` word is `(valid | PFN << PAGE_ENTRY_PFN_SHIFT)`, not
-+        // an address. Comparing it with a page-aligned GPA directly is a
-+        // predicate between two vocabularies that never coincide — a valid
-+        // entry always has bit 0 set and a GPA never does — so the latch could
-+        // never fire and a mapping-keyed debt was never paid through the ref.
-+        if mapping.page_entries.iter().any(|&page| {
-+            reims_vgpu_protocol::iosurface_pages::entry_gpa_shift(page, page_shift)
-+                == Some(first_page)
-+        }) {
++        if mapping.page_entries.len() < pages.len() {
++            continue;
++        }
++        if contains(mapping, first_page) && contains(mapping, last_page) {
              if found.is_some() {
                  return;
              }
-@@ -5051,6 +5071,7 @@
+@@ -5051,9 +5084,10 @@
                  latch_linear_sample_mapping(
                      &mut state.texture_to_mapping,
                      &state.mappings,
 +                    state.page_shift,
                      task_id,
                      texture_ref,
-                     packed.gpas.first().copied(),
+-                    packed.gpas.first().copied(),
++                    packed.gpas.as_slice(),
+                 );
+                 return Some((w, h, request));
+             }

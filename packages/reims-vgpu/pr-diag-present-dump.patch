@@ -1,7 +1,7 @@
 diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/src/host_window/present.rs
 --- a/crates/reims-vgpu/src/host_window/present.rs
 +++ b/crates/reims-vgpu/src/host_window/present.rs
-@@ -1376,7 +1376,63 @@
+@@ -1376,7 +1376,68 @@
      /// Present one frame through the running rail, or decide there is
      /// nothing to present.
      ///
@@ -23,7 +23,12 @@ diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/sr
 +    static CALLS: AtomicU32 = AtomicU32::new(0);
 +    static DUMPS: AtomicU32 = AtomicU32::new(0);
 +    let call = CALLS.fetch_add(1, Ordering::Relaxed);
-+    if call % 32 != 0 || DUMPS.load(Ordering::Relaxed) >= 40 {
++    // Every 256th present, not every 32nd: a boot reaches its first interesting
++    // transition ~1000 presents in, so a fine-grained cap spends all forty
++    // dumps on the pre-paint frames and has none left for the launch it was
++    // meant to catch. 256 × 40 covers ten thousand presents, which is a whole
++    // session's worth of frames at forty files.
++    if call % 256 != 0 || DUMPS.load(Ordering::Relaxed) >= 40 {
 +        return;
 +    }
 +    let Some(crate::backend::window::WindowResident::Vulkan(src)) = resident else {

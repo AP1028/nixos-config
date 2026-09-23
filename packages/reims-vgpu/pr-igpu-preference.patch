@@ -1,0 +1,253 @@
+diff --git a/crates/reims-vgpu/src/backend/vulkan/caps/device_select.rs b/crates/reims-vgpu/src/backend/vulkan/caps/device_select.rs
+--- a/crates/reims-vgpu/src/backend/vulkan/caps/device_select.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/caps/device_select.rs
+@@ -43,29 +43,159 @@
+ /// Returns `Err` with the rejected devices' versions when nothing clears the
+ /// floor, so the decline names what was found rather than reporting a bare "no
+ /// Vulkan devices".
++///
++/// `names` is the `deviceName` of each candidate, in the same order, and exists
++/// for one purpose: an operator override. Two variables, because the two
++/// questions are different —
++///
++/// - `REIMS_VGPU_VK_DEVICE_NAME=<substring>` (ASCII case-insensitive) narrows
++///   the field to candidates whose name contains it;
++/// - `REIMS_VGPU_VK_DEVICE_TYPE=integrated|discrete|virtual|cpu` narrows it to
++///   that device type.
++///
++/// Both are A/B knobs rather than policy, and they are here because the ranking
++/// is right in general and wrong for a specific job: this host's discrete GPU
++/// has a 16 GB `DEVICE_LOCAL` heap that the device fills to
++/// `VK_ERROR_OUT_OF_DEVICE_MEMORY` under a 3D title, while the integrated GPU
++/// beside it reports ~46 GB of unified memory. Which of those is the better rail
++/// is a question to measure, so the answer has to be selectable at run time. A
++/// variable that matches nothing leaves the ranked field intact — a typo must
++/// not leave the device with no GPU at all — and `vk_device_preference` says
++/// which filter was active and how many candidates it kept.
+ pub fn select_physical_device<T: Copy>(
+     candidates: &[(u32, vk::PhysicalDeviceType, T)],
++    names: &[String],
+ ) -> Result<(T, u32), Vec<u32>> {
++    let preference = DevicePreference::from_env();
+     let mut below_floor = Vec::new();
+     let mut best: Option<(u8, T, u32)> = None;
+-    for (api, device_type, payload) in candidates {
++    for (index, (api, device_type, payload)) in candidates.iter().enumerate() {
+         if !meets_floor(*api) {
+             below_floor.push(*api);
+             continue;
+         }
++        if !preference.admits(*device_type, names.get(index).map_or("", String::as_str)) {
++            continue;
++        }
+         let rank = rank_physical_device(*device_type);
+         if best.is_none_or(|(best_rank, _, _)| rank > best_rank) {
+             best = Some((rank, *payload, *api));
+         }
+     }
++    // A filter that matched nothing is a typo, not an instruction to fail: the
++    // ranked field is tried again unfiltered, and the census names the fallback.
++    if best.is_none() && preference.is_active() {
++        preference.note_unmatched(candidates);
++        return select_physical_device(candidates, names);
++    }
+     best.map(|(_, payload, api)| (payload, api))
+         .ok_or(below_floor)
+ }
+ 
++/// The run-time device filter described on [`select_physical_device`].
++///
++/// Read once per selection (both the engine and the window's present device
++/// select through here, and they must agree), so a variable set after the
++/// device exists cannot split the two.
++#[derive(Clone, Copy, Debug, Default)]
++struct DevicePreference {
++    name: Option<&'static str>,
++    device_type: Option<vk::PhysicalDeviceType>,
++}
++
++impl DevicePreference {
++    fn from_env() -> Self {
++        let name = std::env::var("REIMS_VGPU_VK_DEVICE_NAME")
++            .ok()
++            .filter(|value| !value.is_empty())
++            .map(|value| Box::leak(value.into_boxed_str()) as &'static str);
++        let device_type = std::env::var("REIMS_VGPU_VK_DEVICE_TYPE").ok().and_then(|value| {
++            match value.to_ascii_lowercase().as_str() {
++                "discrete" => Some(vk::PhysicalDeviceType::DISCRETE_GPU),
++                "integrated" => Some(vk::PhysicalDeviceType::INTEGRATED_GPU),
++                "virtual" => Some(vk::PhysicalDeviceType::VIRTUAL_GPU),
++                "cpu" => Some(vk::PhysicalDeviceType::CPU),
++                _ => None,
++            }
++        });
++        Self { name, device_type }
++    }
++
++    fn is_active(self) -> bool {
++        self.name.is_some() || self.device_type.is_some()
++    }
++
++    fn admits(self, device_type: vk::PhysicalDeviceType, name: &str) -> bool {
++        if let Some(wanted) = self.name {
++            if !name.to_ascii_lowercase().contains(&wanted.to_ascii_lowercase()) {
++                return false;
++            }
++        }
++        if let Some(wanted) = self.device_type {
++            if device_type != wanted {
++                return false;
++            }
++        }
++        true
++    }
++
++    fn note_unmatched<T>(self, candidates: &[(u32, vk::PhysicalDeviceType, T)]) {
++        let names: Vec<String> = candidates
++            .iter()
++            .map(|(_, device_type, _)| format!("{device_type:?}"))
++            .collect();
++        crate::observe::off(format!(
++            "vk_device_preference_unmatched name={:?} type={:?} candidates=[{}] \
++             (the filter matched no device that clears the API floor; the ranked \
++              field is used instead)",
++            self.name,
++            self.device_type,
++            names.join(", ")
++        ));
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+ 
++    /// The ranker with no operator filter, which is what every pre-existing
++    /// assertion below is about.
++    fn select_physical_device_without_preference<T: Copy>(
++        candidates: &[(u32, vk::PhysicalDeviceType, T)],
++    ) -> Result<(T, u32), Vec<u32>> {
++        select_physical_device(candidates, &vec![String::new(); candidates.len()])
++    }
++
++    /// The filter is an operator knob, and the two answers it can give are the
++    /// whole of it: a field narrowed to the requested type, and the *ranked*
++    /// field when the request names nothing that exists.
++    #[test]
++    fn a_device_type_preference_narrows_the_field_or_falls_back_to_the_rank() {
++        use vk::PhysicalDeviceType as T;
++        let field = [
++            (vk::API_VERSION_1_3, T::DISCRETE_GPU, 0usize),
++            (vk::API_VERSION_1_3, T::INTEGRATED_GPU, 1usize),
++        ];
++        let names = vec!["discrete".to_string(), "integrated".to_string()];
++        // No variable set: the ranking wins, as it does today.
++        assert_eq!(select_physical_device(&field, &names).unwrap().0, 0);
++        // `integrated` is admitted only when asked for by type...
++        let preference = DevicePreference {
++            name: None,
++            device_type: Some(T::INTEGRATED_GPU),
++        };
++        assert!(preference.admits(T::INTEGRATED_GPU, "integrated"));
++        assert!(!preference.admits(T::DISCRETE_GPU, "discrete"));
++        // ...or by name, case-insensitively, against the device's own name.
++        let preference = DevicePreference {
++            name: Some("INTEL"),
++            device_type: None,
++        };
++        assert!(preference.admits(T::INTEGRATED_GPU, "Intel(R) Graphics (ARL)"));
++        assert!(!preference.admits(T::DISCRETE_GPU, "NVIDIA GeForce RTX 5080 Laptop GPU"));
++    }
++
+     #[test]
+     fn physical_device_rank_prefers_real_gpu_over_software() {
+         use vk::PhysicalDeviceType as T;
+@@ -86,14 +216,14 @@
+         use vk::PhysicalDeviceType as T;
+         // Highest rank wins, first enumerated wins on a tie (two integrated
+         // GPUs → index 0).
+-        let chosen = select_physical_device(&[
++        let chosen = select_physical_device_without_preference(&[
+             (vk::API_VERSION_1_3, T::INTEGRATED_GPU, 0usize),
+             (vk::API_VERSION_1_3, T::INTEGRATED_GPU, 1),
+         ]);
+         assert_eq!(chosen, Ok((0, vk::API_VERSION_1_3)));
+ 
+         // A CPU device enumerated FIRST must lose to a discrete GPU second.
+-        let chosen = select_physical_device(&[
++        let chosen = select_physical_device_without_preference(&[
+             (vk::API_VERSION_1_3, T::CPU, 0usize),
+             (vk::API_VERSION_1_3, T::DISCRETE_GPU, 1),
+         ]);
+@@ -107,7 +237,7 @@
+     #[test]
+     fn below_floor_devices_lose_to_a_usable_lower_ranked_device() {
+         use vk::PhysicalDeviceType as T;
+-        let chosen = select_physical_device(&[
++        let chosen = select_physical_device_without_preference(&[
+             (vk::API_VERSION_1_1, T::DISCRETE_GPU, 'a'),
+             (vk::API_VERSION_1_2, T::INTEGRATED_GPU, 'b'),
+         ]);
+@@ -119,7 +249,7 @@
+     #[test]
+     fn no_device_above_floor_reports_what_was_found() {
+         use vk::PhysicalDeviceType as T;
+-        let chosen = select_physical_device(&[
++        let chosen = select_physical_device_without_preference(&[
+             (vk::API_VERSION_1_0, T::CPU, 0usize),
+             (vk::API_VERSION_1_1, T::DISCRETE_GPU, 1),
+         ]);
+@@ -129,7 +259,7 @@
+     /// No devices at all is distinguishable from "devices, all too old".
+     #[test]
+     fn empty_enumeration_declines_with_an_empty_list() {
+-        let chosen = select_physical_device::<usize>(&[]);
++        let chosen = select_physical_device_without_preference::<usize>(&[]);
+         assert_eq!(chosen, Err(Vec::new()));
+     }
+ 
+@@ -138,7 +268,7 @@
+     #[test]
+     fn selection_returns_the_chosen_devices_own_api_version() {
+         use vk::PhysicalDeviceType as T;
+-        let chosen = select_physical_device(&[
++        let chosen = select_physical_device_without_preference(&[
+             (vk::API_VERSION_1_2, T::INTEGRATED_GPU, 'i'),
+             (vk::API_VERSION_1_3, T::DISCRETE_GPU, 'd'),
+         ]);
+@@ -147,7 +277,7 @@
+         // …and the 1.2 device wins when it is the only real GPU. A higher API
+         // version is NOT a tiebreaker: rank decides, and 1.2 is the baseline
+         // every pathway runs on, so a 1.2 GPU beats a 1.3 software rasterizer.
+-        let chosen = select_physical_device(&[
++        let chosen = select_physical_device_without_preference(&[
+             (vk::API_VERSION_1_2, T::DISCRETE_GPU, 'd'),
+             (vk::API_VERSION_1_3, T::CPU, 'c'),
+         ]);
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/context.rs b/crates/reims-vgpu/src/backend/vulkan/engine/context.rs
+--- a/crates/reims-vgpu/src/backend/vulkan/engine/context.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/engine/context.rs
+@@ -1011,9 +1011,14 @@
+         // A device *below* the floor may not answer it; the struct is
+         // zero-initialised, so such a device reports empty strings next to
+         // `above_floor=false`, which reads correctly.
++        // The `deviceName` of each candidate, in the ranker's order: the
++        // operator override (`REIMS_VGPU_VK_DEVICE_NAME`/`_TYPE`) matches on it,
++        // and it is the same field the census line below prints.
++        let mut names: Vec<String> = Vec::with_capacity(candidates.len());
+         for (index, (api, device_type, candidate)) in candidates.iter().enumerate() {
+             let props = instance.get_physical_device_properties(*candidate);
+             let name = CStr::from_ptr(props.device_name.as_ptr()).to_string_lossy();
++            names.push(name.to_string());
+             let mut driver = vk::PhysicalDeviceDriverProperties::default();
+             let mut props2 = vk::PhysicalDeviceProperties2::default().push_next(&mut driver);
+             instance.get_physical_device_properties2(*candidate, &mut props2);
+@@ -1037,7 +1042,7 @@
+                 props.device_id,
+             ));
+         }
+-        let (pd, _chosen_api_version) = select_physical_device(&candidates).map_err(|found| {
++        let (pd, _chosen_api_version) = select_physical_device(&candidates, &names).map_err(|found| {
+             let decline = if found.is_empty() {
+                 InitDecline::NoPhysicalDevice
+             } else {

@@ -1,7 +1,21 @@
 diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
 --- a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
 +++ b/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
-@@ -3794,23 +3794,41 @@
+@@ -3223,6 +3223,13 @@
+     let layout = caches.get_or_create_layout(ctx, pools.layout_bindings(), None, counters)?;
+     let (dsl, pipeline_layout) = (layout.dsl, layout.pipeline_layout);
+     let render_pass = caches.get_or_create_pass(ctx, pass_key, counters, pools)?;
++    // The pass the render pass is *begun* with, which is not always
++    // `render_pass`: a multisample record whose scratch slot is not live is
++    // begun with the Clear variant below, and Vulkan takes the load op from the
++    // begun pass — not from the one the framebuffer was created against
++    // (compatibility deliberately excludes load ops, so the two are compatible
++    // and nothing else would notice the difference).
++    let mut pass_for_begin = render_pass;
+     phase.enter(super::draw_phase::Phase::Pipeline);
+     // How many viewport slots this draw rasterizes into, checked against the
+     // host before it is baked into a pipeline. Refused rather than clamped:
+@@ -3794,24 +3801,45 @@
              }
          };
      let _multisample_source_image = if req.multisample_resolve {
@@ -58,8 +72,21 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-
 +        let (image, _view, framebuffer) =
 +            pools.acquire_multisample_target(ctx, msaa_key, msaa_pass, counters)?;
          target_fb = framebuffer;
++        // Begun with the same variant the framebuffer was built against: a fresh
++        // slot's clear only happens because of this line.
++        pass_for_begin = msaa_pass;
          Some(image)
      } else {
+         None
+@@ -5067,7 +5095,7 @@
+     let clear = clear_values(req)?;
+     phase.enter(super::draw_phase::Phase::RecordPass);
+     let rp_begin = vk::RenderPassBeginInfo::default()
+-        .render_pass(render_pass)
++        .render_pass(pass_for_begin)
+         .framebuffer(target_fb)
+         .render_area(vk::Rect2D {
+             offset: vk::Offset2D { x: 0, y: 0 },
 diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs b/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
 --- a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
 +++ b/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
@@ -104,7 +131,7 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_bu
 diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
 --- a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
 +++ b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
-@@ -9228,19 +9228,15 @@
+@@ -9241,19 +9241,14 @@
                      },
                  ));
              }
@@ -129,7 +156,6 @@ diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/sr
 +            // record the engine can serve cost the driven title's whole scene
 +            // composite (a full-screen MSAA resolve whose first record declares
 +            // `Load`).
-+            let _ = color.load_action;
          }
          resources.viewports = req
              .viewports

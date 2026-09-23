@@ -1,0 +1,210 @@
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
+@@ -3058,25 +3058,44 @@
+     } else {
+         req.target_rgba8.as_ref().map(|v| v.as_slice())
+     };
+-    // Three questions, not one: can this device offer prior contents, and if
+-    // not, did the guest ask for a clear or merely permit undefined contents?
+-    // The second question used to have no representation here, so both answers
+-    // resolved to `CLEAR` and an unseeded preserving pass was cleared to a
+-    // colour the guest never supplied. See [`Color0Load`].
+-    let color0_load = if load_uses_gpu_content
++    // Can this device offer prior contents, and if not, did the guest ask for a
++    // clear or merely permit undefined contents?
++    //
++    // The third answer is `Color0Load::Undefined` — `DONT_CARE` over
++    // `UNDEFINED` — and it is lawful only while the attachment holds something
++    // that belongs to this guest. `MTLLoadActionDontCare` permits an undefined
++    // result; it does not promise the previous tenant's pixels, and over an
++    // image this pool has just created those are exactly what the texels are. A
++    // driven title showed it: the launch splash's rows surviving into its menu
++    // as red bands whose boundary was wherever the guest's partial repaint
++    // stopped, and whole frames of the previous surface at a full-screen
++    // transition. So the stale half of the case takes the answer the
++    // multisample scratch already takes for a fresh slot — a *defined* clear —
++    // while the half that keeps a guest's own prior contents is left alone,
++    // because clearing there is the measured harm `Color0Load::Clear`'s arm
++    // records: 461 partial draws and 2 107 399 texels of live guest content
++    // overwritten in one boot.
++    //
++    // Which half this is comes from the registry, asked before the slot exists:
++    // `content_ready` is the same bit that decides whether a `LOAD` is
++    // answerable, so a residency without it has never been written by this guest
++    // and its bytes are the block the pool last handed out. A pooled target has
++    // no identity and no such bit — its cache key *is* the pass, and the pass
++    // does not exist yet at this point — so it keeps the previous answer, and
++    // the attach site re-asks where the answer is authoritative.
++    let offerable = load_uses_gpu_content
+         || seed_bytes.is_some()
+         || req.target_guest_seed.is_some()
+-        || req.seed_from_target.is_some()
+-    {
+-        Color0Load::Preserve
+-    } else if req
++        || req.seed_from_target.is_some();
++    let preserves_declared = req
+         .color0_declared
+-        .is_some_and(|declared| declared.preserves_prior_contents())
+-    {
+-        Color0Load::Undefined
+-    } else {
+-        Color0Load::Clear
+-    };
++        .is_some_and(|declared| declared.preserves_prior_contents());
++    let preserve_unhonoured = !offerable && preserves_declared;
++    let attachment_is_stale = req
++        .target_identity
++        .as_ref()
++        .is_some_and(|identity| !pools.registry_content_ready(identity));
++    let color0_load = slot0_begin(offerable, preserves_declared, attachment_is_stale);
+     let mut pass_key = PassKey::single(color0_load, color0_format);
+     pass_key.host_accessible_color0 = req.guest_target_memory.is_some();
+     for (i, sec) in req.secondary_targets.iter().enumerate() {
+@@ -3724,6 +3743,17 @@
+                     },
+                 ));
+             }
++            // Asked again where the answer is authoritative: `registry_ensure`
++            // recreates the image when the geometry or aspect changed, and a
++            // recreated slot reports no content the moment the early answer
++            // above may have said it had some. What the pass was built with
++            // separates the two — an elected `Clear` over a slot that turned out
++            // fresh is the fix working, an elected `Undefined` over one is the
++            // residual case that only the pass handle could have told apart, so
++            // it is counted here rather than assumed away.
++            if preserve_unhonoured && !t.content_ready {
++                note_preserve_unhonoured(&identity, pass_key.color0_load);
++            }
+             let primary_image = t.image;
+             let primary_view = attachment_view;
+             let primary_access = t.access;
+@@ -6575,6 +6605,56 @@
+ mod tests {
+     use super::*;
+ 
++    /// The decision table for slot 0's begin, including the combination that has
++    /// no lawful reason to exist: a guest that asked to keep its prior contents
++    /// over an image that never held any.
++    ///
++    /// `stale` is the third question, and the one this table exists to keep
++    /// separate: `offerable == false` says *this device* has nothing to hand the
++    /// pass, not that the image holds nothing of the guest's. Only `stale` says
++    /// the bytes in the attachment belong to whoever used that memory last.
++    #[test]
++    fn a_preserving_record_over_a_stale_attachment_still_clears() {
++        // The guest has content this device can offer: load it, whether or not
++        // the slot counts as fresh (a fresh slot that still has offerable
++        // content is the seed/guest-backing path).
++        assert_eq!(slot0_begin(true, true, false), Color0Load::Preserve);
++        assert_eq!(slot0_begin(true, true, true), Color0Load::Preserve);
++        // No offerable content and no preserving declaration: the guest asked
++        // for a clear and gets one.
++        assert_eq!(slot0_begin(false, false, false), Color0Load::Clear);
++        assert_eq!(slot0_begin(false, false, true), Color0Load::Clear);
++        // No offerable content, a preserving declaration, and an attachment that
++        // does hold the guest's own earlier output: leave it, which is the
++        // reading `MTLLoadActionDontCare` permits and the one the measured
++        // 2 107 399-texel regression was caused by replacing with a clear.
++        assert_eq!(slot0_begin(false, true, false), Color0Load::Undefined);
++        // The same request over an image whose texels are the pool's previous
++        // tenant must NOT leave them: `DONT_CARE` permits any contents, and a
++        // defined clear is the only answer here that cannot present another
++        // frame's pixels as this one's.
++        assert_eq!(
++            slot0_begin(false, true, true),
++            Color0Load::Clear,
++            "a fresh attachment holds the pool's last tenant, not the guest's prior contents"
++        );
++        // Whatever the table answers, only a clear may write the whole
++        // attachment — `Preserve` and `Undefined` both name a begin that leaves
++        // texels the pass does not draw.
++        for offerable in [false, true] {
++            for declared in [false, true] {
++                for stale in [false, true] {
++                    let answer = slot0_begin(offerable, declared, stale);
++                    assert_eq!(
++                        answer == Color0Load::Clear,
++                        !(offerable || (declared && !stale)),
++                        "slot0_begin({offerable}, {declared}, {stale}) = {answer:?}"
++                    );
++                }
++            }
++        }
++    }
++
+     fn sampled_identity() -> TargetIdentity {
+         TargetIdentity::Surface {
+             id: 7,
+@@ -8649,3 +8729,72 @@
+         assert_eq!(checked, COMPARES.len() * OPS.len() * 2);
+     }
+ }
++
++/// Which of the three begins slot 0's pass uses, from the three questions that
++/// decide it.
++///
++/// Split out from the call site because it is the one place the three meet, and
++/// because the third is the one that must not be inferred from the other two:
++/// `offerable` is about what *this device* can hand the pass, and `stale` is
++/// about whether the image holds anything of the guest's at all. A draw whose
++/// target is a guest-named residency asks the registry (`content_ready`, the
++/// same bit that decides whether a `LOAD` is answerable); one whose target is
++/// pooled scratch passes `false`, because its cache key is the pass itself and
++/// the pass does not exist yet where this is decided.
++fn slot0_begin(offerable: bool, preserves_declared: bool, stale: bool) -> Color0Load {
++    if offerable {
++        Color0Load::Preserve
++    } else if preserves_declared && !stale {
++        Color0Load::Undefined
++    } else {
++        Color0Load::Clear
++    }
++}
++
++/// Count and name a preserving colour record whose attachment holds no contents
++/// this device can offer.
++///
++/// The draw that reaches this is the one that used to render with `DONT_CARE`:
++/// the guest asked to keep what the attachment held, the device has nothing to
++/// keep, and — for the case the fix answers — the image is freshly created, so
++/// its texels are whatever the pool last used that memory for. A driven title
++/// showed exactly that: the launch splash's rows surviving into its menu. The
++/// pass then begins with a defined clear, and this is the witness that says how
++/// often the case is real: first-sight per identity, plus an always-on counter.
++///
++/// `elected` is what the pass was actually built with, because this call site
++/// sits after `registry_ensure` and the early election sits before it. A
++/// recreated image reports no content to both, so the two agree on every case
++/// the fix answers; they can disagree only when the early answer said the guest
++/// had content and the slot then turned out fresh, which leaves `Undefined` on
++/// an unwritten image. That residual is named in the line, not absorbed.
++fn note_preserve_unhonoured(identity: &TargetIdentity, elected: Color0Load) {
++    crate::runtime::drain::note_store_route("color0_preserve_unhonoured");
++    if crate::observe::first_sight(
++        "color0_preserve_unhonoured",
++        crate::backend::hash::hash_u64(0x9e37_79b9_7f4a_7c15, identity_debug_hash(identity)),
++    ) {
++        let answer = match elected {
++            Color0Load::Clear => "a defined clear, so it cannot present the previous tenant's pixels",
++            Color0Load::Undefined => {
++                "its previous `DONT_CARE` answer, so an image recreated between the two \
++                 questions may still begin unwritten"
++            }
++            Color0Load::Preserve => "a load, which the early answer said was unanswerable",
++        };
++        crate::observe::off(format!(
++            "color0_preserve_unhonoured identity={identity:?} elected={elected:?} \
++             (the record declared a preserving load and the attachment holds no content this \
++              device can offer; the pass begins with {answer})"
++        ));
++    }
++}
++
++/// A stable number for one identity, so the first-sight latch above is per
++/// attachment rather than per process.
++fn identity_debug_hash(identity: &TargetIdentity) -> u64 {
++    use std::hash::{Hash, Hasher};
++    let mut hasher = std::collections::hash_map::DefaultHasher::new();
++    format!("{identity:?}").hash(&mut hasher);
++    hasher.finish()
++}
