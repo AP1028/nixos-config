@@ -452,6 +452,25 @@ let
       # being inferred from counters. Remove once the black window is fixed.
       patch -p1 -d reims-vgpu < ${./pr-diag-present-dump.patch}
 
+      # Star Birds' black window, root cause: the game's scene intermediate is
+      # `MTLPixelFormatRG32Float` (MTL 0x69), which this device had no rail for
+      # at all. The scene pass was refused as a render target
+      # (`rt_resolve reason=rt_linear_format`) and the full-screen composite that
+      # samples it was refused as a bind (`reason=linear_sample`), so the game's
+      # window never received the scene and WindowServer composited an empty
+      # (black) window onto the display surface the device then presented.
+      #
+      # Admitted the way the four Easy Red 2 formats are: a `TexelLayout::Rg32Float`
+      # (8 bytes/texel, float class, no CPU arm — the `R32Float` precedent, since
+      # the native copy is the guest's own word), a `SampledClass::Rg32Float` with
+      # the sampled/linear maps against `R32G32_SFLOAT`, the render-target
+      # admission with `store_texel_order` for the byte copy, and the
+      # sampled-image-only compute class. The capability snapshot's dimension
+      # field narrows from 32 bits to 16 to make room for the new layout bit: the
+      # masks are exactly what their readers ask about, and a Vulkan image
+      # dimension needs sixteen bits, not thirty-two.
+      patch -p1 -d reims-vgpu < ${./pr-rg32float.patch}
+
 
 
 

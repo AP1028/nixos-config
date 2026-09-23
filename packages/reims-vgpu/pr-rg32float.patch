@@ -1,0 +1,345 @@
+diff --git a/crates/reims-vgpu-protocol/src/pixel_format.rs b/crates/reims-vgpu-protocol/src/pixel_format.rs
+--- a/crates/reims-vgpu-protocol/src/pixel_format.rs
++++ b/crates/reims-vgpu-protocol/src/pixel_format.rs
+@@ -144,6 +144,10 @@
+ /// its absence was a decode gap rather than a rail gap: `bytes_per_pixel`
+ /// answered `None`, so every path that asks about a texel width refused it, not
+ /// just the sampled one.
++pub const MTL_FORMAT_RG32_FLOAT: u16 = 0x69;
++/// Declared for the same reason as [`MTL_FORMAT_RGBA16_UNORM`] below: its
++/// Vulkan spelling is the guest's own word, and this device had no rail for it
++/// at all.
+ pub const MTL_FORMAT_RGBA16_UNORM: u16 = 0x6e;
+ /// The BC (a.k.a. DXT / S3TC) block-compressed families, as Apple numbers them.
+ ///
+@@ -410,6 +414,11 @@
+     /// Declared for the cross-check, on the packed layouts' terms: the
+     /// render-target admission makes it a byte-copy destination and this is the
+     /// independent statement of the same byte layout.
++    /// 8 bytes/texel — two 32-bit floats, sampled natively as
++    /// `R32G32_SFLOAT`. Native for [`Self::Rg11b10Float`]'s reason, one word
++    /// wider: the guest picked the format for range and resolution an eight-bit
++    /// conversion cannot carry.
++    Rg32Float,
+     Rgba8Snorm,
+     /// The single sixteen-bit normalized channel `MTLPixelFormatR16Unorm`
+     /// stores a texel in.
+@@ -596,6 +605,15 @@
+     /// sampled natively as `B10G11R11_UFLOAT_PACK32`. An HDR-intermediate
+     /// colour format, native for the same reason as its two neighbours.
+     Rg11b10Float,
++    /// 8 bytes/texel — two 32-bit floats, sampled natively as
++    /// `R32G32_SFLOAT`. Metal's `MTLPixelFormatRG32Float`, which a driven title
++    /// declares for its scene intermediate: the texel is the guest's own word,
++    /// so the byte copy is exact and an eight-bit conversion would discard the
++    /// range the format was chosen for. Like [`Self::R32Float`] it has **no CPU
++    /// loader arm** — the native rails are the only ones that carry it without
++    /// inventing a conversion, and a cost floor that could decline it would be
++    /// data loss rather than a cost decision.
++    Rg32Float,
+     /// 4 bytes/texel — four signed normalized eight-bit channels, sampled
+     /// natively as `R8G8B8A8_SNORM`.
+     ///
+@@ -703,6 +721,7 @@
+         Self::Bc6hRgbUfloat,
+         Self::Bc7Rgba,
+         Self::Rgba8Snorm,
++        Self::Rg32Float,
+     ];
+ 
+     /// This layout's position in [`Self::ALL`], so a host-side table can be an
+@@ -732,6 +751,7 @@
+             Self::Bgr10a2Unorm => 14,
+             Self::Rg11b10Float => 15,
+             Self::Rgba8Snorm => 26,
++            Self::Rg32Float => 27,
+             Self::Bc1Rgba => 16,
+             Self::Bc2Rgba => 17,
+             Self::Bc3Rgba => 18,
+@@ -802,7 +822,8 @@
+             | Self::Rgb10a2Unorm
+             | Self::Bgr10a2Unorm
+             | Self::Rg11b10Float
+-            | Self::Rgba8Snorm => false,
++            | Self::Rgba8Snorm
++            | Self::Rg32Float => false,
+             Self::Bc1Rgba
+             | Self::Bc2Rgba
+             | Self::Bc3Rgba
+@@ -854,6 +875,7 @@
+                 | Self::Rgba8Snorm
+                 | Self::R16Unorm
+                 | Self::Rg16Uint
++                | Self::Rg32Float
+         )
+     }
+ 
+@@ -997,6 +1019,7 @@
+ 
+             Self::Rgba16Unorm => RGBA16_BPP,
+             Self::Rgb10a2Unorm | Self::Bgr10a2Unorm | Self::Rg11b10Float => RGBA8_BPP,
++            Self::Rg32Float => 8,
+         }
+     }
+ 
+@@ -1074,6 +1097,7 @@
+             // not a fraction of full scale.
+             Self::R16Float
+             | Self::R32Float
++            | Self::Rg32Float
+             | Self::R16Unorm
+             | Self::Rg16Unorm
+             | Self::Rg16Uint
+@@ -1131,6 +1155,7 @@
+             | Self::Rg8
+             | Self::R16Float
+             | Self::R32Float
++            | Self::Rg32Float
+             | Self::R16Unorm
+             | Self::Rg16Unorm
+             | Self::Rg16Uint
+@@ -1430,6 +1455,9 @@
+         MTL_FORMAT_DEPTH32_FLOAT_STENCIL8 | MTL_FORMAT_X32_STENCIL8 => 8,
+         MTL_FORMAT_RGBA16_UNORM | MTL_FORMAT_RGBA16_UINT | MTL_FORMAT_RGBA16_FLOAT => RGBA16_BPP,
+         MTL_FORMAT_RGBA32_UINT | MTL_FORMAT_RGBA32_FLOAT => RGBA32_BPP,
++        // A pair of floats is eight bytes and the guest's own word; no other
++        // member of this table is that shape, so it is named alone.
++        MTL_FORMAT_RG32_FLOAT => 8,
+         _ => return None,
+     })
+ }
+@@ -1886,6 +1914,7 @@
+         MTL_FORMAT_BGR10A2_UNORM => SampledClass::Bgr10a2Unorm,
+         MTL_FORMAT_RGB10A2_UNORM => SampledClass::Rgb10a2Unorm,
+         MTL_FORMAT_RG11B10_FLOAT => SampledClass::Rg11b10Float,
++        MTL_FORMAT_RG32_FLOAT => SampledClass::Rg32Float,
+         MTL_FORMAT_R16_UNORM => SampledClass::R16Unorm,
+         MTL_FORMAT_RGBA8_SNORM => SampledClass::Rgba8Snorm,
+         MTL_FORMAT_RG16_UINT => SampledClass::Rg16Uint,
+@@ -2118,7 +2147,8 @@
+         | MTL_FORMAT_R16_UNORM
+         | MTL_FORMAT_RG11B10_FLOAT
+         | MTL_FORMAT_RGB10A2_UNORM
+-        | MTL_FORMAT_BGR10A2_UNORM => ColorNumericType::Float,
++        | MTL_FORMAT_BGR10A2_UNORM
++        | MTL_FORMAT_RG32_FLOAT => ColorNumericType::Float,
+         MTL_FORMAT_RG16_UINT => ColorNumericType::Uint,
+         _ => return None,
+     })
+@@ -2223,6 +2253,9 @@
+         // nothing. `rgba8_to_texel` still carries an arm for the CPU seed,
+         // because a renderable format has to answer all three store rails.
+         MTL_FORMAT_RG11B10_FLOAT => TexelLayout::Rg11b10Float,
++        // Two floats: the resident is the guest's word, so the byte copy is the
++        // whole Store and no CPU arm is needed for it.
++        MTL_FORMAT_RG32_FLOAT => TexelLayout::Rg32Float,
+         _ => return None,
+     })
+ }
+@@ -2989,6 +3022,7 @@
+         // is the member that has now been measured and moved out.
+         TexelLayout::Rg8
+         | TexelLayout::R32Float
++        | TexelLayout::Rg32Float
+         | TexelLayout::R16Unorm
+         | TexelLayout::Rg16Unorm
+         | TexelLayout::Rg16Uint
+@@ -3135,6 +3169,7 @@
+         }
+         TexelLayout::Rg8
+         | TexelLayout::R32Float
++        | TexelLayout::Rg32Float
+         | TexelLayout::R16Unorm
+         | TexelLayout::Rg16Unorm
+         | TexelLayout::Rg16Uint
+@@ -4200,7 +4235,7 @@
+         }
+         // A guard on the walk itself: an admission set that silently emptied
+         // would satisfy every assertion above.
+-        assert_eq!(admitted, 14, "the admitted colour render target formats");
++        assert_eq!(admitted, 15, "the admitted colour render target formats");
+     }
+ 
+     /// An integer texel has no semantic eight-bit solid colour.
+@@ -4250,7 +4285,7 @@
+                 .unwrap_or_else(|| panic!("render target {format:#x} cannot publish its clear"));
+             assert_eq!(image.pixels().len(), image.row_bytes() as usize * 2);
+         }
+-        assert_eq!(admitted, 14, "the admitted colour render target formats");
++        assert_eq!(admitted, 15, "the admitted colour render target formats");
+ 
+         let integer = solid_clear_image(MTL_FORMAT_RG16_UINT, 2, 2, &clear)
+             .expect("RG16Uint is an admitted render target");
+@@ -4384,6 +4419,7 @@
+                 SampledClass::Bgr10a2Unorm => TexelLayout::Bgr10a2Unorm,
+                 SampledClass::Rgb10a2Unorm => TexelLayout::Rgb10a2Unorm,
+                 SampledClass::Rg11b10Float => TexelLayout::Rg11b10Float,
++                SampledClass::Rg32Float => TexelLayout::Rg32Float,
+                 SampledClass::R16Unorm => TexelLayout::R16Unorm,
+                 SampledClass::Rgba8Snorm => TexelLayout::Rgba8Snorm,
+                 SampledClass::Rg16Uint => TexelLayout::Rg16Uint,
+@@ -4772,6 +4808,7 @@
+                 TexelLayout::Rg8 => MTL_FORMAT_RG8_UNORM,
+                 TexelLayout::R16Float => MTL_FORMAT_R16_FLOAT,
+                 TexelLayout::R32Float => MTL_FORMAT_R32_FLOAT,
++                TexelLayout::Rg32Float => MTL_FORMAT_RG32_FLOAT,
+                 TexelLayout::R16Unorm => MTL_FORMAT_R16_UNORM,
+                 TexelLayout::Rg16Unorm => MTL_FORMAT_RG16_UNORM,
+                 TexelLayout::Rg16Uint => MTL_FORMAT_RG16_UINT,
+@@ -5243,6 +5280,7 @@
+                     TexelLayout::R16Unorm => SampledClass::R16Unorm,
+                     TexelLayout::Rgba8Snorm => SampledClass::Rgba8Snorm,
+                     TexelLayout::Rg16Uint => SampledClass::Rg16Uint,
++                    TexelLayout::Rg32Float => SampledClass::Rg32Float,
+                     // Named rather than defaulted. This arm used to be
+                     // `_ => SampledClass::Bgra8Unorm`, which was true only while
+                     // the admitted set was {Rgba8, Bgra8, Rgba16Float}: the next
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs b/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
+--- a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
+@@ -527,8 +527,19 @@
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ struct DeviceCapabilitySnapshot(u64);
+ 
+-const CAP_MAX_DIMENSION_BITS: u32 = u32::BITS;
++/// Bits 0..[`CAP_MAX_DIMENSION_BITS`] carry the device's `maxImageDimension2D`.
++///
++/// Sixteen bits, not the whole low half: the field is a Vulkan image dimension,
++/// whose spec maximum is 32768, so sixteen bits carry it with half the field
++/// left over for the masks above. The masks are exactly what the readers ask
++/// about (see the note on the two vocabularies below), so when the previous
++/// width ran out the honest repair was to size this field to its own quantity
++/// rather than to narrow a mask. A device reporting more than 65535 is not a
++/// device this contract has to describe; the assert in `from_parts` says so
++/// instead of truncating silently.
++const CAP_MAX_DIMENSION_BITS: u32 = 16;
+ const CAP_LAYOUT_SHIFT: u32 = CAP_MAX_DIMENSION_BITS;
++const CAP_MAX_DIMENSION_MASK: u64 = (1 << CAP_MAX_DIMENSION_BITS) - 1;
+ /// The two per-layout masks span **different vocabularies**, each sized by its
+ /// own.
+ ///
+@@ -587,6 +598,12 @@
+         features: &crate::backend::vulkan::caps::device_features::DeviceFeatures,
+         quirks: crate::backend::vulkan::caps::DriverQuirk,
+     ) -> Self {
++        assert!(
++            u64::from(features.max_image_dimension_2d) <= CAP_MAX_DIMENSION_MASK,
++            "maxImageDimension2D {} does not fit the {} bits this snapshot gives it",
++            features.max_image_dimension_2d,
++            CAP_MAX_DIMENSION_BITS
++        );
+         let mut word = u64::from(features.max_image_dimension_2d);
+         // Walked by layout rather than by array position: the feature arrays are
+         // indexed by `TexelLayout::index()` over the whole vocabulary and each
+@@ -615,7 +632,8 @@
+     }
+ 
+     fn max_render_target_dimension(self) -> u32 {
+-        self.0 as u32
++        // Masked, not `as u32`: the low half is no longer only the dimension.
++        (self.0 & CAP_MAX_DIMENSION_MASK) as u32
+     }
+ 
+     fn render_target_layout_supported(
+diff --git a/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs b/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
+--- a/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
+@@ -1688,7 +1688,8 @@
+         | V::Rgb10a2Unorm
+         | V::Bgr10a2Unorm
+         | V::A8Unorm
+-        | V::Rg11b10Float => 0,
++        | V::Rg11b10Float
++        | V::Rg32Float => 0,
+         V::Rgba16Uint | V::Rgba8Uint | V::Rgba32Uint | V::R32Uint | V::Rg16Uint => 1,
+         V::Rgba8Sint | V::R32Sint => 2,
+     }
+@@ -1817,6 +1818,7 @@
+         // can name it and its view mapping would be illegal on one.
+         | V::A8Unorm
+         | V::Rg11b10Float
++        | V::Rg32Float
+         // Four signed-normalized eight-bit channels: `SAMPLED_IMAGE` is
+         // mandatory for `R8G8B8A8_SNORM` and `STORAGE_IMAGE` is not, so a
+         // dispatch that samples one is admitted and a storage bind is refused
+diff --git a/crates/reims-vgpu-vulkan/src/pixel.rs b/crates/reims-vgpu-vulkan/src/pixel.rs
+--- a/crates/reims-vgpu-vulkan/src/pixel.rs
++++ b/crates/reims-vgpu-vulkan/src/pixel.rs
+@@ -305,6 +305,9 @@
+         p::MTL_FORMAT_RGBA16_UNORM => linear(vk::Format::R16G16B16A16_UNORM, 8),
+         p::MTL_FORMAT_RGBA16_UINT => linear(vk::Format::R16G16B16A16_UINT, 8),
+         p::MTL_FORMAT_RGBA16_FLOAT => linear(vk::Format::R16G16B16A16_SFLOAT, 8),
++        // Two 32-bit floats: `R32G32_SFLOAT` is the guest's own word, so the
++        // byte copy is exact and the sampled bind needs no conversion.
++        p::MTL_FORMAT_RG32_FLOAT => linear(vk::Format::R32G32_SFLOAT, 8),
+         p::MTL_FORMAT_RGBA32_UINT => linear(vk::Format::R32G32B32A32_UINT, 16),
+         p::MTL_FORMAT_RGBA32_FLOAT => linear(vk::Format::R32G32B32A32_SFLOAT, 16),
+         p::MTL_FORMAT_DEPTH16_UNORM => linear(vk::Format::D16_UNORM, 2),
+@@ -383,6 +386,7 @@
+         // gate — or the sample stays fail-visible.
+         vk::Format::R16_SFLOAT => TexelLayout::R16Float,
+         vk::Format::R32_SFLOAT => TexelLayout::R32Float,
++        vk::Format::R32G32_SFLOAT => TexelLayout::Rg32Float,
+         // The ten-bit biplanar video planes, native for the reason the float
+         // layouts above are native. Both are Vulkan-mandatory sampled formats
+         // with mandatory linear filtering, so neither needs a capability gate.
+@@ -452,6 +456,7 @@
+         TexelLayout::Rgb10a2Unorm => vk::Format::A2B10G10R10_UNORM_PACK32,
+         TexelLayout::Bgr10a2Unorm => vk::Format::A2R10G10B10_UNORM_PACK32,
+         TexelLayout::Rg11b10Float => vk::Format::B10G11R11_UFLOAT_PACK32,
++        TexelLayout::Rg32Float => vk::Format::R32G32_SFLOAT,
+         // The BC families. Each Metal spelling and its Vulkan counterpart are
+         // the same block layout with the same bytes in the same order, so the
+         // guest's payload is uploaded verbatim — which is why these need no
+@@ -1018,6 +1023,14 @@
+     /// (`MTLPixelFormatRG11B10Float`); **sampled-image only**, for
+     /// [`Self::Rgb10a2Unorm`]'s reason.
+     Rg11b10Float,
++    /// Two 32-bit floats (`MTLPixelFormatRG32Float`); **sampled-image only**,
++    /// for [`Self::Rgb10a2Unorm`]'s reason.
++    ///
++    /// A driven title samples its scene intermediate in this format, and Vulkan
++    /// mandates `R32G32_SFLOAT` for `SAMPLED_IMAGE` while mandating nothing for
++    /// `STORAGE_IMAGE` — so a dispatch that samples one is admitted and a
++    /// storage bind declines by name with the rest of this group.
++    Rg32Float,
+     /// Four signed-normalized eight-bit channels (`MTLPixelFormatRGBA8Snorm`);
+     /// **sampled-image only**.
+     ///
+@@ -1041,6 +1054,7 @@
+             Self::Rgba16Float | Self::Rgba16Uint => 8,
+             Self::Rg16Float => 4,
+             Self::Rgba16Unorm => 8,
++            Self::Rg32Float => 8,
+             Self::Rg16Unorm | Self::Rg16Uint => 4,
+             Self::R16Float | Self::Rg8Unorm | Self::R16Unorm => 2,
+             Self::R8Unorm | Self::A8Unorm => 1,
+@@ -1250,6 +1264,7 @@
+         pf::MTL_FORMAT_RGB10A2_UNORM => StorageImageFormat::Rgb10a2Unorm,
+         pf::MTL_FORMAT_BGR10A2_UNORM => StorageImageFormat::Bgr10a2Unorm,
+         pf::MTL_FORMAT_RG11B10_FLOAT => StorageImageFormat::Rg11b10Float,
++        pf::MTL_FORMAT_RG32_FLOAT => StorageImageFormat::Rg32Float,
+         pf::MTL_FORMAT_RGBA8_SNORM => StorageImageFormat::Rgba8Snorm,
+         _ => return storage_image(mtl),
+     };
+@@ -1287,6 +1302,7 @@
+         StorageImageFormat::Rgb10a2Unorm => vk::Format::A2B10G10R10_UNORM_PACK32,
+         StorageImageFormat::Bgr10a2Unorm => vk::Format::A2R10G10B10_UNORM_PACK32,
+         StorageImageFormat::Rg11b10Float => vk::Format::B10G11R11_UFLOAT_PACK32,
++        StorageImageFormat::Rg32Float => vk::Format::R32G32_SFLOAT,
+     }
+ }
+ 
+@@ -1912,6 +1928,12 @@
+             TransferFunction::Linear,
+         ),
+         (
++            p::MTL_FORMAT_RG32_FLOAT,
++            vk::Format::R32G32_SFLOAT,
++            8,
++            TransferFunction::Linear,
++        ),
++        (
+             p::MTL_FORMAT_BGR10A2_UNORM,
+             vk::Format::A2R10G10B10_UNORM_PACK32,
+             4,
