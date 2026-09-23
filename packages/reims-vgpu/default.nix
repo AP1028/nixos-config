@@ -433,6 +433,19 @@ let
       # and the `unorm8_to_snorm_byte` doc correction.
       patch -p1 -d reims-vgpu < ${./pr-assessment-fixes.patch}
 
+      # Star Birds' black window: the compositor reads a mapping's guest pages
+      # (the gather rail pays `pay_for_mapping`), while the game's frames are
+      # deferred into residents armed as GVA-keyed debts keyed by `(task, ref)`.
+      # A mapping-keyed lookup cannot see those, so the payment found nothing
+      # and the gather read pages the render never wrote
+      # (`wbdebt_texture_owes_nothing_unresolved`, and every `diag_sample_probe`
+      # answering `debt=None`). Aliasing across the id namespaces is real, so a
+      # mapping that owes nothing while GVA debts exist settles the ledger —
+      # the `pay_all` doctrine the module already states for "cannot name"
+      # readers. Counted as `wbdebt_mapping_pays_gva_alias` so the cost and the
+      # frequency of the real alias are both visible.
+      patch -p1 -d reims-vgpu < ${./pr-starbirds-mapping-gva-alias.patch}
+
 
 
 
