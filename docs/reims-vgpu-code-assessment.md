@@ -843,3 +843,60 @@ sampled class, and the test tables. Estimated footprint: the four files
 `pr-render-target-formats.patch` touched (protocol `pixel_format.rs`,
 `reims-vgpu-vulkan/src/pixel.rs`, `runtime/backend/vulkan/translate/pixel.rs`,
 `runtime/compute_exec/vulkan.rs`) and roughly the same number of hunks.
+
+## Star Birds cycle 7 (RG32Float admitted): content comes back; one pass class left
+
+`pr-rg32float.patch` admits `MTLPixelFormatRG32Float` (0x69) with the rail set the four
+Easy Red 2 formats have: a `TexelLayout::Rg32Float` (8 bytes/texel, float numeric class,
+render-target mask, `store_texel_order` for the byte copy, **no** CPU arm — the
+`R32Float` precedent, since the native copy is the guest's own word), a
+`SampledClass::Rg32Float` with the sampled/linear maps against
+`vk::Format::R32G32_SFLOAT`, and the sampled-image-only compute class. One structural
+change came with it: the capability snapshot's `u64` word was **full**, so its dimension
+field narrowed from 32 bits to 16 (a Vulkan `maxImageDimension2D` is at most 32768, and
+the layout/filter masks are exactly what their readers ask about), with an assert
+replacing the silent truncation.
+
+Verification: `reims-vgpu-protocol` 390 pass, `reims-vgpu-vulkan` 629 pass (+5, +8 aux),
+runtime compiles, full lib suite 2179/55 inside the pre-existing flaky band. One cycle on
+the new build:
+
+- `rt_resolve reason=rt_linear_format` for `fmt=0x69`: **0** (was 3).
+- `draw_prepare_texture_resolve_missing` / `reason=linear_sample`: **0** (was 1).
+- `vk_slab_allocate_memory` 0, `blit_fail` 0.
+- The host window is no longer wholly black: with Star Birds launching, the Steam client
+  window renders in full colour inside the Reims window (it was black in every earlier
+  cycle), so the composite pipeline that was broken by the missing format is working.
+
+What remains, from the same boot's census, is one class of pass:
+
+```
+linux_clear_store draws_skipped refused_by=multisample_load_action_unsupported pipe=2755
+  vtx=6  mid=0 gva=0x374a6000 1920x1080 load=0x1 store=0x2 clear=[0,0,0,1]
+linux_clear_store draws_skipped refused_by=multisample_load_action_unsupported pipe=2784
+  vtx=3  mid=0 gva=0xb49000   1920x1080 load=0x1 store=0x3 clear=[0,0,0,1]
+linux_clear_store draws_skipped refused_by=multisample_load_action_unsupported pipe=2619
+  vtx=3  mid=0 gva=0x1332000  1920x1080 load=0x1 store=0x3 clear=[0,0,0,1]
+linux_clear_store draws_skipped refused_by=multisample_load_action_unsupported pipe=2616
+  vtx=3  mid=0 gva=0x2c75b000 1920x1080 load=0x1 store=0x3 clear=[0,0,0,1]
+```
+
+These are **full-screen** MSAA resolve passes (3- and 6-vertex draws into 1920×1080
+targets, store 2/3, black clears) — `pipe=2616` is the very composite the RG32Float
+admission unblocked one stage earlier, so it now gets past the texture resolve and is
+refused at the multisample LOAD check. `pr-msaa-store-and-resolve.patch` admits LOAD only
+when `req.continues_render_pass`, and these records are the *first* record of their packet
+even though the engine's single multisample slot may well still hold the same key's
+content (the slot is reused when `slot.key == key && !key.transient_depth`, and key
+equality does not require packet continuity).
+
+The honest fix is therefore an **engine** change, not another predicate widening: choose
+the pass's load op from the slot's liveness — CLEAR when
+`acquire_multisample_target` will create a fresh image, LOAD when it reuses the live one.
+That means computing the `MultisampleTargetKey` before the `PassKey`'s `color0_load` is
+fixed, or re-fetching the pass once the acquisition has answered. Accepting LOAD
+unconditionally is not equivalent: a fresh slot would begin with `initialLayout =
+UNDEFINED` and load undefined contents, which is harmless for a full-screen overwrite but
+not for a partial pass. That decision — whether the device may load an undeclared scratch
+image when the guest asks — is the one the patch's own comment says stays refused, so it
+belongs to the maintainer rather than to a diagnostic round.
