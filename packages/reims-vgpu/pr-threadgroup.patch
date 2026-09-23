@@ -1,0 +1,134 @@
+diff --git a/crates/reims-vgpu/src/runtime/decode/resource/mod.rs b/crates/reims-vgpu/src/runtime/decode/resource/mod.rs
+index a0620256..22558b51 100644
+--- a/crates/reims-vgpu/src/runtime/decode/resource/mod.rs
++++ b/crates/reims-vgpu/src/runtime/decode/resource/mod.rs
+@@ -3019,6 +3019,22 @@ const COMPUTE_PIPELINE_TAG_THREADGROUP_MULTIPLE: u8 = 0x01;
+ /// [`RENDER_PIPELINE_TAG_LABEL`] at a different index, for the reason that
+ /// constant's doc gives.
+ const COMPUTE_PIPELINE_TAG_LABEL: u8 = 0x02;
++/// `MTLComputePipelineDescriptor.maxTotalThreadsPerThreadgroup`, the ceiling the
++/// guest places on a pipeline's threadgroup.
++///
++/// Identified by perturbation against Apple's own serializer, the way this
++/// file's render list was: a bare `MTLComputePipelineDescriptor` with only this
++/// property set serializes through
++/// `-[_MTLDevice serializeComputePipelineDescriptor:]` as
++/// `01 08 04 40 00 00 00` — one field, tag `0x08`, four-byte value — while the
++/// same descriptor with nothing set serializes as the single byte `00`. Unity
++/// sets it on the compute pipelines it builds (its `Internal-Skinning` and
++/// `Internal-BlendShape` kernels carry 64), which is why the tag arrives from a
++/// game and not from a desktop compositing workload.
++///
++/// It is not in the compute pair above, and the width is four bytes rather than
++/// the two an earlier draft of this doc's note guessed at.
++const COMPUTE_PIPELINE_TAG_MAX_TOTAL_THREADS: u8 = 0x08;
+ /// `MTLComputePipelineDescriptor.stageInputDescriptor` — a byte offset from the
+ /// end of the 16-byte serializer-object header to a nested property list, in the same units
+ /// as [`PIPELINE_TAG_VERTEX_DESCRIPTOR_OFFSET`] and
+@@ -3090,6 +3106,15 @@ pub const PIPELINE_TAG_COMPUTE_STAGE_INPUT_OFFSET: u8 = 0x03;
+ ///   the shader itself and takes the threadgroup size from the dispatch record,
+ ///   so there is nothing to apply — and the property's own default is the
+ ///   conservative arm, so not applying it cannot be the unsafe direction.
++/// * [`COMPUTE_PIPELINE_TAG_MAX_TOTAL_THREADS`] is the ceiling the guest places
++///   on that same shape. Core Vulkan has no per-pipeline invocation limit to
++///   apply, so the device builds the pipeline from the kernel alone and takes
++///   the shape from the dispatch record — the same place the guest's own
++///   dispatch gets it. The property can only *lower* a pipeline's cap, so a
++///   guest that honours it dispatches at or below it and nothing here changes,
++///   and one that does not is a guest whose pipeline creation on Metal would
++///   have failed first. The device limit that does matter is the one
++///   `compute_info_caps` answers, and that one is read from the host.
+ /// * [`PIPELINE_TAG_DEPTH_ATTACH_FORMAT`] and
+ ///   [`PIPELINE_TAG_STENCIL_ATTACH_FORMAT`] declare the attachment formats the
+ ///   pipeline is compiled against. They do not *select* an attachment: the
+@@ -3146,9 +3171,10 @@ const RENDER_PIPELINE_TAGS_STILL_REFUSED: [u8; 2] = [
+ ];
+ /// The compute half of [`RENDER_PIPELINE_TAGS_BENIGN`]; same rule, and listed
+ /// apart for the same reason `COMPUTE_PIPELINE_TAGS_CONSUMED` is.
+-const COMPUTE_PIPELINE_TAGS_BENIGN: [u8; 2] = [
++const COMPUTE_PIPELINE_TAGS_BENIGN: [u8; 3] = [
+     COMPUTE_PIPELINE_TAG_THREADGROUP_MULTIPLE,
+     COMPUTE_PIPELINE_TAG_LABEL,
++    COMPUTE_PIPELINE_TAG_MAX_TOTAL_THREADS,
+ ];
+ 
+ /// A pipeline-descriptor field this decoder does not read **and has not
+@@ -3225,10 +3251,14 @@ const COMPUTE_PIPELINE_TAGS_BENIGN: [u8; 2] = [
+ ///
+ /// An earlier draft of this doc guessed that the compute pair might include
+ /// `maxTotalThreadsPerThreadgroup` and warned that dropping it could let this
+-/// device dispatch past a cap the guest set. **That alarm was wrong.** That
+-/// property is a different tag and a `u16`, and it appears in none of the shapes
+-/// above. The guess is recorded here rather than deleted because the shape line
+-/// is what disproved it, which is the argument for having one.
++/// device dispatch past a cap the guest set. **The guess was right about the
++/// property and wrong about where it lives, and the alarm was wrong.** It is not
++/// in the pair above: it is tag `0x08`, identified the way the render list's
++/// entries were, by setting exactly that property and reading what Apple's own
++/// serializer emitted — see [`COMPUTE_PIPELINE_TAG_MAX_TOTAL_THREADS`], which
++/// also records the width the guess got wrong. The warning's premise did not
++/// survive either: the cap can only *lower* what a pipeline accepts, and the
++/// shape a dispatch runs with comes from the dispatch record, not the pipeline.
+ ///
+ /// # Refused, and what it costs to be wrong in each direction
+ ///
+diff --git a/crates/reims-vgpu/src/runtime/decode/resource/tests.rs b/crates/reims-vgpu/src/runtime/decode/resource/tests.rs
+index 5081a543..49a5e5c8 100644
+--- a/crates/reims-vgpu/src/runtime/decode/resource/tests.rs
++++ b/crates/reims-vgpu/src/runtime/decode/resource/tests.rs
+@@ -1236,6 +1236,55 @@ fn a_compute_pipeline_that_states_its_stage_input_offset_decodes() {
+     );
+ }
+ 
++/// Unity sets `maxTotalThreadsPerThreadgroup` on the compute pipelines it
++/// builds, and the descriptor that carries it decodes instead of being refused
++/// for a property nobody had named.
++///
++/// Captured live from Easy Red 2 (Unity 2022.3, macOS 13.7.8 guest) on the
++/// x86/Vulkan rail: the label offset, the threadgroup ceiling, the kernel ref,
++/// then the name the label points at. Every draw that used one of these
++/// pipelines was refused before the tag was identified — 993 496
++/// `compute_load_pipeline reason=desc_decode` in one session, the game's canvas
++/// black while its audio played.
++#[test]
++fn a_compute_pipeline_that_states_its_threadgroup_ceiling_decodes() {
++    // `Internal-Skinning.main`, exactly as the guest sent it.
++    let live: [u8; 60] = [
++        0x0b, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00, 0x00, 0x31, 0x01, 0x00, 0x00, 0x2a, 0x00, 0x00,
++        0x00, 0x03, 0x02, 0x04, 0x13, 0x00, 0x00, 0x00, 0x08, 0x04, 0x40, 0x00, 0x00, 0x00, 0x00,
++        0x04, 0x76, 0x00, 0x00, 0x00, 0x49, 0x6e, 0x74, 0x65, 0x72, 0x6e, 0x61, 0x6c, 0x2d, 0x53,
++        0x6b, 0x69, 0x6e, 0x6e, 0x69, 0x6e, 0x67, 0x2e, 0x6d, 0x61, 0x69, 0x6e, 0x00, 0x00, 0x00,
++    ];
++    // The two tags this test is about are where the record says they are: the
++    // label first, then the ceiling eight bytes later.
++    assert_eq!(
++        live[SERIALIZER_OBJECT_FIRST_TLVS + 1],
++        COMPUTE_PIPELINE_TAG_LABEL
++    );
++    assert_eq!(
++        live[SERIALIZER_OBJECT_FIRST_TLVS + 7],
++        COMPUTE_PIPELINE_TAG_MAX_TOTAL_THREADS
++    );
++
++    let cap = crate::observe::FailCapture::start();
++    let cp = decode_compute_pipeline_descriptor(&live)
++        .expect("a threadgroup ceiling is a property this decoder has identified");
++    assert_eq!(cp.kernel_func_ref, 0x76);
++    assert!(
++        cp.stage_input.is_none(),
++        "the label's string is not a stage-input section"
++    );
++    let lines = cap.lines();
++    let dropped: Vec<&String> = lines
++        .iter()
++        .filter(|l| l.contains("reason=pipeline_descriptor_field_dropped"))
++        .collect();
++    assert!(
++        dropped.is_empty(),
++        "a benign tag is not a dropped field: {dropped:?}"
++    );
++}
++
+ #[test]
+ fn a_populated_compute_stage_input_section_preserves_every_field() {
+     let cp = decode_compute_pipeline_descriptor(&macos12_shaped_compute_pipeline(9, 2, 3))

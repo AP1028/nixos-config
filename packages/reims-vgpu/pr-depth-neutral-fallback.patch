@@ -1,0 +1,82 @@
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+--- b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -1876,6 +1876,55 @@
+         }
+     }
+ 
++    // A depth texture no rail above could serve. Depth is the one sampled kind
++    // with no CPU content anywhere: its bytes exist only in a device resident
++    // (keyed by texture ref, see `try_texture_resident_sample`) — the guest's
++    // pages are never written by a depth Store, and no sampled layout names a
++    // depth format. A composite/post pass that samples the scene depth is
++    // exactly the pass that puts the 3D layer on screen, so refusing it costs
++    // the guest the whole frame while the depth it asked for does not exist.
++    // Serve a 1x1 neutral instead and keep the loss on the fail channel, so the
++    // frame lands and the missing depth stays measurable.
++    if let Some((_entry, desc)) = sampled_texture_descriptor(state, host, task_id, texture_ref) {
++        if let Ok(tex) = decode_texture_descriptor(&desc) {
++            if is_depth_pixel_format(tex.pixel_format) {
++                crate::runtime::drain::note_store_route("depth_sample_neutralized");
++                if crate::observe::first_sight(
++                    "depth_sample_neutralized",
++                    u64::from(task_id) << 32 | u64::from(texture_ref),
++                ) {
++                    let (dw, dh) = tex.extent().unwrap_or((0, 0));
++                    crate::observe::fail(format!(
++                        "depth_sample_neutralized task={task_id} ref={texture_ref} \
++                         fmt={:#x} {dw}x{dh} (no depth resident; 1x1 neutral bound)",
++                        tex.pixel_format,
++                    ));
++                }
++                return Some((
++                    1,
++                    1,
++                    0,
++                    SampledSourceRequest::Bytes(
++                        // A depth sample with no content reads **far**, not
++                        // near: the guest passes that sample a depth texture
++                        // nothing rendered into are reading the value their own
++                        // clear left (Metal's default `clearDepth` is 1.0), and
++                        // a zero here turns every depth-driven post effect —
++                        // fog, SSAO, depth-of-field — black over the whole
++                        // scene.
++                        std::sync::Arc::new(vec![255u8; 4]),
++                        None,
++                        crate::protocol::pixel_format::SampledByteFormat::from_source(
++                            crate::protocol::pixel_format::TexelLayout::Rgba8,
++                            tex.pixel_format,
++                        ),
++                        crate::backend::vulkan::engine::SampledByteOrigin::Synthetic,
++                    ),
++                ));
++            }
++        }
++    }
++
+     // The last-resort sampled rung. The geometry comes from the decoded texture
+     // descriptor and from nowhere else. Neither a payload shorter than the
+     // descriptor's own extent nor a descriptor naming no extent at all is a
+@@ -4595,6 +4644,22 @@
+     None
+ }
+ 
++/// Whether a decoded Metal pixel format is one of the depth formats.
++///
++/// Named here because the sampled rails must tell a depth texture (whose bytes
++/// exist only in a device resident — no CPU loader, no sampled layout) from a
++/// colour one without asking the layout table, which has no answer for these.
++pub(super) fn is_depth_pixel_format(format: u16) -> bool {
++    use crate::protocol::pixel_format as p;
++    matches!(
++        format,
++        p::MTL_FORMAT_DEPTH16_UNORM
++            | p::MTL_FORMAT_DEPTH32_FLOAT
++            | p::MTL_FORMAT_DEPTH24_UNORM_STENCIL8
++            | p::MTL_FORMAT_DEPTH32_FLOAT_STENCIL8
++    )
++}
++
+ /// Which repair would let the linear zero-copy rung carry this format, as a
+ /// route name.
+ ///

@@ -153,8 +153,71 @@ let
       export CARGO_HOME="$TMPDIR/cargo-home"
       mkdir -p "$CARGO_HOME"
       cp "${cargoDeps}/.cargo/config.toml" "$CARGO_HOME/config.toml"
+
+      # metal2vulkan scalar-into-aggregate device store: the native emitter
+      # refused to reinterpret a scalar store through a pointer to an array or
+      # struct unless the pointer lived in Function/Workgroup/Private storage,
+      # so a device (StorageBuffer) store such as `store float` into a
+      # `[10 x i32]` slot fell through to a raw OpStore whose pointee disagreed
+      # with the value type, and the owned-module verifier refused the whole
+      # kernel ("owned Store violates its pointer-pointee and value-type
+      # contract") — Easy Red 2's skinning and blend-shape compute kernels.
+      # The load and vector siblings of the same lowering already run in every
+      # storage class, and the access chain plus value bitcast it emits is
+      # valid SPIR-V in all of them, so the guard is dropped. Applied here
+      # until it lands upstream. The vendor directory holds symlinks into the
+      # store, so only metal2vulkan is copied for real; everything else keeps
+      # pointing at its read-only store package.
+      mkdir -p "$TMPDIR/cargo-vendor"
+      cp -r --no-preserve=ownership "${cargoDeps}/." "$TMPDIR/cargo-vendor"
+      rm -f "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0"
+      cp -rL --no-preserve=ownership "${cargoDeps}/metal2vulkan-0.1.0" \
+        "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0"
+      chmod -R u+w "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0"
+      patch -p1 -d "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0" \
+        < ${./metal2vulkan-scalar-aggregate-store.patch}
+      if grep -q 'StorageClass::Function | StorageClass::Workgroup | StorageClass::Private' \
+           "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0/src/native/emitter/body/vector_store.rs"; then
+        echo "metal2vulkan scalar-aggregate store guard survived the patch" >&2
+        exit 1
+      fi
+
+      # metal2vulkan `[[base_vertex]]`/`[[base_instance]]`: the translator knew
+      # neither role, so every vertex shader declaring one was refused at the
+      # stage-input pass ("declares AIR role 'air.base_vertex', which has no
+      # lowering") and every draw of a pipeline built from it was skipped --
+      # Easy Red 2's scene pipelines, which is the black window. Metal's base
+      # parameters are the values Vulkan's VertexIndex/InstanceIndex fold in
+      # (so they cannot be recovered from those builtins), and are lowered to
+      # the BaseVertex/BaseInstance builtins with the DrawParameters
+      # capability and the SPV_KHR_shader_draw_parameters extension; the
+      # matching shaderDrawParameters device feature is enabled by the engine
+      # patch below. Applied here until it lands upstream.
+      patch -p1 -d "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0" \
+        < ${./metal2vulkan-base-vertex.patch}
+      if ! grep -q 'VertRole::BaseVertex' \
+           "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0/src/meta/mod.rs" \
+         || ! grep -q 'SPV_KHR_shader_draw_parameters' \
+           "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0/src/passes/stage_input/mod.rs"; then
+        echo "metal2vulkan base-vertex lowering did not apply" >&2
+        exit 1
+      fi
+
+      # metal2vulkan `[[front_facing]]` declared as an integer: Unity's HLSL
+      # lowers some boolean uses to `i32`, and the stage-input pass refused the
+      # parameter ("FrontFacing is a boolean builtin"), which dropped every
+      # draw of each pipeline whose fragment shader did so -- the missing
+      # vehicles in a driven Easy Red 2 scene. The builtin is loaded as the
+      # bool it is and selected into the parameter's own integer type.
+      patch -p1 -d "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0" \
+        < ${./metal2vulkan-front-facing-int.patch}
+      if ! grep -q 'LoadBoolSelect' \
+           "$TMPDIR/cargo-vendor/metal2vulkan-0.1.0/src/passes/stage_input/mod.rs"; then
+        echo "metal2vulkan front-facing lowering did not apply" >&2
+        exit 1
+      fi
       substituteInPlace "$CARGO_HOME/config.toml" \
-        --replace-fail 'directory = "cargo-vendor-dir"' "directory = \"${cargoDeps}\""
+        --replace-fail 'directory = "cargo-vendor-dir"' "directory = \"$TMPDIR/cargo-vendor\""
       export CARGO_NET_OFFLINE=true
 
       # PR #81 ("Fix format texel accounting in direct guest writeback"): the
@@ -178,6 +241,187 @@ let
       substituteInPlace reims-vgpu/crates/reims-vgpu/src/runtime/drain/mod.rs \
         --replace-fail '(DISPLAY_MODE3_W, DISPLAY_MODE3_H),' \
                        '(DISPLAY_MODE3_W, DISPLAY_MODE3_H), (2560, 1600), (3440, 1440),'
+
+      # Fix for the Easy Red 2 black screen: Unity sets
+      # maxTotalThreadsPerThreadgroup on its compute pipelines, and the decoder
+      # refused the whole pipeline for the unidentified tag 0x08. The tag was
+      # identified by driving Apple's own serializer (see the patch's doc).
+      patch -p1 -d reims-vgpu < ${./pr-threadgroup.patch}
+
+      # Fix for the remaining Easy Red 2 black screen: the Vulkan rail refused
+      # a whole draw when a guest sampler bind could not be resolved, while the
+      # macOS rail degrades to the binding's fallback and reports it. A driven
+      # session measured 661 of 692 draws refused — 639 of them one full-screen
+      # composite per frame — with the frame texture intact behind it, so the
+      # drawable stayed at its black clear. Release the binding instead and let
+      # the reflected-sampler loop provision the shader's own static sampler (or
+      # the normalized default), keeping the refusal visible.
+      patch -p1 -d reims-vgpu < ${./pr-sampler-fallback.patch}
+
+      # Fix for the Easy Red 2 hang that survived the three above: the
+      # CPU-visible compute path quiesced the whole device (`retire_all` —
+      # flush the tail batch, wait every ring slot's fence up to 5s each, sweep
+      # the graveyard) on the packet-processing thread, for every dispatch that
+      # carries a readback. A driven session sat in it for minutes at a time
+      # with the guest's packets queued behind, so the guest's Metal resource
+      # deletes blocked in the kernel and Unity's render thread blocked behind
+      # those — black screen with the device "alive". The wait a readback needs
+      # is its own entry's fence; the periodic graveyard maintenance on the poll
+      # heartbeat does the rest of the housekeeping without waiting.
+      patch -p1 -d reims-vgpu < ${./pr-compute-retire-scope.patch}
+
+      # Fix for the remaining black screen: a slot the guest has emptied and
+      # re-created (a drawable ring recycles its refs every frame) makes the
+      # draw that names it miss the object list, and refusing that draw is a
+      # black frame — the composite that samples a re-created drawable is
+      # exactly this shape, and the game's whole present path is behind it. The
+      # slot-recheck module already measures these as publish races
+      # (`slot_recheck_filled`); this latches the last resolution each ref
+      # produced and serves it while the watch is young, so the frame is one
+      # late instead of absent. Deferring the packet is the fuller answer the
+      # module's doc names, and needs a dependency kind in the model; this is
+      # the contained half.
+      patch -p1 -d reims-vgpu < ${./pr-sampled-resolution-latch.patch}
+
+      # The same publish race, on the blit path: a transient empty slot fails
+      # the *upload* rather than a draw, so the game's textures never reach the
+      # device and every draw that samples them comes out black — the black
+      # window with music over it, while the desktop (whose textures resolved
+      # cleanly) renders. Latches the last backing each (ref, level, slice)
+      # resolved to and serves it while the watch is young.
+      patch -p1 -d reims-vgpu < ${./pr-blit-texture-latch.patch}
+
+      # The draw-target half of the same story: a render chain whose Store
+      # skips its readback leaves the content on the device's resident with
+      # nothing observable in the guest's pages — the import-present rail that
+      # used to make it observable is gone (see `M2vDrawSpan::ResidentChain`'s
+      # own note). The guest's WindowServer composites these windows by
+      # sampling those pages, so the window is black over a running game. Arms
+      # the surface writeback debt on that arm so the copy lands when the
+      # pages are read.
+      patch -p1 -d reims-vgpu < ${./pr-chain-resident-debt.patch}
+
+      # The payment side of the same gap: the debt is armed by *mapping* and
+      # paid by *texture ref* through `texture_to_mapping`, but only the
+      # mapper-ref-texture resolution writes that latch — a linear texture
+      # (which is what a drawable ring is) never did, so the payment resolved
+      # nothing (`wbdebt_texture_owes_nothing_unresolved`) and the frame stayed
+      # in the resident. Latches the ref -> mapping association for a linear
+      # sample when exactly one mapping's page list holds the buffer's first
+      # physical page.
+      patch -p1 -d reims-vgpu < ${./pr-linear-sample-mapping-latch.patch}
+
+      # The gather rail reads a mapping's pages and paid nothing first. The
+      # zero-copy rails' own note states the rule ("the payment is what puts it
+      # on the queue; then queue order applies") and this rail was the
+      # exception: a debt-owed frame has no command on any queue, so the
+      # gather read the pages the frame before last. That is the black window
+      # over a running game, and it is the rail the failing games' samples take
+      # (`sampled_direct_declined` sends them here).
+      patch -p1 -d reims-vgpu < ${./pr-gather-pays-writeback-debt.patch}
+
+      # The black game window, root cause: Unity encodes render passes with
+      # `MTLStoreActionUnknown` (the SDK's deferred form) and replaces it with a
+      # `SetStoreAction` record before ending the encoder. The model's descriptor
+      # resolver refused the unknown ordinal, so the ordering plane refused the
+      # *whole exec packet* — a driven Unity title lost 84 % of its render
+      # packets (2 600-3 000 a second refused against 2 900 loaded, all
+      # `field: "store_action", value: 4`) and the window stayed at its black
+      # clear while music and UI kept running. Accepts the deferred ordinal as
+      # the preserving answer, and applies each stream's own `SetStoreAction`
+      # overrides to the model's descriptor so the dependency graph's
+      # resolve-target edge follows the action the guest actually chose.
+      patch -p1 -d reims-vgpu < ${./pr-store-action-deferred.patch}
+
+      # The vertex half of the same window: with the store-action packets
+      # admitted, every draw of the game's scene pipelines was then refused by
+      # the stage-input pass, because the vertex shaders declare Metal's
+      # `[[base_vertex]]`/`[[base_instance]]` and the translator had no
+      # lowering for either role (27 708 refusals, all non-indexed 3-vertex
+      # draws). The metal2vulkan patch above emits the Vulkan
+      # BaseVertex/BaseInstance builtins; this enables the `shaderDrawParameters`
+      # device feature those builtins require. Chained only when the host
+      # reports the feature, so a host without it still gets a device (and
+      # still refuses to promise a base it cannot read).
+      patch -p1 -d reims-vgpu < ${./pr-shader-draw-parameters.patch}
+
+      # The four render-target formats a driven Unity title declares and this
+      # device refused as `rt_resolve reason=rt_linear_format`, each admitted
+      # with its full rail set (render target, sampled bind, byte copy, CPU
+      # conversion, and the cross-check that holds those tables together):
+      # `RG11B10Float` (HDR scene colour), `RGB10A2Unorm` (its packed sibling),
+      # `R16Unorm` (a single-channel target), and `RGBA8Snorm` (the normal /
+      # velocity buffer). Every Vulkan spelling is the guest's own word.
+      patch -p1 -d reims-vgpu < ${./pr-render-target-formats.patch}
+
+      # The sampled bind of the depth buffer: a depth attachment is keyed by the
+      # guest's texture reference (it is the one target kind whose content has
+      # no CPU copy anywhere), and the GVA rails cannot name it. Binds the
+      # texture-keyed resident and, for a depth image, takes the resident's own
+      # format and aspects, since the bind's spelling may name another depth
+      # precision.
+      patch -p1 -d reims-vgpu < ${./pr-depth-resident-sample.patch}
+
+      # An MSAA pass that stores with `StoreAndMultisampleResolve` and a
+      # continuing record that LOADs the multisample scratch: both were refused,
+      # which lost the geometry of every such pass. The multisample image is
+      # device scratch (no rail writes one back to guest pages), so the resolve
+      # is the whole observable effect of the store action.
+      patch -p1 -d reims-vgpu < ${./pr-msaa-store-and-resolve.patch}
+
+      # The other half of a depth bind: the guest ping-pongs its camera depth
+      # and samples the half the render pass did not name, so the bind's own
+      # identity finds no resident even though the frame this device just
+      # rendered is exactly what it asked for. Serves the most recent ready
+      # depth resident of the same geometry, excluding the draw's own depth
+      # attachment (serving that is a feedback read the engine answers with a
+      # full-image snapshot per draw).
+      patch -p1 -d reims-vgpu < ${./pr-depth-resident-latest.patch}
+
+      # A depth sample no rail can serve is a composite/post pass whose whole
+      # purpose is to put the 3D layer on screen; refusing it costs the guest
+      # the frame. Serves a 1x1 neutral (reading far, the value the guest's own
+      # clear left) and keeps the loss on the fail channel.
+      patch -p1 -d reims-vgpu < ${./pr-depth-neutral-fallback.patch}
+
+      # The same guest allocation can be described by two task-local texture
+      # objects (a render thread renders into its own reference while another
+      # task samples the same storage), and the writeback ledger keys by
+      # `(task, reference)`. Answers a sampled bind's lookup by allocation so
+      # the resident holding the frame is found under the other name.
+      patch -p1 -d reims-vgpu < ${./pr-gva-debt-by-allocation.patch}
+
+      # A chain resident for a GVA target (the game's own render target) armed
+      # no writeback debt at all: `arm_surface_writeback_debt` is mapping-keyed
+      # and refuses `mid=0`, so a later pass that sampled the target gathered
+      # pages nothing ever wrote and the scene composited black.
+      patch -p1 -d reims-vgpu < ${./pr-chain-gva-writeback-debt.patch}
+
+      # The completion side: the `Queued` publication arms hand a stamp word to
+      # the GPU-ordered rail and return, so the page is only written if that
+      # queued write is not superseded first. When it is, a guest waiting on
+      # the slot waits forever (the render thread stalled in a resource
+      # deallocation for minutes). Re-issues the ordered write on a later pass
+      # when the page has not caught up — ordered, not inline: an inline write
+      # fires the guest's fence before the work it completes, which a driven
+      # session measured as red corruption across the guest's desktop.
+      patch -p1 -d reims-vgpu < ${./pr-stamp-page-reissue.patch}
+
+
+      # DIAGNOSTIC (temporary): one line a second naming every stamp slot's
+      # guest-visible page word against the ordering plane's held point and any
+      # queued word still owed a landing, plus the positions this device holds
+      # and the stamps they watch. Remove once the black-window stall is fixed.
+      patch -p1 -d reims-vgpu < ${./pr-diag-stamp-census.patch}
+
+
+      # DIAGNOSTIC (temporary, opt-in via REIMS_VGPU_DIAG_CHAIN_READBACK=1):
+      # names the depth identity the render side keys a resident under and the
+      # candidates a sampled bind asks about, and can force a chain resident to
+      # be read back so its rendered content is observable. Remove once the
+      # depth rails no longer need reading.
+      patch -p1 -d reims-vgpu < ${./pr-diag-sampled-depth.patch}
+
 
       cd reims-vgpu/vendor/qemu
       ./configure \

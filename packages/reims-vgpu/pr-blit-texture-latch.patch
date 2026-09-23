@@ -1,0 +1,117 @@
+--- a/crates/reims-vgpu/src/runtime/blit_exec/mod.rs
++++ b/crates/reims-vgpu/src/runtime/blit_exec/mod.rs
+@@ -335,6 +335,7 @@
+     size: u64,
+ }
+ 
++#[derive(Clone)]
+ pub(crate) struct LinearTextureLevel {
+     /// Allocation base GVA (`handle << page_shift` for the device).
+     base_gva: u64,
+@@ -374,6 +375,7 @@
+ /// Multi-plane (biplanar 420): sample window comes from the cached guest device
+ /// descriptor via geometry match (texture width/height/bpe); `surface_offset` is
+ /// the plane base in the shared mapping.
++#[derive(Clone)]
+ pub(crate) struct MapperRefTexture {
+     mapping_id: u32,
+     width: u32,
+@@ -395,6 +397,7 @@
+     pixel_format: u16,
+ }
+ 
++#[derive(Clone)]
+ enum TextureBacking {
+     Linear(LinearTextureLevel),
+     MapperRefTexture(MapperRefTexture),
+@@ -511,6 +514,61 @@
+     Ok(LinearBuffer { gva, size })
+ }
+ 
++/// The last backing each `(task, ref, level, slice)` resolved to, so a publish
++/// race can be answered instead of failing the blit.
++///
++/// The miss this exists for is [`crate::runtime::objects::slot_recheck`]'s: the
++/// guest deletes and re-creates an object and the packet names the ref before
++/// the new slot is published. For a blit that is not a lost draw but a lost
++/// *upload* — the game's textures never reach the device, every draw that
++/// samples them comes out black, and the window is a black rectangle with
++/// music over it while the desktop (whose textures resolved cleanly) renders.
++/// A frame late is the answer; absent is not.
++///
++/// Served only while the slot-recheck watch is young
++/// ([`crate::runtime::objects::slot_recheck::pending_publication`]), so a
++/// deleted object's layout cannot be served past the window the publish race
++/// lives in.
++static BLIT_TEXTURE_LATCH: std::sync::LazyLock<
++    std::sync::Mutex<
++        std::collections::HashMap<(u32, u32, u16, u16), TextureBacking>,
++    >,
++> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
++
++/// Bound on the latch's population: a task that churns refs must not grow it
++/// without limit. Past this, only keys already in the table are refreshed.
++const BLIT_TEXTURE_LATCH_CAP: usize = 8192;
++
++fn latch_blit_texture(
++    task_id: u32,
++    texture_ref: u32,
++    level: u16,
++    slice: u16,
++    backing: &TextureBacking,
++) {
++    let mut latch = BLIT_TEXTURE_LATCH
++        .lock()
++        .unwrap_or_else(|poisoned| poisoned.into_inner());
++    let key = (task_id, texture_ref, level, slice);
++    if latch.len() >= BLIT_TEXTURE_LATCH_CAP && !latch.contains_key(&key) {
++        return;
++    }
++    latch.insert(key, backing.clone());
++}
++
++fn latched_blit_texture(
++    task_id: u32,
++    texture_ref: u32,
++    level: u16,
++    slice: u16,
++) -> Option<TextureBacking> {
++    BLIT_TEXTURE_LATCH
++        .lock()
++        .unwrap_or_else(|poisoned| poisoned.into_inner())
++        .get(&(task_id, texture_ref, level, slice))
++        .cloned()
++}
++
+ fn resolve_texture_backing<M: HostMemory + HostOps>(
+     state: &mut DeviceState,
+     host: &mut M,
+@@ -519,7 +577,27 @@
+     level: u16,
+     slice: u16,
+ ) -> Result<TextureBacking, BlitStatus> {
+-    resolve_texture_backing_depth(state, host, task_id, texture_ref, level, slice, 0)
++    match resolve_texture_backing_depth(state, host, task_id, texture_ref, level, slice, 0) {
++        Ok(backing) => {
++            latch_blit_texture(task_id, texture_ref, level, slice, &backing);
++            Ok(backing)
++        }
++        Err(refusal) => {
++            if let Some(latched) = latched_blit_texture(task_id, texture_ref, level, slice).filter(
++                |_| {
++                    crate::runtime::objects::slot_recheck::pending_publication(
++                        task_id,
++                        texture_ref,
++                        crate::runtime::objects::slot_recheck::PUBLISH_RACE_WINDOW_US,
++                    )
++                },
++            ) {
++                crate::runtime::drain::note_store_route("blit_texture_latched");
++                return Ok(latched);
++            }
++            Err(refusal)
++        }
++    }
+ }
+ 
+ fn resolve_texture_backing_depth<M: HostMemory + HostOps>(

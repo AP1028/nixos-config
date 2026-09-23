@@ -1,0 +1,57 @@
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec_compute.rs b/crates/reims-vgpu/src/backend/vulkan/engine/exec_compute.rs
+index 42614021..6c92f19e 100644
+--- a/crates/reims-vgpu/src/backend/vulkan/engine/exec_compute.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/engine/exec_compute.rs
+@@ -1448,7 +1448,10 @@ pub(crate) unsafe fn execute_compute_inner(
+             .compute_post_wait_skips
+             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+     } else {
+-        pools.retire_all(ctx, counters)?;
++        // Only this entry's fence gates the readback below. `retire_all` used
++        // to quiesce the whole device here — see `retire_compute_entry` for
++        // what that cost a driven session.
++        pools.retire_compute_entry(ctx, counters)?;
+     }
+ 
+     for prepared in &simg_slots {
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs b/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
+index 8cc7c0d5..47b0fce4 100644
+--- a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
+@@ -3081,6 +3081,36 @@ impl ResourcePools {
+         Ok(())
+     }
+ 
++    /// Wait and retire **only** the entry the caller just submitted.
++    ///
++    /// The CPU-visible compute path used [`Self::retire_all`] here — a full
++    /// device quiesce — to make its readback safe, and that is the wrong shape
++    /// for a fence whose subject is one submission. A driven Easy Red 2 session
++    /// is the reading: the game's blend-shape and skinning dispatches each
++    /// carry a CPU-visible output, so every one of them took the quiesce, and
++    /// the packet-processing thread sat in `retire_all`/`release_graveyard` for
++    /// minutes at a time — waiting fences it did not need and sweeping a
++    /// graveyard that was not its subject — with the guest's packets queued
++    /// behind it. The guest's Metal resource deletes then blocked in the kernel
++    /// waiting for a device that was busy waiting, Unity's render thread
++    /// blocked behind those, and the screen stayed black.
++    ///
++    /// The wait the readback needs is this entry's own fence, and nothing the
++    /// sweep was doing is lost: `advance_graveyard_maintenance` runs the same
++    /// retire on the poll heartbeat without waiting, and every `begin_entry`
++    /// retires already-signaled slots.
++    pub(crate) unsafe fn retire_compute_entry(
++        &mut self,
++        ctx: &DeviceContext,
++        counters: &EngineCounters,
++    ) -> Result<(), DrawError> {
++        // The entry may still be inside the open tail batch, in which case
++        // there is no fence of its own to wait yet.
++        unsafe { self.batch_flush(ctx, counters)? };
++        let index = self.cur;
++        unsafe { self.retire_slot(ctx, counters, index) }
++    }
++
+     /// Free/recycle the resources owed by a retired entry.
+     ///
+     /// # Safety

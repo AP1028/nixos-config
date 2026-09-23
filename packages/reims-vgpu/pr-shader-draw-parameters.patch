@@ -1,0 +1,115 @@
+--- a/crates/reims-vgpu/src/backend/vulkan/caps/device_features.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/caps/device_features.rs
+@@ -280,6 +280,16 @@
+     pub storage8: bool,
+     pub float16: bool,
+     pub int8: bool,
++    /// `VkPhysicalDeviceShaderDrawParametersFeatures::shaderDrawParameters` —
++    /// whether a vertex shader may read the draw's base vertex/instance through
++    /// the `BaseVertex`/`BaseInstance` builtins.
++    ///
++    /// Metal's `[[base_vertex]]`/`[[base_instance]]` carry the values Vulkan's
++    /// `VertexIndex`/`InstanceIndex` fold in, so a translated vertex shader that
++    /// reads them has no other source; a device without this feature can only
++    /// answer with zero, which is wrong for an indexed draw whose `baseVertex`
++    /// is nonzero.
++    pub shader_draw_parameters: bool,
+     pub shader_output_viewport_index: bool,
+     /// `VkPhysicalDeviceVulkan12Features::timelineSemaphore` — whether a
+     /// submission can signal a monotonic counter that a *second* thread may
+@@ -648,6 +658,17 @@
+             .storage_buffer16_bit_access(self.storage16)
+     }
+ 
++    /// The `BaseVertex`/`BaseInstance` builtins' enabling feature, as the
++    /// promoted 1.1 struct the engine chains by itself. Asking a device for a
++    /// feature it declined fails `vkCreateDevice`, so the caller chains this
++    /// only when [`Self::shader_draw_parameters`] is set.
++    pub fn enabled_shader_draw_parameters(
++        &self,
++    ) -> vk::PhysicalDeviceShaderDrawParametersFeatures<'static> {
++        vk::PhysicalDeviceShaderDrawParametersFeatures::default()
++            .shader_draw_parameters(self.shader_draw_parameters)
++    }
++
+     /// One line naming every feature and limit this backend resolved against the
+     /// bound device, so a boot says what it turned on and what it did without.
+     ///
+@@ -694,6 +715,7 @@
+             storage8,
+             float16,
+             int8,
++            shader_draw_parameters,
+             shader_output_viewport_index,
+             timeline_semaphore,
+             descriptor_binding_partially_bound,
+@@ -752,6 +774,7 @@
+              storage_image_read_without_format={storage_image_read_without_format} \
+              bgra8_storage={bgra8_storage} no_linear_filter={} no_blendable_attachment={} \
+              storage16={storage16} storage8={storage8} float16={float16} int8={int8} \
++             shader_draw_parameters={shader_draw_parameters} \
+              shader_output_viewport_index={shader_output_viewport_index} \
+              timeline_semaphore={timeline_semaphore} \
+              descriptor_binding_partially_bound={descriptor_binding_partially_bound} \
+@@ -817,6 +840,13 @@
+     let mut supported_8 = vk::PhysicalDevice8BitStorageFeatures::default();
+     let mut supported_f16i8 = vk::PhysicalDeviceShaderFloat16Int8Features::default();
+     let mut supported_vulkan12 = vk::PhysicalDeviceVulkan12Features::default();
++    // Shader draw parameters was promoted into `VkPhysicalDeviceVulkan11Features`,
++    // which cannot be chained here without contradicting the 16-bit-storage
++    // struct above (`VUID-VkDeviceCreateInfo-pNext-02830`), so it is queried
++    // through its own promoted struct instead; a 1.1 device answers it the same
++    // way it would answer the aggregate.
++    let mut supported_shader_draw_parameters =
++        vk::PhysicalDeviceShaderDrawParametersFeatures::default();
+     // Chained by its `EXT` spelling rather than the 1.3 one, because 1.2 is this
+     // backend's baseline and chaining a 1.3 struct to a 1.2 driver is not
+     // answerable. A 1.3 host advertises the extension too — promotion keeps the
+@@ -828,6 +858,7 @@
+         .push_next(&mut supported_8)
+         .push_next(&mut supported_f16i8)
+         .push_next(&mut supported_vulkan12)
++        .push_next(&mut supported_shader_draw_parameters)
+         .push_next(&mut supported_image_robustness);
+     unsafe { instance.get_physical_device_features2(pd, &mut features2) };
+     let supported = features2.features;
+@@ -1047,6 +1078,8 @@
+         storage8: supported_8.storage_buffer8_bit_access == vk::TRUE,
+         float16: supported_f16i8.shader_float16 == vk::TRUE,
+         int8: supported_f16i8.shader_int8 == vk::TRUE,
++        shader_draw_parameters: supported_shader_draw_parameters.shader_draw_parameters
++            == vk::TRUE,
+         shader_output_viewport_index: supported_vulkan12.shader_output_viewport_index == vk::TRUE,
+         timeline_semaphore: supported_vulkan12.timeline_semaphore == vk::TRUE,
+         descriptor_binding_partially_bound: supported_vulkan12.descriptor_binding_partially_bound
+@@ -1097,6 +1130,7 @@
+             storage8: true,
+             float16: true,
+             int8: true,
++            shader_draw_parameters: true,
+             shader_output_viewport_index: true,
+             timeline_semaphore: true,
+             descriptor_binding_partially_bound: true,
+--- a/crates/reims-vgpu/src/backend/vulkan/engine/context.rs
++++ b/crates/reims-vgpu/crates/reims-vgpu/src/backend/vulkan/engine/context.rs
+@@ -1216,6 +1216,10 @@
+         // was promoted into the 1.1 struct instead, which this chain does not
+         // carry, so it keeps its own.
+         let mut en16 = features.enabled_16bit_storage();
++        // `BaseVertex`/`BaseInstance`, for the vertex shaders translated from
++        // Metal's `[[base_vertex]]`/`[[base_instance]]`. Chained only when the
++        // host reported it, for the same `vkCreateDevice` reason as the rest.
++        let mut en_shader_draw_parameters = features.enabled_shader_draw_parameters();
+         // Metal defines an out-of-bounds texture read; Vulkan does not unless
+         // this is enabled. Chained only when the host advertised it, because
+         // asking for a feature a device declined fails `vkCreateDevice`.
+@@ -1234,6 +1238,9 @@
+         if has16 {
+             dci = dci.push_next(&mut en16);
+         }
++        if features.shader_draw_parameters {
++            dci = dci.push_next(&mut en_shader_draw_parameters);
++        }
+         if features.image_robustness.is_available() {
+             dci = dci.push_next(&mut en_image_robustness);
+         }

@@ -1,0 +1,47 @@
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+--- b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -226,10 +226,39 @@
+                 // pages, and a zeroed surface is a black window over a running
+                 // game — which is the whole of the failing-game report.
+                 if let Some(c0) = req.colors.first() {
++                    if c0.mapping_id == 0 && c0.target_gva != 0 {
++                        // A GVA target's chain is the depth/G-buffer case: the
++                        // guest's own render target, rendered into the resident
++                        // and deliberately not copied out. The arm above is
++                        // mapping-keyed and refuses `mid=0`, so without this the
++                        // frame has no debt at all — the sampled rail's witness
++                        // has no entry (`gvaw_no_entry`), a later pass that
++                        // samples this texture gathers pages nothing ever wrote
++                        // and reads the clear, and the scene composites black.
++                        // `arm_gva` is the same ledger the eager GVA Store arm
++                        // uses, so the resident becomes authoritative here too.
++                        let landed =
++                            crate::backend::vulkan::gva_window(&identity).is_some_and(|window| {
++                                crate::runtime::writeback_debt::arm_gva(
++                                    crate::backend::vulkan::VulkanBackend,
++                                    state,
++                                    host,
++                                    req.task_id,
++                                    c0,
++                                    window,
++                                )
++                            });
++                        if landed {
++                            note_mapper_ref_texture_store_route("chain_gva_debt_armed");
++                        } else {
++                            note_mapper_ref_texture_store_route("chain_gva_debt_declined");
++                        }
++                    } else {
++                        let (mid, cw, ch) = (c0.mapping_id, c0.width, c0.height);
++                        if arm_surface_writeback_debt(state, host, mid, &identity, cw, ch) {
++                            crate::runtime::mapper::stamp_guest_write_gen(state, host, mid);
++                            note_mapper_ref_texture_store_route("chain_resident_debt_armed");
++                        }
+-                    let (mid, cw, ch) = (c0.mapping_id, c0.width, c0.height);
+-                    if arm_surface_writeback_debt(state, host, mid, &identity, cw, ch) {
+-                        crate::runtime::mapper::stamp_guest_write_gen(state, host, mid);
+-                        note_mapper_ref_texture_store_route("chain_resident_debt_armed");
+                     }
+                 }
+                 crate::observe::line(format!(

@@ -1,0 +1,159 @@
+--- a/crates/reims-vgpu/src/model/state.rs
++++ b/crates/reims-vgpu/src/model/state.rs
+@@ -3135,6 +3135,15 @@
+     rail: OnceLock<Box<dyn RailDeviceState>>,
+     /// Mapper-ref-texture object ref → mapping_id: (task_id, ref) -> mapping_id.
+     pub texture_to_mapping: BTreeMap<(u32, u32), u32>,
++    /// Stamp points handed to the GPU-ordered rail whose page write has not
++    /// been observed to land, keyed slot → value.
++    ///
++    /// The `Queued` publication arm returns without writing the page because
++    /// the queued write lands it — *if* that write is not superseded first.
++    /// When it is, the page stays behind the plane's point and a guest waiting
++    /// on the slot waits forever; `settle_pending_stamp_pages` is the bounded
++    /// repair, and this is the population it repairs.
++    pub pending_stamp_page_writes: BTreeMap<u32, u32>,
+     /// Per-window half of [`StorageIncarnation`], keyed `(task, window base)`.
+     /// Reset for a task whenever its epoch moves, which is what keeps it
+     /// bounded by the live namespace.
+@@ -3560,6 +3569,7 @@
+             task_depth_stencil_states: TaskDepthStencilStates::default(),
+             rail: OnceLock::new(),
+             texture_to_mapping: BTreeMap::new(),
++            pending_stamp_page_writes: BTreeMap::new(),
+             storage_incarnations: BTreeMap::new(),
+             backing_window_refs: BackingWindowRefs::default(),
+             aliased_references: Mutex::new(BTreeSet::new()),
+--- a/crates/reims-vgpu/src/runtime/drain/mod.rs
++++ b/crates/reims-vgpu/src/runtime/drain/mod.rs
+@@ -1984,7 +1984,9 @@
+     // in the page, and this line is reached by the queued arm too.
+     note_stamp_no_longer_owed(state, 0, value);
+     // Root and child FIFOs own the same bounded pending-stamp queue contract,
+-    // so slot 0 takes the same submission-attached completion rail.
++    // so slot 0 takes the same submission-attached completion rail — and the
++    // outstanding points ride it too, for the same reason.
++    reissue_pending_stamps(state, host, 0);
+     if crate::backend::selected().order_completion_stamp(
+         state,
+         host,
+@@ -1995,6 +1997,7 @@
+     {
+         note_store_route("root_stamp_ordered_gpu");
+         state.completion_stamp_seq = state.completion_stamp_seq.wrapping_add(1);
++        state.pending_stamp_page_writes.insert(0, value);
+         return false;
+     }
+     let gpa = state.pfn_gpa(state.gfx.fifo_base_page) + off;
+@@ -2408,7 +2411,90 @@
+ /// is the whole of the second half of the switch: the loop above puts packets
+ /// into the model and this takes work out of it, and neither is a function of
+ /// where a ring's head happens to be.
++/// Drop the outstanding stamp points whose page has caught up, and keep the
++/// rest for the publication point to re-attach.
++///
++/// Detection only: a re-issue from here would have no submission to ride, and
++/// the `Queued` rail lands a word only when it rides one — the first form of
++/// this repair left the backlog standing for exactly that reason. The
++/// re-attachment lives in [`reissue_pending_stamps`], called where a
++/// submission exists.
++fn settle_pending_stamp_pages<H: HostMemory + HostOps>(state: &mut DeviceState, host: &mut H) {
++    if state.pending_stamp_page_writes.is_empty() || state.gfx.fifo_base_page == 0 {
++        return;
++    }
++    let pending = std::mem::take(&mut state.pending_stamp_page_writes);
++    for (index, value) in pending {
++        let Some(off) = stamp_slot_offset(index, state.page_size()) else {
++            continue;
++        };
++        let gpa = state.pfn_gpa(state.gfx.fifo_base_page) + off;
++        let Ok(current) = crate::runtime::host::read_u32(host, gpa) else {
++            state.pending_stamp_page_writes.insert(index, value);
++            continue;
++        };
++        // A page at or past the point means the ordered write landed (or a
++        // later one did): nothing left to attach.
++        if (current.wrapping_sub(value) as i32) >= 0 {
++            continue;
++        }
++        // A point the plane no longer holds is not one the guest is owed.
++        let held = state
++            .published_completion_stamp(reims_vgpu_core::identity::StampSlot(index))
++            .is_some_and(|published| {
++                reims_vgpu_core::identity::StampWait {
++                    slot: reims_vgpu_core::identity::StampSlot(index),
++                    value: reims_vgpu_core::identity::StampValue(value),
++                }
++                .satisfied_by(published)
++            });
++        if held {
++            state.pending_stamp_page_writes.insert(index, value);
++        }
++    }
++}
++
++/// Re-attach the outstanding stamp points to the submission being queued.
++///
++/// Called from the publication point, immediately before the word being
++/// published takes the same rail, so a submission is in flight and every
++/// re-attached word is ordered after **this** work — later than the work it
++/// completes, which is what keeps the guest's fence from firing early. The
++/// slot being published is skipped: its new value supersedes the outstanding
++/// one, and re-attaching the older value after the newer would move the page
++/// backwards.
++fn reissue_pending_stamps<H: HostMemory + HostOps>(
++    state: &mut DeviceState,
++    host: &mut H,
++    current_index: u32,
++) {
++    if state.pending_stamp_page_writes.is_empty() {
++        return;
++    }
++    let pending = std::mem::take(&mut state.pending_stamp_page_writes);
++    for (index, value) in pending {
++        if index == current_index {
++            // Superseded by the publication in flight.
++            continue;
++        }
++        if crate::backend::selected().order_completion_stamp(
++            state,
++            host,
++            index,
++            value,
++            crate::runtime::render_writeback::SettleSite::CompletionStamp,
++        ) == crate::backend::StampOrdering::Queued
++        {
++            note_store_route("stamp_page_reissued");
++            state.pending_stamp_page_writes.insert(index, value);
++        }
++        // A non-`Queued` answer means the rail ordered it inline or wrote the
++        // page itself, so the point is no longer outstanding.
++    }
++}
++
+ fn settle_model_work<H: HostMemory + HostOps>(state: &mut DeviceState, host: &mut H) {
++    settle_pending_stamp_pages(state, host);
+     // **Until nothing more runs, not once.** Running a position publishes its
+     // channel's completion words, and a published word discharges the stamp
+     // waits other positions were admitted with — so one pass over what was
+@@ -3145,6 +3231,9 @@
+     //
+     // Nothing about the *interrupt* is deferred by a `Queued` answer either: the
+     // rail that took the word raises it immediately after publishing.
++    // Outstanding points ride this submission: a word the `Queued` rail
++    // landed only while it rides one, and this is where one is in flight.
++    reissue_pending_stamps(state, host, index);
+     if crate::backend::selected().order_completion_stamp(
+         state,
+         host,
+@@ -3158,6 +3247,10 @@
+         // fence — which is what `armed_stamp_seq` is compared against, and
+         // dating it from the completion would call that window punctual.
+         state.completion_stamp_seq = state.completion_stamp_seq.wrapping_add(1);
++        // The queued write lands the word without this device writing it — if
++        // it is not superseded first. Remember the point so a later pass can
++        // re-issue the ordered write when the page has not caught up.
++        state.pending_stamp_page_writes.insert(index, stamp_value);
+         return;
+     }
+     let Some(off) = stamp_slot_offset(index, state.page_size()) else {

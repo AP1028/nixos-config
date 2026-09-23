@@ -1,0 +1,212 @@
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs b/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
++++ a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
+--- b/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
+@@ -132,17 +132,11 @@
+ /// [`crate::backend::vulkan::translate::pixel::TRANSIENT_DEPTH_FORMAT`] and
+ /// whichever combined format `DeviceContext::depth_stencil_format` selected, and
+ /// that second one is device-queried — so this asks the format's own aspect
++/// rather than comparing against a list a third format would not be on. The
++/// predicate is [`reims_vgpu_vulkan::pixel`]'s, re-exported here so the sampled
++/// view rule in that crate and the registry's own use ask one question.
+-/// rather than comparing against a list a third format would not be on.
+ pub(crate) fn format_is_depth(format: ash::vk::Format) -> bool {
++    crate::backend::vulkan::translate::pixel::format_is_depth(format)
+-    matches!(
+-        format,
+-        ash::vk::Format::D16_UNORM
+-            | ash::vk::Format::X8_D24_UNORM_PACK32
+-            | ash::vk::Format::D32_SFLOAT
+-            | ash::vk::Format::D16_UNORM_S8_UINT
+-            | ash::vk::Format::D24_UNORM_S8_UINT
+-            | ash::vk::Format::D32_SFLOAT_S8_UINT
+-    )
+ }
+ 
+ /// Whether a format carries a stencil aspect as well as depth.
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+--- b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -1828,6 +1828,12 @@
+                     _ => None,
+                 })
+         {
++            // The texture-keyed resident first: a depth texture this device
++            // rendered into is the only case it exists, and the GVA rails below
++            // cannot see it at all (see `try_texture_resident_sample`).
++            if let Some((w, h, src)) = try_texture_resident_sample(texture_ref, tex) {
++                return Some((w, h, 0, src));
++            }
+             // Above the gather: a span whose pages a render Store published and
+             // nothing has written since is already an engine image, so there is
+             // nothing to gather and — the point of the rung — no writeback to
+@@ -4508,6 +4514,71 @@
+     Some((w, h, SampledSourceRequest::Target(identity, format)))
+ }
+ 
++/// The sampled bind of a texture this device rendered **depth** into.
++///
++/// A depth attachment is the one target kind the engine keys by the guest's
++/// **texture reference** rather than by a GVA: [`depth_chain_identity`] builds
++/// [`TargetIdentity::Texture`] because the depth resource lives as long as the
++/// guest texture does, and its resident is the only copy of what the pass
++/// rendered (no CPU loader and no writeback rail moves a depth attachment's
++/// texels). A later pass that samples that texture — every `[[depth]]`-based
++/// effect, so a driven Unity scene's post chain — names the same resource, so
++/// the same identity is the answer; but the GVA rails cannot construct it.
++/// Their witness has no entry for a span no Store ever published, so
++/// [`try_gva_resident_sample`] declines with `gvaw_no_entry`, the linear rails
++/// then decline for want of a sampled layout, and the draw is refused.
++///
++/// This asks the registry for the texture-keyed resident directly. Only the
++/// formats a depth attachment can carry are considered, because that is the
++/// only resident kind the engine registers under a texture reference — a colour
++/// target's resident is GVA-keyed and reached by [`try_gva_resident_sample`] —
++/// so a ref reuse that now names a colour texture cannot bind an old depth
++/// image. The stencil bit is the pass's *state*, not the format's: a
++/// `Depth32Float_Stencil8` texture rendered without a stencil test has a
++/// depth-only resident, so both spellings are asked with the format's own
++/// aspect first.
++#[must_use]
++pub(super) fn try_texture_resident_sample(
++    texture_ref: u32,
++    tex: &TextureDescriptor,
++) -> Option<(u32, u32, SampledSourceRequest)> {
++    use crate::backend::vulkan::engine::{resident_content_ready, TargetIdentity};
++    use crate::protocol::pixel_format as p;
++
++    if !matches!(
++        tex.pixel_format,
++        p::MTL_FORMAT_DEPTH16_UNORM
++            | p::MTL_FORMAT_DEPTH32_FLOAT
++            | p::MTL_FORMAT_DEPTH24_UNORM_STENCIL8
++            | p::MTL_FORMAT_DEPTH32_FLOAT_STENCIL8
++    ) {
++        return None;
++    }
++    let declared = tex.declared_pixel_format()?;
++    let format = translate::pixel::translate(declared).ok()?.vk;
++    let (w, h) = tex.extent()?;
++    let carries_stencil = matches!(
++        declared,
++        p::MTL_FORMAT_DEPTH24_UNORM_STENCIL8 | p::MTL_FORMAT_DEPTH32_FLOAT_STENCIL8
++    );
++    let aspects = if carries_stencil { [true, false] } else { [false, true] };
++    for stencil in aspects {
++        let identity = TargetIdentity::Texture {
++            ref_: texture_ref,
++            width: w,
++            height: h,
++            generation: 0,
++            stencil,
++        };
++        let ready = resident_content_ready(&identity);
++        if ready {
++            crate::runtime::drain::note_store_route("depth_resident_sample");
++            return Some((w, h, SampledSourceRequest::Target(identity, format)));
++        }
++    }
++    None
++}
++
+ /// Which repair would let the linear zero-copy rung carry this format, as a
+ /// route name.
+ ///
+diff --git a/crates/reims-vgpu-vulkan/src/pixel.rs b/crates/reims-vgpu-vulkan/src/pixel.rs
++++ a/crates/reims-vgpu-vulkan/src/pixel.rs
+--- b/crates/reims-vgpu-vulkan/src/pixel.rs
+@@ -648,6 +648,17 @@
+ /// linear and meant it. Closing that needs the sampled rails to carry the
+ /// guest's `MTLPixelFormat` rather than a byte layout; it is not closable here.
+ pub fn sample_view_format(requested: vk::Format, resident: vk::Format) -> vk::Format {
++    // A depth resident is the only copy of what the guest rendered into it:
++    // no CPU loader and no writeback rail moves a depth attachment's texels,
++    // so the resident's own format and aspects are the only reading that can
++    // be sampled at all. The requested spelling may name a different depth
++    // precision — a guest `Depth16Unorm` texture sampled where the device
++    // renders depth as `D32_SFLOAT`, or a combined texture where the device's
++    // chosen combined format is `D24_UNORM_S8` — and creating that view over
++    // this image is a validation error rather than a sampling difference.
++    if format_is_depth(resident) {
++        return resident;
++    }
+     if requested == storage_format(requested) && stored_bytes_agree(requested, resident) {
+         resident
+     } else {
+@@ -655,6 +666,25 @@
+     }
+ }
+ 
++/// Whether a Vulkan format carries a depth aspect.
++///
++/// Asked by the sampled-view rule above, because a depth image's view must
++/// carry the image's own format and aspects, and by any rail that needs to
++/// tell a depth attachment from a colour one. Total over the formats this
++/// vocabulary can name; a caller holding an image asks about the image's own
++/// format rather than a list of the formats a particular rail creates.
++pub fn format_is_depth(format: vk::Format) -> bool {
++    matches!(
++        format,
++        vk::Format::D16_UNORM
++            | vk::Format::X8_D24_UNORM_PACK32
++            | vk::Format::D32_SFLOAT
++            | vk::Format::D16_UNORM_S8_UINT
++            | vk::Format::D24_UNORM_S8_UINT
++            | vk::Format::D32_SFLOAT_S8_UINT
++    )
++}
++
+ /// Whether two Vulkan formats describe the same stored bytes for the same
+ /// texel, so a transfer that converts nothing may move one into the other.
+ ///
+@@ -1369,6 +1399,39 @@
+         }
+     }
+ 
++    /// A depth resident is the only copy of what it holds: no CPU loader and no
++    /// writeback rail moves a depth attachment's texels, so there is no second
++    /// copy for the bind to disagree with and the view takes the resident's own
++    /// format and aspects. The bind's spelling may name another depth precision
++    /// — a guest `Depth16Unorm` texture against this device's `D32_SFLOAT`
++    /// depth rail, or a combined texture against a `D24_UNORM_S8` fallback —
++    /// and a view in that spelling over this image is a validation error, not a
++    /// sampling difference.
++    #[test]
++    fn a_sampled_view_of_a_depth_resident_is_the_residents_own_format() {
++        let depth = [
++            vk::Format::D16_UNORM,
++            vk::Format::D32_SFLOAT,
++            vk::Format::D24_UNORM_S8_UINT,
++            vk::Format::D32_SFLOAT_S8_UINT,
++        ];
++        for resident in depth {
++            for requested in depth {
++                assert_eq!(
++                    sample_view_format(requested, resident),
++                    resident,
++                    "{requested:?} over {resident:?}"
++                );
++            }
++        }
++        // A colour resident keeps the rule above: the qualifier is restored,
++        // the asked-for bytes are not rewritten.
++        assert_eq!(
++            sample_view_format(vk::Format::R8G8B8A8_UNORM, vk::Format::R8G8B8A8_SRGB),
++            vk::Format::R8G8B8A8_SRGB
++        );
++    }
++
+     /// The copy out of a render target into guest pages converts nothing, so the
+     /// only thing the two sides must agree on is the stored texel.
+     ///
+diff --git a/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs b/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
++++ a/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
+--- b/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
+@@ -36,7 +36,7 @@
+ use crate::protocol::pixel_format::{self, SampledByteFormat, SwizzlePlan, TexelLayout};
+ 
+ pub use rail::{
++    bytes_per_texel, format_is_depth, has_bgra_order, has_identity_components, is_srgb,
+-    bytes_per_texel, has_bgra_order, has_identity_components, is_srgb,
+     resident_color, sample_view_format, srgb_texel_layout, storage_format,
+     storage_image_components, storage_image_from_selector, stored_bytes_agree, texel_layout_of,
+     verbatim_texel, vk_block_geometry, vk_component_mapping, vk_storage_image, vk_texel_layout,

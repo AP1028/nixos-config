@@ -1,0 +1,919 @@
+diff --git a/crates/reims-vgpu-protocol/src/pixel_format.rs b/crates/reims-vgpu-protocol/src/pixel_format.rs
++++ a/crates/reims-vgpu-protocol/src/pixel_format.rs
+--- b/crates/reims-vgpu-protocol/src/pixel_format.rs
+@@ -86,6 +86,11 @@
+ pub const MTL_FORMAT_RG16_FLOAT: u16 = 0x41;
+ pub const MTL_FORMAT_RGBA8_UNORM: u16 = 0x46;
+ pub const MTL_FORMAT_RGBA8_UNORM_SRGB: u16 = 0x47;
++/// `MTLPixelFormatRGBA8Snorm`. Signed normalized eight-bit channels, the
++/// normal/velocity buffer shape a Unity title renders into; Vulkan's
++/// `R8G8B8A8_SNORM` is the same bytes with the same reading, so a resident
++/// created at the declared format is a byte copy.
++pub const MTL_FORMAT_RGBA8_SNORM: u16 = 0x48;
+ pub const MTL_FORMAT_RGBA8_UINT: u16 = 0x49;
+ pub const MTL_FORMAT_RGBA8_SINT: u16 = 0x4a;
+ pub const MTL_FORMAT_BGRA8_UNORM: u16 = 0x50;
+@@ -391,6 +396,37 @@
+     /// nothing here moves such a bind to the CPU, which could not serve it
+     /// anyway — its channels do not sit on byte boundaries.
+     Bgr10a2Unorm,
++    /// The packed 32-bit word `MTLPixelFormatRG11B10Float` stores a texel in.
++    ///
++    /// Declared for the cross-check, on [`Self::Bgr10a2Unorm`]'s terms: the
++    /// render-target admission of that format makes it a byte-copy destination,
++    /// and this is the independent statement of the same byte layout the
++    /// cross-check holds the two against. A sampled bind keeps its native rail;
++    /// no CPU loader reads the word back.
++    Rg11b10Float,
++    /// The four signed-normalized eight-bit channels `MTLPixelFormatRGBA8Snorm`
++    /// stores a texel in.
++    ///
++    /// Declared for the cross-check, on the packed layouts' terms: the
++    /// render-target admission makes it a byte-copy destination and this is the
++    /// independent statement of the same byte layout.
++    Rgba8Snorm,
++    /// The single sixteen-bit normalized channel `MTLPixelFormatR16Unorm`
++    /// stores a texel in.
++    ///
++    /// Declared for the cross-check, on the packed layouts' terms: the
++    /// render-target admission makes it a byte-copy destination and this is the
++    /// independent statement of the same byte layout. It is also a real sampled
++    /// class (ten-bit biplanar video luma), so unlike them it also has a place
++    /// in the sampled vocabulary.
++    R16Unorm,
++    /// The packed 32-bit word `MTLPixelFormatRGB10A2Unorm` stores a texel in,
++    /// [`Self::Bgr10a2Unorm`]'s sibling with the colour orders exchanged.
++    ///
++    /// Declared for the cross-check on the same terms: the render-target
++    /// admission makes it a byte-copy destination and this is the independent
++    /// statement of the same byte layout.
++    Rgb10a2Unorm,
+     /// The two `uint16` channels `MTLPixelFormatRG16Uint` stores a texel in.
+     ///
+     /// Declared for the cross-check, on [`Self::Bgr10a2Unorm`]'s terms and for
+@@ -560,6 +596,17 @@
+     /// sampled natively as `B10G11R11_UFLOAT_PACK32`. An HDR-intermediate
+     /// colour format, native for the same reason as its two neighbours.
+     Rg11b10Float,
++    /// 4 bytes/texel — four signed normalized eight-bit channels, sampled
++    /// natively as `R8G8B8A8_SNORM`.
++    ///
++    /// Unity renders its normal/velocity intermediate into an
++    /// `MTLPixelFormatRGBA8Snorm` target, and every pass naming one was refused
++    /// as `rt_resolve reason=rt_linear_format` — the pink, wrongly lit patches a
++    /// driven Easy Red 2 scene showed on terrain whose lighting samples it.
++    /// The two spellings are the same stored bytes, so the byte copy is exact;
++    /// a CPU readback narrows the signed range onto unorm8, and that arm exists
++    /// only for the rails that cannot copy.
++    Rgba8Snorm,
+     // The BC block-compressed layouts. Every one is 4x4 texels in 8 or 16 bytes,
+     // so `bytes_per_texel` answers about a **block** for these and
+     // `block_geometry` is what a caller sizing an image must ask — read that
+@@ -655,6 +702,7 @@
+         Self::Bc6hRgbFloat,
+         Self::Bc6hRgbUfloat,
+         Self::Bc7Rgba,
++        Self::Rgba8Snorm,
+     ];
+ 
+     /// This layout's position in [`Self::ALL`], so a host-side table can be an
+@@ -683,6 +731,7 @@
+             Self::Rgb10a2Unorm => 13,
+             Self::Bgr10a2Unorm => 14,
+             Self::Rg11b10Float => 15,
++            Self::Rgba8Snorm => 26,
+             Self::Bc1Rgba => 16,
+             Self::Bc2Rgba => 17,
+             Self::Bc3Rgba => 18,
+@@ -752,7 +801,8 @@
+             | Self::Rgba16Unorm
+             | Self::Rgb10a2Unorm
+             | Self::Bgr10a2Unorm
++            | Self::Rg11b10Float
++            | Self::Rgba8Snorm => false,
+-            | Self::Rg11b10Float => false,
+             Self::Bc1Rgba
+             | Self::Bc2Rgba
+             | Self::Bc3Rgba
+@@ -799,6 +849,10 @@
+                 | Self::Rg16Float
+                 | Self::Rgba16Float
+                 | Self::Bgr10a2Unorm
++                | Self::Rgb10a2Unorm
++                | Self::Rg11b10Float
++                | Self::Rgba8Snorm
++                | Self::R16Unorm
+                 | Self::Rg16Uint
+         )
+     }
+@@ -920,7 +974,7 @@
+     /// uncompressed layouts and wrong by sixteen for the BC ones.
+     pub fn bytes_per_texel(self) -> u32 {
+         match self {
++            Self::Rgba8 | Self::Bgra8 | Self::Rgba8Snorm => RGBA8_BPP,
+-            Self::Rgba8 | Self::Bgra8 => RGBA8_BPP,
+             Self::R8 => R8_BPP,
+             Self::Rg8 => RG8_BPP,
+             Self::R16Float => R16F_BPP,
+@@ -983,6 +1037,27 @@
+             // endorsement, and [`Self::cpu_loader_arm_is_lossy`] is where the
+             // endorsement is withheld.
+             Self::Rgba16Float | Self::Rg16Float => true,
++            // The signed-normalized normal buffer. The arm exists for the same
++            // reason the HDR layouts' does — a renderable format whose Store
++            // falls to the CPU has to publish something — and it is lossy in
++            // the same direction: a signed value is folded onto unorm's
++            // unsigned range. A sampled bind should take the native rail.
++            Self::Rgba8Snorm => true,
++            // The unsigned-float HDR word, admitted as a render target because
++            // a Unity title's whole scene renders into one. The arm exists for
++            // the same reason the half-float layouts' does — a renderable
++            // format whose Store falls to the CPU has to publish *something* —
++            // and it narrows through `rgba8_from_rg11b10_word`, so a sampled
++            // bind that reaches it is quantised the way an eight-bit resident
++            // always was. The native rails are what a sampled bind should take;
++            // this is a statement about the loader, not an endorsement, exactly
++            // as the line above says.
++            Self::Rg11b10Float => true,
++            // The packed ten-bit colour word with red in the low bits, whose
++            // arm exists for [`Self::Rg11b10Float`]'s reason and sits beside
++            // it here with the same caveat: the loader can serve it, and the
++            // native copy is what a Store or a bind should normally take.
++            Self::Rgb10a2Unorm => true,
+             // The two sixteen-bit normalized layouts join the floats here for
+             // the same reason and a different quantity: `texel_to_rgba8` has no
+             // arm for them because an arm would have to narrow ten bits of video
+@@ -1004,9 +1079,7 @@
+             | Self::Rg16Uint
+             | Self::Rgba32Float
+             | Self::Rgba16Unorm
++            | Self::Bgr10a2Unorm => false,
+-            | Self::Rgb10a2Unorm
+-            | Self::Bgr10a2Unorm
+-            | Self::Rg11b10Float => false,
+             // No CPU rail can serve a BC layout, and none should be written:
+             // decoding a block needs a decompressor, and a decompressed block
+             // is not the guest's bytes. `false` here is what keeps a cost
+@@ -1041,7 +1114,7 @@
+     /// two-channel Vulkan formats sample to identically.
+     pub fn cpu_loader_arm_is_lossy(self) -> bool {
+         match self {
++            Self::Rgba16Float | Self::Rg16Float | Self::Rgba8Snorm => true,
+-            Self::Rgba16Float | Self::Rg16Float => true,
+             Self::Rgba8
+             | Self::Bgra8
+             | Self::R8
+@@ -1324,6 +1397,7 @@
+         MTL_FORMAT_RG16_FLOAT => RG16F_BPP,
+         MTL_FORMAT_RGBA8_UNORM
+         | MTL_FORMAT_RGBA8_UNORM_SRGB
++        | MTL_FORMAT_RGBA8_SNORM
+         | MTL_FORMAT_RGBA8_UINT
+         | MTL_FORMAT_RGBA8_SINT
+         | MTL_FORMAT_BGRA8_UNORM
+@@ -1802,6 +1876,10 @@
+         MTL_FORMAT_RGBA16_FLOAT => SampledClass::Rgba16Float,
+         MTL_FORMAT_RG16_FLOAT => SampledClass::Rg16Float,
+         MTL_FORMAT_BGR10A2_UNORM => SampledClass::Bgr10a2Unorm,
++        MTL_FORMAT_RGB10A2_UNORM => SampledClass::Rgb10a2Unorm,
++        MTL_FORMAT_RG11B10_FLOAT => SampledClass::Rg11b10Float,
++        MTL_FORMAT_R16_UNORM => SampledClass::R16Unorm,
++        MTL_FORMAT_RGBA8_SNORM => SampledClass::Rgba8Snorm,
+         MTL_FORMAT_RG16_UINT => SampledClass::Rg16Uint,
+         MTL_FORMAT_RGBA32_FLOAT => SampledClass::Rgba32Float,
+         _ => return None,
+@@ -2022,12 +2100,16 @@
+     Some(match format {
+         MTL_FORMAT_RGBA8_UNORM
+         | MTL_FORMAT_RGBA8_UNORM_SRGB
++        | MTL_FORMAT_RGBA8_SNORM
+         | MTL_FORMAT_BGRA8_UNORM
+         | MTL_FORMAT_BGRA8_UNORM_SRGB
+         | MTL_FORMAT_RGBA16_FLOAT
+         | MTL_FORMAT_RG16_FLOAT
+         | MTL_FORMAT_R16_FLOAT
+         | MTL_FORMAT_R8_UNORM
++        | MTL_FORMAT_R16_UNORM
++        | MTL_FORMAT_RG11B10_FLOAT
++        | MTL_FORMAT_RGB10A2_UNORM
+         | MTL_FORMAT_BGR10A2_UNORM => ColorNumericType::Float,
+         MTL_FORMAT_RG16_UINT => ColorNumericType::Uint,
+         _ => return None,
+@@ -2106,6 +2188,33 @@
+         // copying arm alike — which is why the copying arm learned to carry a
+         // native frame rather than always an eight-bit one.
+         MTL_FORMAT_RG16_UINT => TexelLayout::Rg16Uint,
++        // The packed ten-bit colour word with red in the low bits — the other
++        // half of Unity's HDR pair with `RG11B10Float`. Its Vulkan spelling is
++        // the guest's word, so the byte copy lands it unchanged.
++        MTL_FORMAT_RGB10A2_UNORM => TexelLayout::Rgb10a2Unorm,
++        // Sixteen-bit single-channel unorm, refused as
++        // `rt_resolve reason=rt_linear_format` on a driven Easy Red 2 boot for
++        // a target at `fmt=0x14`. Same guest word as `R16_UNORM`, so the byte
++        // copy is exact; the sampled rail has served this layout all along.
++        MTL_FORMAT_R16_UNORM => TexelLayout::R16Unorm,
++        // The signed-normalized normal buffer. The guest's word is
++        // `R8G8B8A8_SNORM`'s byte for byte — the resident is created at the
++        // declared format — so the copy is exact and this is its only lossless
++        // rail, which is exactly why the admission names it here.
++        MTL_FORMAT_RGBA8_SNORM => TexelLayout::Rgba8Snorm,
++        // The unsigned-float HDR intermediate. A Unity title renders its whole
++        // scene into an `MTLPixelFormatRG11B10Float` target and the pass was
++        // refused as `rt_resolve reason=rt_linear_format` until this rail
++        // admitted it — every later pass then sampled a texture nothing had
++        // rendered, so the 3D layer composited black while the 2D UI (a
++        // different target format) was fine.
++        //
++        // Native rather than converted: the guest's word *is*
++        // `VK_FORMAT_B10G11R11_UFLOAT_PACK32`, so a resident created at the
++        // declared format holds the identical bytes and the copy converts
++        // nothing. `rgba8_to_texel` still carries an arm for the CPU seed,
++        // because a renderable format has to answer all three store rails.
++        MTL_FORMAT_RG11B10_FLOAT => TexelLayout::Rg11b10Float,
+         _ => return None,
+     })
+ }
+@@ -2548,6 +2657,158 @@
+ /// across the byte and maps `0b11` to full scale rather than to `0xc0`.
+ const BGR10A2_ALPHA_REPLICATE: u8 = 0x55;
+ 
++/// Bit position of each channel in `MTLPixelFormatRGB10A2Unorm`'s texel word.
++///
++/// Red in bits 0..9, green in 10..19, blue in 20..29 and alpha in 30..31: the
++/// same bits in the same order as `VK_FORMAT_A2B10G10R10_UNORM_PACK32`, which
++/// is why [`store_texel_order`] admits the format and the byte copy is exact.
++/// It is [`BGR10A2_RED_SHIFT`]'s word with the two colour orders exchanged,
++/// which is why the two have separate constants and separate helpers rather
++/// than one shared pair with a `bgr` flag.
++const RGB10A2_RED_SHIFT: u32 = 0;
++const RGB10A2_GREEN_SHIFT: u32 = 10;
++const RGB10A2_BLUE_SHIFT: u32 = 20;
++const RGB10A2_ALPHA_SHIFT: u32 = 30;
++const _: () = assert!(
++    RGB10A2_ALPHA_SHIFT == RGB10A2_BLUE_SHIFT + BGR10A2_COLOR_MASK.count_ones()
++        && RGB10A2_BLUE_SHIFT == RGB10A2_GREEN_SHIFT + BGR10A2_COLOR_MASK.count_ones()
++        && RGB10A2_GREEN_SHIFT == RGB10A2_RED_SHIFT + BGR10A2_COLOR_MASK.count_ones()
++        && RGB10A2_ALPHA_SHIFT + BGR10A2_ALPHA_MASK.count_ones() == u32::BITS
++);
++
++/// One `RGB10A2Unorm` word read as semantic RGBA8 — [`bgr10a2_word_to_rgba8`]
++/// with the two colour orders exchanged, and the same truncation and alpha
++/// replication.
++fn rgb10a2_word_to_rgba8(word: u32) -> [u8; 4] {
++    let channel = |shift: u32| (((word >> shift) & BGR10A2_COLOR_MASK) >> 2) as u8;
++    let alpha = ((word >> RGB10A2_ALPHA_SHIFT) & BGR10A2_ALPHA_MASK) as u8;
++    let mut out = [0u8; COMPONENT_COUNT];
++    out[COMPONENT_R] = channel(RGB10A2_RED_SHIFT);
++    out[COMPONENT_G] = channel(RGB10A2_GREEN_SHIFT);
++    out[COMPONENT_B] = channel(RGB10A2_BLUE_SHIFT);
++    out[COMPONENT_A] = alpha * BGR10A2_ALPHA_REPLICATE;
++    out
++}
++
++/// Four semantic-RGBA8 channels written into one `RGB10A2Unorm` word — the
++/// widening half, [`rgba8_to_bgr10a2_word`]'s sibling.
++fn rgba8_to_rgb10a2_word(rgba: [u8; COMPONENT_COUNT]) -> u32 {
++    let channel = |v: u8| {
++        let v = u32::from(v);
++        (v << 2) | (v >> 6)
++    };
++    (u32::from(rgba[COMPONENT_A]) >> 6) << RGB10A2_ALPHA_SHIFT
++        | channel(rgba[COMPONENT_R]) << RGB10A2_RED_SHIFT
++        | channel(rgba[COMPONENT_G]) << RGB10A2_GREEN_SHIFT
++        | channel(rgba[COMPONENT_B]) << RGB10A2_BLUE_SHIFT
++}
++
++/// One unsigned float channel of a `B10G11R11_UFLOAT_PACK32` word.
++///
++/// The encoding is `e5m(11-bits-5-exponent)` for red and green and `e5m5` for
++/// blue, with the exponent biased by 15 and no sign bit — Vulkan's
++/// `B10G11R11_UFLOAT_PACK32` and Metal's `RG11B10Float` are the same word. This
++/// is the CPU-seed half only: a Store normally rides the byte copy, whose bytes
++/// are already the guest's. `mantissa_bits` is 6 for red and green, 5 for blue.
++///
++/// Values below the smallest normal are flushed to zero rather than encoded as
++/// subnormals: this is a seed for a pass that is about to overwrite the frame,
++/// and zero is the one wrong answer the round trip through an eight-bit seed
++/// cannot produce anyway.
++fn rgba8_channel_to_uf(mantissa_bits: u32, value: u8) -> u32 {
++    if value == 0 {
++        return 0;
++    }
++    let v = f32::from(value) / 255.0;
++    // A normal f32 `v = 1.m * 2^e`; the target field is `(e + 15)` with the
++    // leading one implied by any non-zero exponent field, so 1.0 encodes as
++    // exponent 15, mantissa 0.
++    let bits = v.to_bits();
++    let exponent = ((bits >> 23) & 0xff) as i32 - 127;
++    let mantissa = bits & 0x7f_ffff;
++    let biased = exponent + 15;
++    if biased <= 0 {
++        return 0;
++    }
++    if biased >= 31 {
++        return 0x1f << mantissa_bits;
++    }
++    let shift = 23 - mantissa_bits;
++    let mut top = mantissa >> shift;
++    if mantissa & (1 << (shift - 1)) != 0 {
++        top += 1;
++    }
++    let mut biased = biased as u32;
++    if top == 1 << mantissa_bits {
++        top = 0;
++        biased += 1;
++        if biased >= 31 {
++            biased = 31;
++            top = (1 << mantissa_bits) - 1;
++        }
++    }
++    (biased << mantissa_bits) | top
++}
++
++/// Four semantic-RGBA8 channels written into one `RG11B10Float` word — the
++/// second widening half, for a CPU `Load` seed.
++///
++/// Red and green take eleven bits each in the low half (five exponent, six
++/// mantissa), blue takes ten (five and five), and alpha has no destination —
++/// the same channel set the sampled round trip reads back.
++fn rgba8_to_rg11b10_word(rgba: [u8; COMPONENT_COUNT]) -> u32 {
++    rgba8_channel_to_uf(6, rgba[COMPONENT_R])
++        | (rgba8_channel_to_uf(6, rgba[COMPONENT_G]) << 11)
++        | (rgba8_channel_to_uf(5, rgba[COMPONENT_B]) << 22)
++}
++
++/// One semantic RGBA8 channel as its signed-normalized eight-bit encoding.
++///
++/// Unorm's range maps onto snorm's: `0` becomes `-128`, `128` lands near zero,
++/// and `255` becomes `127`. The scale is 127 rather than 128 so both endpoints
++/// are exact and zero is representable.
++fn unorm8_to_snorm_byte(value: u8) -> u8 {
++    let v = f32::from(value) / 255.0 * 2.0 - 1.0;
++    (v * 127.0).round().clamp(-128.0, 127.0) as i8 as u8
++}
++
++/// One signed-normalized eight-bit channel back onto semantic RGBA8 — the
++/// inverse of [`unorm8_to_snorm_byte`], with `-128` and `-127` both landing on
++/// zero because eight bits cannot hold the asymmetry.
++fn snorm_byte_to_unorm8(value: u8) -> u8 {
++    let v = (f32::from(value as i8) / 127.0).clamp(-1.0, 1.0);
++    ((v + 1.0) * 0.5 * 255.0).round() as u8
++}
++
++/// One `R11F_G11F_B10F` channel decoded to eight-bit unorm.
++///
++/// The readback half of [`rgba8_channel_to_uf`]. `mantissa_bits` is 6 for red
++/// and green and 5 for blue; a zero exponent field is the encoding's zero (the
++/// format has no subnormals), and the value is clamped into `[0, 1]` before it
++/// is quantised, exactly as the half-float narrowing does.
++fn uf_to_rgba8_channel(word: u32, mantissa_bits: u32) -> u8 {
++    let exponent = (word >> mantissa_bits) & 0x1f;
++    if exponent == 0 {
++        return 0;
++    }
++    let mantissa = word & ((1 << mantissa_bits) - 1);
++    let scale = (mantissa as f32 + (1u32 << mantissa_bits) as f32) / (1u32 << mantissa_bits) as f32;
++    let value = scale * 2f32.powi(exponent as i32 - 15);
++    (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
++}
++
++/// One `RG11B10Float` word decoded to semantic RGBA8 — the readback half of
++/// [`rgba8_to_rg11b10_word`], with the alpha the format does not carry read as
++/// opaque, matching what a shader sampling it sees.
++fn rgba8_from_rg11b10_word(word: u32) -> [u8; COMPONENT_COUNT] {
++    [
++        uf_to_rgba8_channel(word & 0x7ff, 6),
++        uf_to_rgba8_channel((word >> 11) & 0x7ff, 6),
++        uf_to_rgba8_channel((word >> 22) & 0x3ff, 5),
++        UNORM8_MAX,
++    ]
++}
++
+ /// Four semantic-RGBA8 channels written into one `BGR10A2Unorm` word — the
+ /// widening half, for a CPU `Load` seed and for the CPU Store converter.
+ ///
+@@ -2661,6 +2922,30 @@
+                 *d = src_rgba[i * RGBA8_BPP as usize + COMPONENT_R];
+             }
+         }
++        TexelLayout::Rg11b10Float => {
++            for i in 0..px {
++                let (s, d) = (i * RGBA8_BPP as usize, i * RGBA8_BPP as usize);
++                let mut rgba = [0u8; COMPONENT_COUNT];
++                rgba.copy_from_slice(&src_rgba[s..s + COMPONENT_COUNT]);
++                dst[d..d + 4].copy_from_slice(&rgba8_to_rg11b10_word(rgba).to_le_bytes());
++            }
++        }
++        TexelLayout::Rgb10a2Unorm => {
++            for i in 0..px {
++                let (s, d) = (i * RGBA8_BPP as usize, i * RGBA8_BPP as usize);
++                let mut rgba = [0u8; COMPONENT_COUNT];
++                rgba.copy_from_slice(&src_rgba[s..s + COMPONENT_COUNT]);
++                dst[d..d + 4].copy_from_slice(&rgba8_to_rgb10a2_word(rgba).to_le_bytes());
++            }
++        }
++        TexelLayout::Rgba8Snorm => {
++            for (s, d) in src_rgba.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
++                d[0] = unorm8_to_snorm_byte(s[COMPONENT_R]);
++                d[1] = unorm8_to_snorm_byte(s[COMPONENT_G]);
++                d[2] = unorm8_to_snorm_byte(s[COMPONENT_B]);
++                d[3] = unorm8_to_snorm_byte(s[COMPONENT_A]);
++            }
++        }
+         // The packed ten-bit colour word, which a guest was measured rendering
+         // into: an `'l10r'` IOSurface, named `BGR10A2Unorm` by
+         // `runtime::objects::iosurface_pixel_format_to_mtl`. A seed is semantic
+@@ -2698,9 +2983,7 @@
+         | TexelLayout::Rg16Unorm
+         | TexelLayout::Rg16Uint
+         | TexelLayout::Rgba32Float
++        | TexelLayout::Rgba16Unorm => return false,
+-        | TexelLayout::Rgba16Unorm
+-        | TexelLayout::Rgb10a2Unorm
+-        | TexelLayout::Rg11b10Float => return false,
+         // A BC layout is never a render target, so it never has a `Load` seed to
+         // widen. `render_target_bpp` has no arm for any BC format, which is what
+         // makes that a fact rather than an expectation.
+@@ -2769,6 +3052,30 @@
+                 }
+             }
+         }
++        TexelLayout::Rg11b10Float => {
++            for i in 0..px {
++                let (s, d) = (i * 4, i * 4);
++                let word = u32::from_le_bytes([src[s], src[s + 1], src[s + 2], src[s + 3]]);
++                dst_rgba[d..d + RGBA8_BPP as usize]
++                    .copy_from_slice(&rgba8_from_rg11b10_word(word));
++            }
++        }
++        TexelLayout::Rgb10a2Unorm => {
++            for i in 0..px {
++                let (s, d) = (i * 4, i * 4);
++                let word = u32::from_le_bytes([src[s], src[s + 1], src[s + 2], src[s + 3]]);
++                dst_rgba[d..d + RGBA8_BPP as usize]
++                    .copy_from_slice(&rgb10a2_word_to_rgba8(word));
++            }
++        }
++        TexelLayout::Rgba8Snorm => {
++            for (s, d) in src.chunks_exact(4).zip(dst_rgba.chunks_exact_mut(4)) {
++                d[0] = snorm_byte_to_unorm8(s[0]);
++                d[1] = snorm_byte_to_unorm8(s[1]);
++                d[2] = snorm_byte_to_unorm8(s[2]);
++                d[3] = snorm_byte_to_unorm8(s[3]);
++            }
++        }
+         // The one- and two-channel float attachments, filled out to RGBA8 the
+         // way a shader sampling them reads them: the channels the source does
+         // not carry are zero, and alpha is opaque. `expand_rgba8_to_texel` is
+@@ -2822,9 +3129,7 @@
+         | TexelLayout::Rg16Unorm
+         | TexelLayout::Rg16Uint
+         | TexelLayout::Rgba32Float
++        | TexelLayout::Rgba16Unorm => return false,
+-        | TexelLayout::Rgba16Unorm
+-        | TexelLayout::Rgb10a2Unorm
+-        | TexelLayout::Rg11b10Float => return false,
+         // Nothing reads a BC resident back: there is no BC render target to read
+         // back from, and a sampled BC image is never the source of a readback.
+         TexelLayout::Bc1Rgba
+@@ -2863,6 +3168,12 @@
+         MTL_FORMAT_RGBA8_UNORM | MTL_FORMAT_RGBA8_UNORM_SRGB => {
+             rgba.copy_from_slice(&src[..4]);
+         }
++        MTL_FORMAT_RGBA8_SNORM => {
++            rgba[COMPONENT_R] = snorm_byte_to_unorm8(src[0]);
++            rgba[COMPONENT_G] = snorm_byte_to_unorm8(src[1]);
++            rgba[COMPONENT_B] = snorm_byte_to_unorm8(src[2]);
++            rgba[COMPONENT_A] = snorm_byte_to_unorm8(src[3]);
++        }
+         MTL_FORMAT_BGRA8_UNORM | MTL_FORMAT_BGRA8_UNORM_SRGB => {
+             rgba[COMPONENT_R] = src[2];
+             rgba[COMPONENT_G] = src[1];
+@@ -2884,6 +3195,18 @@
+             rgba[COMPONENT_G] = lut[ld16(&src[2..4]) as usize];
+             rgba[COMPONENT_A] = UNORM8_MAX;
+         }
++        MTL_FORMAT_RG11B10_FLOAT => {
++            // The unsigned-float HDR word, decoded through the same helper the
++            // layout-keyed rail uses. Alpha reads opaque: the format has none.
++            let word = u32::from_le_bytes([src[0], src[1], src[2], src[3]]);
++            rgba = rgba8_from_rg11b10_word(word);
++        }
++        MTL_FORMAT_RGB10A2_UNORM => {
++            // The packed ten-bit word with red in the low bits; alpha's two
++            // bits replicate, exactly as the BGR10A2 arm does.
++            let word = u32::from_le_bytes([src[0], src[1], src[2], src[3]]);
++            rgba = rgb10a2_word_to_rgba8(word);
++        }
+         _ => return None,
+     }
+     Some(rgba)
+@@ -2967,6 +3290,18 @@
+             // normally runs.
+             dst[..4].copy_from_slice(&rgba8_to_bgr10a2_word(rgba).to_le_bytes());
+         }
++        MTL_FORMAT_RG11B10_FLOAT => {
++            dst[..4].copy_from_slice(&rgba8_to_rg11b10_word(rgba).to_le_bytes());
++        }
++        MTL_FORMAT_RGB10A2_UNORM => {
++            dst[..4].copy_from_slice(&rgba8_to_rgb10a2_word(rgba).to_le_bytes());
++        }
++        MTL_FORMAT_RGBA8_SNORM => {
++            dst[0] = unorm8_to_snorm_byte(rgba[COMPONENT_R]);
++            dst[1] = unorm8_to_snorm_byte(rgba[COMPONENT_G]);
++            dst[2] = unorm8_to_snorm_byte(rgba[COMPONENT_B]);
++            dst[3] = unorm8_to_snorm_byte(rgba[COMPONENT_A]);
++        }
+         _ => return false,
+     }
+     true
+@@ -3071,6 +3406,17 @@
+     /// Two `float16` channels → R,G; blue zero, alpha opaque. Lossy for
+     /// [`Self::Rgba16Float`]'s reason.
+     Rg16Float,
++    /// Two eleven-bit and one ten-bit unsigned floats → R,G,B; alpha reads
++    /// opaque. Lossy for [`Self::Rgba16Float`]'s reason.
++    Rg11b10F,
++    /// Ten-bit colour channels and two of alpha in one packed word, red in the
++    /// low bits; alpha replicates to eight. Lossy for [`Self::Rgba16Float`]'s
++    /// reason.
++    Rgb10a2,
++    /// Four signed-normalized eight-bit channels. Lossy for
++    /// [`Self::Rgba16Float`]'s reason, and in the same direction: a signed
++    /// range folded onto unsigned.
++    Rgba8Snorm,
+ }
+ 
+ impl RowToRgba8 {
+@@ -3092,6 +3438,9 @@
+             MTL_FORMAT_BGRA8_UNORM | MTL_FORMAT_BGRA8_UNORM_SRGB => Self::Bgra8,
+             MTL_FORMAT_RGBA16_FLOAT => Self::Rgba16Float,
+             MTL_FORMAT_RG16_FLOAT => Self::Rg16Float,
++            MTL_FORMAT_RG11B10_FLOAT => Self::Rg11b10F,
++            MTL_FORMAT_RGB10A2_UNORM => Self::Rgb10a2,
++            MTL_FORMAT_RGBA8_SNORM => Self::Rgba8Snorm,
+             _ => return None,
+         })
+     }
+@@ -3106,7 +3455,12 @@
+         match self {
+             Self::A8 | Self::R8 => 1,
+             Self::Rg8 => RG8_BPP,
++            Self::Rgba8
++            | Self::Bgra8
++            | Self::Rg16Float
++            | Self::Rg11b10F
++            | Self::Rgb10a2
++            | Self::Rgba8Snorm => RGBA8_BPP,
+-            Self::Rgba8 | Self::Bgra8 | Self::Rg16Float => RGBA8_BPP,
+             Self::Rgba16Float => RGBA16F_BPP,
+         }
+     }
+@@ -3188,6 +3542,26 @@
+                     d.copy_from_slice(&px);
+                 }
+             }
++            Self::Rg11b10F => {
++                for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
++                    let word = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
++                    d.copy_from_slice(&rgba8_from_rg11b10_word(word));
++                }
++            }
++            Self::Rgb10a2 => {
++                for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
++                    let word = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
++                    d.copy_from_slice(&rgb10a2_word_to_rgba8(word));
++                }
++            }
++            Self::Rgba8Snorm => {
++                for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
++                    d[COMPONENT_R] = snorm_byte_to_unorm8(s[0]);
++                    d[COMPONENT_G] = snorm_byte_to_unorm8(s[1]);
++                    d[COMPONENT_B] = snorm_byte_to_unorm8(s[2]);
++                    d[COMPONENT_A] = snorm_byte_to_unorm8(s[3]);
++                }
++            }
+         }
+         true
+     }
+@@ -3289,6 +3663,14 @@
+     Rgba16Float,
+     /// Ten bits per colour channel and two of alpha in one packed word.
+     Bgr10A2,
++    /// Two eleven-bit and one ten-bit unsigned floats in one packed word.
++    Rg11b10F,
++    /// Ten-bit colour channels and two of alpha in one packed word, red low.
++    Rgb10a2,
++    /// Four signed-normalized eight-bit channels. Lossy for
++    /// [`Self::Rgba16Float`]'s reason, and in the same direction: an unsigned
++    /// seed folded onto a signed range.
++    Rgba8Snorm,
+ }
+ 
+ impl Rgba8ToRow {
+@@ -3303,6 +3685,9 @@
+             MTL_FORMAT_RG16_FLOAT => Self::Rg16Float,
+             MTL_FORMAT_RGBA16_FLOAT => Self::Rgba16Float,
+             MTL_FORMAT_BGR10A2_UNORM => Self::Bgr10A2,
++            MTL_FORMAT_RG11B10_FLOAT => Self::Rg11b10F,
++            MTL_FORMAT_RGB10A2_UNORM => Self::Rgb10a2,
++            MTL_FORMAT_RGBA8_SNORM => Self::Rgba8Snorm,
+             _ => return None,
+         })
+     }
+@@ -3312,7 +3697,13 @@
+         match self {
+             Self::R8 => 1,
+             Self::R16Float => RG8_BPP,
++            Self::Rgba8
++            | Self::Bgra8
++            | Self::Rg16Float
++            | Self::Bgr10A2
++            | Self::Rg11b10F
++            | Self::Rgb10a2
++            | Self::Rgba8Snorm => RGBA8_BPP,
+-            Self::Rgba8 | Self::Bgra8 | Self::Rg16Float | Self::Bgr10A2 => RGBA8_BPP,
+             Self::Rgba16Float => RGBA16F_BPP,
+         }
+     }
+@@ -3383,6 +3774,28 @@
+                     d.copy_from_slice(&rgba8_to_bgr10a2_word(texel).to_le_bytes());
+                 }
+             }
++            Self::Rg11b10F => {
++                for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
++                    let mut texel = [0u8; 4];
++                    texel.copy_from_slice(s);
++                    d.copy_from_slice(&rgba8_to_rg11b10_word(texel).to_le_bytes());
++                }
++            }
++            Self::Rgb10a2 => {
++                for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
++                    let mut texel = [0u8; 4];
++                    texel.copy_from_slice(s);
++                    d.copy_from_slice(&rgba8_to_rgb10a2_word(texel).to_le_bytes());
++                }
++            }
++            Self::Rgba8Snorm => {
++                for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
++                    d[0] = unorm8_to_snorm_byte(s[COMPONENT_R]);
++                    d[1] = unorm8_to_snorm_byte(s[COMPONENT_G]);
++                    d[2] = unorm8_to_snorm_byte(s[COMPONENT_B]);
++                    d[3] = unorm8_to_snorm_byte(s[COMPONENT_A]);
++                }
++            }
+         }
+         true
+     }
+@@ -3777,7 +4190,7 @@
+         }
+         // A guard on the walk itself: an admission set that silently emptied
+         // would satisfy every assertion above.
++        assert_eq!(admitted, 14, "the admitted colour render target formats");
+-        assert_eq!(admitted, 10, "the admitted colour render target formats");
+     }
+ 
+     /// An integer texel has no semantic eight-bit solid colour.
+@@ -3827,7 +4240,7 @@
+                 .unwrap_or_else(|| panic!("render target {format:#x} cannot publish its clear"));
+             assert_eq!(image.pixels().len(), image.row_bytes() as usize * 2);
+         }
++        assert_eq!(admitted, 14, "the admitted colour render target formats");
+-        assert_eq!(admitted, 10, "the admitted colour render target formats");
+ 
+         let integer = solid_clear_image(MTL_FORMAT_RG16_UINT, 2, 2, &clear)
+             .expect("RG16Uint is an admitted render target");
+@@ -3959,6 +4372,10 @@
+                 SampledClass::Rgba16Float => TexelLayout::Rgba16Float,
+                 SampledClass::Rg16Float => TexelLayout::Rg16Float,
+                 SampledClass::Bgr10a2Unorm => TexelLayout::Bgr10a2Unorm,
++                SampledClass::Rgb10a2Unorm => TexelLayout::Rgb10a2Unorm,
++                SampledClass::Rg11b10Float => TexelLayout::Rg11b10Float,
++                SampledClass::R16Unorm => TexelLayout::R16Unorm,
++                SampledClass::Rgba8Snorm => TexelLayout::Rgba8Snorm,
+                 SampledClass::Rg16Uint => TexelLayout::Rg16Uint,
+                 SampledClass::Rgba32Float => TexelLayout::Rgba32Float,
+             });
+@@ -4355,6 +4772,7 @@
+                 TexelLayout::Rgb10a2Unorm => MTL_FORMAT_RGB10A2_UNORM,
+                 TexelLayout::Bgr10a2Unorm => MTL_FORMAT_BGR10A2_UNORM,
+                 TexelLayout::Rg11b10Float => MTL_FORMAT_RG11B10_FLOAT,
++                TexelLayout::Rgba8Snorm => MTL_FORMAT_RGBA8_SNORM,
+                 TexelLayout::Bc1Rgba => MTL_FORMAT_BC1_RGBA,
+                 TexelLayout::Bc2Rgba => MTL_FORMAT_BC2_RGBA,
+                 TexelLayout::Bc3Rgba => MTL_FORMAT_BC3_RGBA,
+@@ -4810,6 +5228,10 @@
+                     TexelLayout::Bgra8 => SampledClass::Bgra8Unorm,
+                     TexelLayout::Rgba16Float => SampledClass::Rgba16Float,
+                     TexelLayout::Bgr10a2Unorm => SampledClass::Bgr10a2Unorm,
++                    TexelLayout::Rgb10a2Unorm => SampledClass::Rgb10a2Unorm,
++                    TexelLayout::Rg11b10Float => SampledClass::Rg11b10Float,
++                    TexelLayout::R16Unorm => SampledClass::R16Unorm,
++                    TexelLayout::Rgba8Snorm => SampledClass::Rgba8Snorm,
+                     TexelLayout::Rg16Uint => SampledClass::Rg16Uint,
+                     // Named rather than defaulted. This arm used to be
+                     // `_ => SampledClass::Bgra8Unorm`, which was true only while
+diff --git a/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs b/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
++++ a/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
+--- b/crates/reims-vgpu/src/runtime/compute_exec/vulkan.rs
+@@ -158,22 +158,6 @@
+         Some(pages),
+     ) {
+         Ok(licence) => {
+-            if let Some((need, have)) = licence.target.window_shortfall() {
+-                if crate::observe::first_sight(
+-                    "compute_dst_window_too_small",
+-                    u64::from(tex.binding),
+-                ) {
+-                    crate::observe::fail(format!(
+-                        "compute_dst_window_too_small bind={} gva={gva:#x} dims={width}x{height} \
+-                         fmt={pixel_format:#x} need={need} have={have} (the storage image names \
+-                         more texels than its guest pages hold; a direct landing would write \
+-                         past them, so it takes the pooled readback)",
+-                        tex.binding
+-                    ));
+-                }
+-                crate::runtime::drain::note_store_route("compute_dst_host_window_too_small");
+-                return ComputeImageDestination::Host;
+-            }
+             crate::runtime::drain::note_store_route("compute_dst_guest_pages");
+             // A split of the line above, so the two add up to it. Worth counting
+             // separately because the resident half is the half that needs the
+@@ -264,22 +248,6 @@
+         },
+     ) {
+         Ok(licence) => {
+-            if let Some((need, have)) = licence.target.window_shortfall() {
+-                if crate::observe::first_sight(
+-                    "compute_dst_window_too_small",
+-                    u64::from(tex.binding),
+-                ) {
+-                    crate::observe::fail(format!(
+-                        "compute_dst_window_too_small bind={} mid={mapping_id} dims={width}x{height} \
+-                         need={need} have={have} (the storage image names more texels than its \
+-                         guest pages hold; a direct landing would write past them, so it takes \
+-                         the pooled readback)",
+-                        tex.binding
+-                    ));
+-                }
+-                crate::runtime::drain::note_store_route("compute_dst_host_window_too_small");
+-                return ComputeImageDestination::Host;
+-            }
+             crate::runtime::drain::note_store_route("compute_dst_guest_pages");
+             crate::runtime::drain::note_store_route(if tex.rail.residency.is_some() {
+                 "compute_dst_guest_pages_mapper_ref_texture_resident"
+@@ -1676,6 +1644,7 @@
+         | V::R16Float
+         | V::Rgba8Unorm
+         | V::Bgra8Unorm
++        | V::Rgba8Snorm
+         | V::Rg16Float
+         | V::R8Unorm
+         | V::Rg8Unorm
+@@ -1815,7 +1784,12 @@
+         // `storage_selector` has no entry for it, so no guest storage binding
+         // can name it and its view mapping would be illegal on one.
+         | V::A8Unorm
++        | V::Rg11b10Float
++        // Four signed-normalized eight-bit channels: `SAMPLED_IMAGE` is
++        // mandatory for `R8G8B8A8_SNORM` and `STORAGE_IMAGE` is not, so a
++        // dispatch that samples one is admitted and a storage bind is refused
++        // by name like every member above.
++        | V::Rgba8Snorm => {
+-        | V::Rg11b10Float => {
+             return Err("spirv_sampled_only_format_as_storage");
+         }
+         V::Rgba32Float => (0, S::Rgba32Float),
+diff --git a/crates/reims-vgpu-vulkan/src/pixel.rs b/crates/reims-vgpu-vulkan/src/pixel.rs
++++ a/crates/reims-vgpu-vulkan/src/pixel.rs
+--- b/crates/reims-vgpu-vulkan/src/pixel.rs
+@@ -242,6 +242,7 @@
+         p::MTL_FORMAT_RGBA8_UNORM_SRGB => {
+             srgb(vk::Format::R8G8B8A8_SRGB, vk::Format::R8G8B8A8_UNORM, 4)
+         }
++        p::MTL_FORMAT_RGBA8_SNORM => linear(vk::Format::R8G8B8A8_SNORM, 4),
+         p::MTL_FORMAT_RGBA8_UINT => linear(vk::Format::R8G8B8A8_UINT, 4),
+         p::MTL_FORMAT_RGBA8_SINT => linear(vk::Format::R8G8B8A8_SINT, 4),
+         p::MTL_FORMAT_BGRA8_UNORM => linear(vk::Format::B8G8R8A8_UNORM, 4),
+@@ -369,6 +370,7 @@
+     // channels needs a component mapping on the view to sample correctly.
+     let layout = match f.linear_vk {
+         vk::Format::R8G8B8A8_UNORM => TexelLayout::Rgba8,
++        vk::Format::R8G8B8A8_SNORM => TexelLayout::Rgba8Snorm,
+         vk::Format::B8G8R8A8_UNORM => TexelLayout::Bgra8,
+         vk::Format::R8_UNORM => TexelLayout::R8,
+         vk::Format::R8G8_UNORM => TexelLayout::Rg8,
+@@ -434,6 +436,7 @@
+ pub fn vk_texel_layout(layout: TexelLayout) -> vk::Format {
+     match layout {
+         TexelLayout::Rgba8 => vk::Format::R8G8B8A8_UNORM,
++        TexelLayout::Rgba8Snorm => vk::Format::R8G8B8A8_SNORM,
+         TexelLayout::Bgra8 => vk::Format::B8G8R8A8_UNORM,
+         TexelLayout::R8 => vk::Format::R8_UNORM,
+         TexelLayout::Rg8 => vk::Format::R8G8_UNORM,
+@@ -985,6 +988,15 @@
+     /// (`MTLPixelFormatRG11B10Float`); **sampled-image only**, for
+     /// [`Self::Rgb10a2Unorm`]'s reason.
+     Rg11b10Float,
++    /// Four signed-normalized eight-bit channels (`MTLPixelFormatRGBA8Snorm`);
++    /// **sampled-image only**.
++    ///
++    /// Unity renders its normal/velocity intermediate into one and a dispatch
++    /// that samples it back must be admitted, or the lighting pass loses the
++    /// whole dispatch. `SAMPLED_IMAGE` is mandatory for `R8G8B8A8_SNORM` and
++    /// `STORAGE_IMAGE` is not, which is the same reason every member above
++    /// right of [`Self::A8Unorm`] is sampled-only.
++    Rgba8Snorm,
+ }
+ 
+ impl StorageImageFormat {
+@@ -1004,6 +1016,7 @@
+             Self::R8Unorm | Self::A8Unorm => 1,
+             Self::Rgba8Uint
+             | Self::Rgba8Sint
++            | Self::Rgba8Snorm
+             | Self::Rgba8Unorm
+             | Self::Bgra8Unorm
+             | Self::R32Uint
+@@ -1207,6 +1220,7 @@
+         pf::MTL_FORMAT_RGB10A2_UNORM => StorageImageFormat::Rgb10a2Unorm,
+         pf::MTL_FORMAT_BGR10A2_UNORM => StorageImageFormat::Bgr10a2Unorm,
+         pf::MTL_FORMAT_RG11B10_FLOAT => StorageImageFormat::Rg11b10Float,
++        pf::MTL_FORMAT_RGBA8_SNORM => StorageImageFormat::Rgba8Snorm,
+         _ => return storage_image(mtl),
+     };
+     translate(mtl)?;
+@@ -1223,6 +1237,7 @@
+         StorageImageFormat::Rgba8Uint => vk::Format::R8G8B8A8_UINT,
+         StorageImageFormat::Rgba8Sint => vk::Format::R8G8B8A8_SINT,
+         StorageImageFormat::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
++        StorageImageFormat::Rgba8Snorm => vk::Format::R8G8B8A8_SNORM,
+         StorageImageFormat::Bgra8Unorm => vk::Format::B8G8R8A8_UNORM,
+         StorageImageFormat::Rg16Float => vk::Format::R16G16_SFLOAT,
+         StorageImageFormat::Rg16Uint => vk::Format::R16G16_UINT,
+@@ -1792,6 +1807,12 @@
+             TransferFunction::Srgb,
+         ),
+         (
++            p::MTL_FORMAT_RGBA8_SNORM,
++            vk::Format::R8G8B8A8_SNORM,
++            4,
++            TransferFunction::Linear,
++        ),
++        (
+             p::MTL_FORMAT_RGBA8_UINT,
+             vk::Format::R8G8B8A8_UINT,
+             4,
+diff --git a/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs b/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
++++ a/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
+--- b/crates/reims-vgpu/src/backend/vulkan/translate/pixel.rs
+@@ -36,11 +36,12 @@
+ use crate::protocol::pixel_format::{self, SampledByteFormat, SwizzlePlan, TexelLayout};
+ 
+ pub use rail::{
++    bytes_per_texel, has_bgra_order, has_identity_components, is_srgb,
++    resident_color, sample_view_format, srgb_texel_layout, storage_format,
++    storage_image_components, storage_image_from_selector, stored_bytes_agree, texel_layout_of,
++    verbatim_texel, vk_block_geometry, vk_component_mapping, vk_storage_image, vk_texel_layout,
++    PixelFormat, ResidentFormat, TransferFunction, RESIDENT_RGBA_FORMAT, SCANOUT_FORMAT,
++    TRANSIENT_DEPTH_FORMAT,
+-    bytes_per_texel, has_bgra_order, has_identity_components, is_srgb, resident_color,
+-    sample_view_format, srgb_texel_layout, storage_format, storage_image_components,
+-    storage_image_from_selector, stored_bytes_agree, texel_layout_of, verbatim_texel,
+-    vk_block_geometry, vk_component_mapping, vk_storage_image, vk_texel_layout, PixelFormat,
+-    ResidentFormat, TransferFunction, RESIDENT_RGBA_FORMAT, SCANOUT_FORMAT, TRANSIENT_DEPTH_FORMAT,
+ };
+ 
+ /// This device's name for a decline the rail crate made in its own vocabulary.
+@@ -677,6 +678,7 @@
+                 p::MTL_FORMAT_RG16_FLOAT,
+                 p::MTL_FORMAT_RGBA8_UNORM,
+                 p::MTL_FORMAT_RGBA8_UNORM_SRGB,
++                p::MTL_FORMAT_RGBA8_SNORM,
+                 p::MTL_FORMAT_BGRA8_UNORM,
+                 p::MTL_FORMAT_BGRA8_UNORM_SRGB,
+                 // The packed 32-bit colour family, whose channel boundaries are
+@@ -752,8 +754,23 @@
+                 p::MTL_FORMAT_RG16_FLOAT,
+                 p::MTL_FORMAT_RGBA8_UNORM,
+                 p::MTL_FORMAT_RGBA8_UNORM_SRGB,
++                p::MTL_FORMAT_RGBA8_SNORM,
+                 p::MTL_FORMAT_BGRA8_UNORM,
+                 p::MTL_FORMAT_BGRA8_UNORM_SRGB,
++                // Unity's HDR scene colour, and the format a driven Easy Red 2
++                // boot refused every scene pass for as
++                // `rt_resolve reason=rt_linear_format`. Its Vulkan spelling is
++                // the guest's own word, so the resident is a byte copy and only
++                // the CPU seed needs the packer.
++                p::MTL_FORMAT_RG11B10_FLOAT,
++                // The same title's packed ten-bit HDR target, red in the low
++                // bits — `A2B10G10R10_UNORM_PACK32` exactly. Refused as
++                // `rt_resolve reason=rt_linear_format` beside the format above
++                // and admitted for the same reason.
++                p::MTL_FORMAT_RGB10A2_UNORM,
++                // Sixteen-bit single-channel unorm, refused beside the two
++                // above on the same boot (`fmt=0x14`).
++                p::MTL_FORMAT_R16_UNORM,
+                 // The first packed 32-bit colour attachment, and the first one
+                 // admitted for a *game* rather than for the window server. An
+                 // `'l10r'` IOSurface — `kCVPixelFormatType_ARGB2101010LEPacked`

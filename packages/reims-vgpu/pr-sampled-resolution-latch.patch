@@ -1,0 +1,173 @@
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+index 08ac2dbd..ae2a7dd8 100644
+--- a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -792,6 +792,7 @@ pub fn encode_draw_chain<M: HostMemory + HostOps>(
+ }
+ 
+ /// Sampled texture source + geometry for an engine draw.
++#[derive(Clone)]
+ pub(super) enum SampledSourceRequest {
+     /// Shared texel bytes + optional producer identity (see
+     /// [`LinearSampleIdentity`]) + what those texels are; the Arc lets memoized
+@@ -1113,6 +1114,60 @@ static SAMPLED_REF_BACKING_LAST: std::sync::LazyLock<
+     std::sync::Mutex<std::collections::HashMap<SampledRefKey, SampledRefBacking>>,
+ > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+ 
++/// The last resolution each `(task, texture ref)` produced, so a publish race
++/// can be answered with it instead of refusing the draw.
++///
++/// The miss this exists for is [`crate::runtime::objects::slot_recheck`]'s:
++/// the guest deletes and re-creates an object — a drawable ring recycles its
++/// refs every frame — and a packet names the ref before the new slot is
++/// published. Refusing the draw there is a black frame: the composite that
++/// samples a re-created drawable is exactly this shape, and the last
++/// resolution the ref produced is the previous frame's drawable, which is a
++/// frame late rather than absent.
++///
++/// Served only while the slot-recheck watch is young
++/// ([`crate::runtime::objects::slot_recheck::pending_publication`]), so a
++/// deleted object's bytes cannot be served past the window the publish race
++/// lives in. The entry is `(width, height, mapping, source)`, and the source
++/// is cheap to clone — every arm that carries bytes holds an `Arc`.
++static SAMPLED_RESOLUTION_LATCH: std::sync::LazyLock<
++    std::sync::Mutex<
++        std::collections::HashMap<(u32, u32), (u32, u32, u32, SampledSourceRequest)>,
++    >,
++> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
++
++/// Bound on the latch's population: a task that churns refs must not grow it
++/// without limit. Past this, only refs already in the table are refreshed.
++const SAMPLED_RESOLUTION_LATCH_CAP: usize = 4096;
++
++fn latch_sampled_resolution(
++    task_id: u32,
++    texture_ref: u32,
++    w: u32,
++    h: u32,
++    mid: u32,
++    src: &SampledSourceRequest,
++) {
++    let mut latch = SAMPLED_RESOLUTION_LATCH
++        .lock()
++        .unwrap_or_else(|poisoned| poisoned.into_inner());
++    if latch.len() >= SAMPLED_RESOLUTION_LATCH_CAP && !latch.contains_key(&(task_id, texture_ref)) {
++        return;
++    }
++    latch.insert((task_id, texture_ref), (w, h, mid, src.clone()));
++}
++
++fn latched_sampled_resolution(
++    task_id: u32,
++    texture_ref: u32,
++) -> Option<(u32, u32, u32, SampledSourceRequest)> {
++    SAMPLED_RESOLUTION_LATCH
++        .lock()
++        .unwrap_or_else(|poisoned| poisoned.into_inner())
++        .get(&(task_id, texture_ref))
++        .cloned()
++}
++
+ /// Report what a texture ref resolves to, on every change of backing or extent.
+ fn note_sampled_ref_backing(
+     state: &crate::model::DeviceState,
+@@ -7705,25 +7760,54 @@ fn try_metal2vulkan_draw<M: HostMemory + HostOps>(
+                         let _s = crate::runtime::sampled_phase::Span::open(
+                             crate::runtime::sampled_phase::Part::ResolveSource,
+                         );
+-                        let Some(loaded) = resolve_sampled_source(
++                        let loaded = match resolve_sampled_source(
+                             state,
+                             host,
+                             req.task_id,
+                             texture_ref,
+                             texture_resource.clone(),
+                             view_swizzle.is_none(),
+-                        ) else {
+-                            let detail = sample_miss_detail(state, host, req.task_id, texture_ref);
+-                            return Err(DrawError::DrawPreparation(
+-                                DrawPreparationDecline::TextureResolveMissing {
+-                                    stage: if frag_stage { "fragment" } else { "vertex" },
+-                                    index,
+-                                    texture_ref,
+-                                    detail,
+-                                },
+-                            ));
++                        ) {
++                            Some(loaded) => loaded,
++                            None => {
++                                // A publish race, not a missing object: the guest
++                                // deleted and re-created this ref, and the packet
++                                // names it before the new slot is published. The
++                                // last resolution this ref produced is the only
++                                // answer available, and it is a frame late rather
++                                // than absent — see the latch's own doc.
++                                if let Some(latched) =
++                                    latched_sampled_resolution(req.task_id, texture_ref).filter(|_| {
++                                        crate::runtime::objects::slot_recheck::pending_publication(
++                                            req.task_id,
++                                            texture_ref,
++                                            crate::runtime::objects::slot_recheck::PUBLISH_RACE_WINDOW_US,
++                                        )
++                                    })
++                                {
++                                    crate::runtime::drain::note_store_route(
++                                        "sampled_resolution_latched",
++                                    );
++                                    latched
++                                } else {
++                                    let detail =
++                                        sample_miss_detail(state, host, req.task_id, texture_ref);
++                                    return Err(DrawError::DrawPreparation(
++                                        DrawPreparationDecline::TextureResolveMissing {
++                                            stage: if frag_stage { "fragment" } else { "vertex" },
++                                            index,
++                                            texture_ref,
++                                            detail,
++                                        },
++                                    ));
++                                }
++                            }
+                         };
+                         let (rw, rh, mid, src) = loaded;
++                        // Latched before the source moves into the request, so a
++                        // publish race on this ref has an answer even after the
++                        // object it names is gone.
++                        latch_sampled_resolution(req.task_id, texture_ref, rw, rh, mid, &src);
+                         // What a texture ref resolved to, reported whenever it
+                         // changes. The plane draw ring records the refs a pass
+                         // sampled, and a ref is only a number: a layer turns
+diff --git a/crates/reims-vgpu/src/runtime/objects/slot_recheck.rs b/crates/reims-vgpu/src/runtime/objects/slot_recheck.rs
+index f6ded1c9..816a1e25 100644
+--- a/crates/reims-vgpu/src/runtime/objects/slot_recheck.rs
++++ b/crates/reims-vgpu/src/runtime/objects/slot_recheck.rs
+@@ -501,6 +501,29 @@ fn note_ended_detail(task_id: u32, ref_: u32, miss: ListMiss, age_us: u64) {
+ /// Runs at the tail of a drain tranche, with the same `state` and host the
+ /// lookup used. Returns early with the lock untouched when nothing is watched,
+ /// which is every tranche on every rail that does not produce the miss.
++/// Whether `(task, ref)` is a slot this device has already re-read and found
++/// empty, and the watch is young enough that the guest may still be about to
++/// publish it.
++///
++/// This is the query a caller asks when it wants to know whether a miss is the
++/// publish race the module exists for rather than a ref that is simply gone.
++/// The age bound is the whole reason it is not just "is it watched": a watch
++/// that never fills would otherwise answer yes for the rest of the task's life,
++/// and a caller that latches a resolution on that answer would serve a deleted
++/// object's bytes forever. The fill times this rail measures
++/// (`slot_recheck_fill_us` over `slot_recheck_filled`) average tens of
++/// milliseconds, so the window is a quarter second.
++pub const PUBLISH_RACE_WINDOW_US: u64 = 250_000;
++
++pub fn pending_publication(task_id: u32, ref_: u32, max_age_us: u64) -> bool {
++    let now = crate::observe::elapsed_us();
++    let ledger = ledger().lock().unwrap_or_else(|e| e.into_inner());
++    ledger
++        .watches
++        .get(&(task_id, ref_))
++        .is_some_and(|watch| now.saturating_sub(watch.recorded_us) <= max_age_us)
++}
++
+ pub fn sweep<M: HostMemory>(state: &DeviceState, host: &M) {
+     let due = ledger()
+         .lock()

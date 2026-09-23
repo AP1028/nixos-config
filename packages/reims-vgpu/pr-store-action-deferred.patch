@@ -1,0 +1,199 @@
+--- a/crates/reims-vgpu-core/src/pass.rs
++++ b/crates/reims-vgpu-core/src/pass.rs
+@@ -81,11 +81,21 @@
+ 
+ /// What the pass does with an attachment's result.
+ ///
+-/// The four ordinals the wire form represents. `Unknown` and
+-/// `CustomSampleDepthStore` are Metal values this record shape carries no state
+-/// for; they parse to `None` rather than folding onto a neighbour, because a
+-/// store action guessed wrong is either a discarded frame or a resolve that
+-/// never happens.
++/// The four ordinals the wire form represents. `CustomSampleDepthStore` is a
++/// Metal value this record shape carries no state for, so it parses to `None`
++/// rather than folding onto a neighbour, because a store action guessed wrong
++/// is either a discarded frame or a resolve that never happens.
++///
++/// `MTLStoreActionUnknown` is **not** a fifth way to store and does not parse
++/// to `None`: it is the guest's deferred form, legal in the descriptor while
++/// the encoder is built, and the stream's own `SetStoreAction` records replace
++/// it before the encoder ends. Refusing it refused the whole exec packet — a
++/// driven Unity title lost every render pass it sent (the deferred form is how
++/// it spells an action it decides at encode time) to a refusal whose own
++/// repair field, the override, was already in the same stream. It resolves to
++/// [`Self::Store`], the preserving answer: a deferred action this device could
++/// not observe being overridden is a frame that should stay on the
++/// attachment rather than one this device may discard.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+ pub enum StoreAction {
+     DontCare,
+@@ -96,6 +106,10 @@
+ 
+ impl StoreAction {
+     /// Parse the attachment prefix's ordinal.
++    ///
++    /// `Unknown` is accepted for the reason the type's doc gives; the caller
++    /// that has the stream in hand is expected to apply its overrides, and
++    /// [`crate::resolve::render`] is where the model's copy learns them.
+     #[must_use]
+     pub const fn parse(raw: u16) -> Option<StoreAction> {
+         use reims_vgpu_protocol::pass_action as ordinals;
+@@ -106,6 +120,7 @@
+             ordinals::MTL_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE => {
+                 Self::StoreAndMultisampleResolve
+             }
++            ordinals::MTL_STORE_ACTION_UNKNOWN => Self::Store,
+             _ => return None,
+         })
+     }
+@@ -650,13 +665,22 @@
+     }
+ 
+     /// An ordinal this record shape carries no state for is refused, not
+-    /// rounded to a neighbour.
++    /// rounded to a neighbour. `MTLStoreActionUnknown` is the one exception,
++    /// and it is not an ordinal without state: it is the deferred form, whose
++    /// state arrives in the stream as a `SetStoreAction` record — see
++    /// [`StoreAction::parse`].
+     #[test]
+     fn an_unrepresented_store_ordinal_parses_to_nothing() {
+         for raw in 0u16..=3 {
+             assert!(StoreAction::parse(raw).is_some(), "{raw}");
+         }
+-        for raw in [4u16, 5, 64, u16::MAX] {
++        assert_eq!(
++            StoreAction::parse(reims_vgpu_protocol::pass_action::MTL_STORE_ACTION_UNKNOWN),
++            Some(StoreAction::Store),
++            "the deferred form is accepted and stands for the preserving answer until \
++             the stream's override replaces it"
++        );
++        for raw in [5u16, 64, u16::MAX] {
+             assert_eq!(StoreAction::parse(raw), None, "{raw}");
+         }
+     }
+--- a/crates/reims-vgpu-core/src/resolve.rs
++++ b/crates/reims-vgpu-core/src/resolve.rs
+@@ -68,6 +68,7 @@
+ use reims_vgpu_protocol::decode::resource_state::{RecordTarget, ResourceStateRecord};
+ use reims_vgpu_protocol::decode::sync::{BarrierRecord, EventRecord, FenceRecord, SyncRecord};
+ use reims_vgpu_protocol::decode::{self, Op};
++use reims_vgpu_protocol::render::StoreActionTarget;
+ use reims_vgpu_protocol::decode::{
+     AttachmentPrefix, BufferBind, BufferStrideBind, DecodeRefusal, RefBind, RenderPassBody,
+     SamplerLodBind, ScissorRect as WireScissorRect, Viewport as WireViewport,
+@@ -1138,6 +1139,47 @@
+             RenderOp::SetStencilReference { front, back }
+         }
+         RenderRecord::SetStoreAction(protocol_render::SetStoreAction { target, action }) => {
++            // **The deferred store action's discharge, on the model's copy.**
++            //
++            // A pass descriptor may carry `MTLStoreActionUnknown` and the guest
++            // replaces it before the encoder ends; this record is that
++            // replacement. Participations are computed from the arena *after*
++            // the whole stream resolves, so applying the override here is what
++            // makes the graph's resolve-target edge follow the action the guest
++            // actually chose instead of the placeholder it started from — and
++            // the placeholder's own fold to `Store` (see
++            // [`StoreAction::parse`]) then only stands for a stream that
++            // violates the contract by never overriding it.
++            //
++            // Out-of-range ordinals and undeclared slots are left to the
++            // executor, which names both: the model must not refuse a packet
++            // the executor tolerates, and refusing is what dropping every
++            // deferred-action render pass looked like.
++            if let Ok(raw) = u16::try_from(action) {
++                if let Some(store) = StoreAction::parse(raw) {
++                    if let Some(descriptor) = arenas.pass_descriptors.last_mut() {
++                        match target {
++                            StoreActionTarget::Color(index) => {
++                                if let Some(slot) = descriptor.color.get_mut(index as usize) {
++                                    if slot.texture.is_some() {
++                                        slot.store = store;
++                                    }
++                                }
++                            }
++                            StoreActionTarget::Depth => {
++                                if descriptor.depth.texture.is_some() {
++                                    descriptor.depth.store = store;
++                                }
++                            }
++                            StoreActionTarget::Stencil => {
++                                if descriptor.stencil.texture.is_some() {
++                                    descriptor.stencil.store = store;
++                                }
++                            }
++                        }
++                    }
++                }
++            }
+             RenderOp::SetStoreAction { target, action }
+         }
+         RenderRecord::SetVisibilityResultMode(protocol_render::SetVisibilityResultMode {
+@@ -1871,6 +1913,45 @@
+         );
+     }
+ 
++    /// A descriptor's deferred store action is replaced by the stream's own
++    /// `SetStoreAction` record, on the model's copy as well as the executor's.
++    ///
++    /// Participations are computed from the arena after the whole stream
++    /// resolves, so the override has to land there or a deferred resolve is a
++    /// resolve-target write the dependency graph never orders. The first
++    /// assertion is the placeholder's own answer: `Unknown` stands for `Store`
++    /// until the record that discharges it arrives.
++    #[test]
++    fn a_deferred_store_action_takes_its_streams_override() {
++        let live = Live(vec![4242]);
++        let mut body = pass_body();
++        body.color[0].prefix.texture_ref = u32le(4242);
++        body.color[0].prefix.store_action = u16le(4);
++        let mut arenas = ExecArenas::default();
++        let write = RenderRecord::WriteDescriptor(protocol_render::WriteDescriptor {
++            descriptor: &body,
++        });
++        let op = render(&write, &live, &mut arenas).expect("resolved");
++        let RenderOp::WriteDescriptor { descriptor } = op else {
++            panic!("not a descriptor");
++        };
++        let slot = descriptor.0 as usize;
++        assert_eq!(
++            arenas.pass_descriptors[slot].color[0].store,
++            StoreAction::Store
++        );
++
++        let override_record = RenderRecord::SetStoreAction(protocol_render::SetStoreAction {
++            target: StoreActionTarget::Color(0),
++            action: 2,
++        });
++        let _ = render(&override_record, &live, &mut arenas).expect("resolved");
++        assert_eq!(
++            arenas.pass_descriptors[slot].color[0].store,
++            StoreAction::MultisampleResolve
++        );
++    }
++
+     /// Each slot's store-action options are its own, and an undeclared value
+     /// refuses.
+     ///
+--- a/crates/reims-vgpu-protocol/src/pass_action.rs
++++ b/crates/reims-vgpu-protocol/src/pass_action.rs
+@@ -44,6 +44,19 @@
+ pub const MTL_STORE_ACTION_MULTISAMPLE_RESOLVE: u16 = 2;
+ /// `MTLStoreActionStoreAndMultisampleResolve` — preserve both images.
+ pub const MTL_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE: u16 = 3;
++/// `MTLStoreActionUnknown` — the guest has not decided yet.
++///
++/// The deferred form: a pass descriptor may carry this while its encoder is
++/// being built, and the guest must replace it with one of the four above before
++/// the encoder ends. It is the ordinal a `setColorStoreAction:`-shaped record
++/// exists to override, so a stream that carries it is naming an *intent to
++/// decide*, not a fifth way to store — which is why it is declared here beside
++/// the four but stays outside [`is_declared_store_action`], whose callers ask
++/// what this device can *execute* from the descriptor alone.
++pub const MTL_STORE_ACTION_UNKNOWN: u16 = 4;
++/// `MTLStoreActionCustomSampleDepthStore` — the SDK's sixth form, which this
++/// record shape carries no state for.
++pub const MTL_STORE_ACTION_CUSTOM_SAMPLE_DEPTH_STORE: u16 = 5;
+ 
+ /// Whether `raw` is one of the three `MTLLoadAction` values.
+ ///

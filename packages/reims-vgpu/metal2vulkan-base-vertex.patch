@@ -1,0 +1,187 @@
+diff -x target -x Cargo.lock -ruN a/src/meta/mod.rs b/src/meta/mod.rs
+--- a/src/meta/mod.rs	2026-09-22 23:01:37.883201770 -0700
++++ b/src/meta/mod.rs	2026-09-22 22:59:32.438527791 -0700
+@@ -376,6 +376,17 @@
+     VertexId,
+     /// `[[instance_id]]` -> Input BuiltIn InstanceIndex (32-bit uint).
+     InstanceId,
++    /// `[[base_vertex]]` -> Input BuiltIn BaseVertex (32-bit uint). The value the
++    /// API passed to an indexed draw's `baseVertex` argument, which Vulkan's
++    /// `VertexIndex` already folds into the vertex index and only this builtin
++    /// carries separately. Requires the `SPV_KHR_shader_draw_parameters`
++    /// extension and the device's `shaderDrawParameters` feature; zero for a
++    /// non-indexed draw.
++    BaseVertex,
++    /// `[[base_instance]]` -> Input BuiltIn BaseInstance (32-bit uint). Metal's
++    /// `baseInstance` and Vulkan's `firstInstance`, which `InstanceIndex`
++    /// separates the same way.
++    BaseInstance,
+     /// Opaque Metal patch handle consumed only by the metadata-named control-point accessor.
+     PatchControlPoints,
+     /// Per-patch user input at the AIR location.
+@@ -1997,6 +2008,8 @@
+ pub const VERTEX_INPUT_ROLES: &[&str] = &[
+     "amplification_count",
+     "amplification_id",
++    "base_instance",
++    "base_vertex",
+     "buffer",
+     "indirect_buffer",
+     "instance_id",
+@@ -2590,6 +2603,8 @@
+                 ),
+                 "vertex_id" => VertRole::VertexId,
+                 "instance_id" => VertRole::InstanceId,
++                "base_vertex" => VertRole::BaseVertex,
++                "base_instance" => VertRole::BaseInstance,
+                 "patch_control_point_input" => {
+                     let refs = refs_in(node);
+                     let function = refs
+diff -x target -x Cargo.lock -ruN a/src/passes/module_cleanup.rs b/src/passes/module_cleanup.rs
+--- a/src/passes/module_cleanup.rs	2026-09-22 23:01:37.887130749 -0700
++++ b/src/passes/module_cleanup.rs	2026-09-22 22:59:32.442662471 -0700
+@@ -7,7 +7,7 @@
+ /// Every capability that is not core Vulkan needs its extension named alongside it, and each of
+ /// them wants the same idempotent push — one place to get it right rather than one copy per
+ /// extension.
+-fn require_extension(ctx: &mut Ctx, ext: &str) {
++pub(super) fn require_extension(ctx: &mut Ctx, ext: &str) {
+     let have = ctx
+         .module
+         .extensions
+diff -x target -x Cargo.lock -ruN a/src/passes/stage_input/mod.rs b/src/passes/stage_input/mod.rs
+--- a/src/passes/stage_input/mod.rs	2026-09-22 23:01:37.887627465 -0700
++++ b/src/passes/stage_input/mod.rs	2026-09-22 22:59:33.266971673 -0700
+@@ -513,6 +513,8 @@
+                 Some(VertRole::Sampler(_)) => s == "sampler",
+                 Some(VertRole::VertexId) => s == "vertex_id",
+                 Some(VertRole::InstanceId) => s == "instance_id",
++                Some(VertRole::BaseVertex) => s == "base_vertex",
++                Some(VertRole::BaseInstance) => s == "base_instance",
+                 Some(VertRole::PatchControlPoints) => s == "patch_control_points",
+                 Some(VertRole::PatchInput(_)) => s == "patch_input",
+                 Some(VertRole::PositionInPatch) => s == "position_in_patch",
+@@ -1528,6 +1530,44 @@
+             let pptr = ctx.ty_ptr(StorageClass::Input, uint_ty);
+             let var = ctx.module.fresh_id();
+             ctx.new_globals.push(Instruction::new(
++                Op::Variable,
++                Some(pptr),
++                Some(var),
++                vec![Operand::StorageClass(StorageClass::Input)],
++            ));
++            decorate_builtin(&mut ctx.module, var, builtin);
++            ctx.interface.push(var);
++            if *pty == uint_ty {
++                bindings.push((*pid, ParamBinding::LoadVar { var, ty: uint_ty }));
++            } else {
++                bindings.push((
++                    *pid,
++                    ParamBinding::LoadVarConverted {
++                        var,
++                        load_ty: uint_ty,
++                        param_ty: *pty,
++                    },
++                ));
++            }
++        } else if role_is("base_vertex") || role_is("base_instance") {
++            // `[[base_vertex]]`/`[[base_instance]]` -> Input BuiltIn BaseVertex/BaseInstance.
++            // Vulkan's VertexIndex/InstanceIndex fold the draw's first index/instance in, so a
++            // shader reading Metal's separate base parameters needs the standalone builtins; a
++            // non-indexed draw reports zero, which is what it passed. Both are 32-bit int inputs
++            // like VertexIndex, and both carry `DrawParameters` and want
++            // `SPV_KHR_shader_draw_parameters` named (the Vulkan backend enables the matching
++            // device feature when the host reports it).
++            super::module_cleanup::require_extension(ctx, "SPV_KHR_shader_draw_parameters");
++            ctx.add_capability(spirv::Capability::DrawParameters);
++            let builtin = if role_is("base_vertex") {
++                BuiltIn::BaseVertex
++            } else {
++                BuiltIn::BaseInstance
++            };
++            let uint_ty = ctx.ty_uint();
++            let pptr = ctx.ty_ptr(StorageClass::Input, uint_ty);
++            let var = ctx.module.fresh_id();
++            ctx.new_globals.push(Instruction::new(
+                 Op::Variable,
+                 Some(pptr),
+                 Some(var),
+diff -x target -x Cargo.lock -ruN a/src/reflect/mod.rs b/src/reflect/mod.rs
+--- a/src/reflect/mod.rs	2026-09-22 23:01:37.888029128 -0700
++++ b/src/reflect/mod.rs	2026-09-22 22:59:32.443577203 -0700
+@@ -2723,6 +2723,8 @@
+                 VertRole::VertexInput(_)
+                 | VertRole::VertexId
+                 | VertRole::InstanceId
++                | VertRole::BaseVertex
++                | VertRole::BaseInstance
+                 | VertRole::PatchControlPoints
+                 | VertRole::PatchInput(_)
+                 | VertRole::PositionInPatch
+diff -x target -x Cargo.lock -ruN a/tests/stage_root_attributes.rs b/tests/stage_root_attributes.rs
+--- a/tests/stage_root_attributes.rs	2026-09-22 23:01:37.888538905 -0700
++++ b/tests/stage_root_attributes.rs	2026-09-22 22:59:32.444086485 -0700
+@@ -133,6 +133,31 @@
+ !4 = !{i32 0, !"air.vertex_id", !"air.arg_type_name", !"uint", !"air.arg_name", !"vid"}
+ "#;
+ 
++/// A vertex that reads both `[[vertex_id]]` and `[[base_vertex]]` in its body, so a lowering that
++/// silently zeroed the base would change the emitted arithmetic rather than only the declarations.
++const VERTEX_WITH_BASE: &str = r#"target triple = "air64_v28-apple-macosx26.5.0"
++
++define <4 x float> @vert(i32 %vid, i32 %bv) {
++entry:
++  %f = sitofp i32 %vid to float
++  %g = sitofp i32 %bv to float
++  %s = fadd float %f, %g
++  %v0 = insertelement <4 x float> undef, float %s, i32 0
++  %v1 = insertelement <4 x float> %v0, float 0.000000e+00, i32 1
++  %v2 = insertelement <4 x float> %v1, float 0.000000e+00, i32 2
++  %v3 = insertelement <4 x float> %v2, float 1.000000e+00, i32 3
++  ret <4 x float> %v3
++}
++
++!air.vertex = !{!0}
++!0 = !{ptr @vert, !1, !3ATTR}
++!1 = !{!2}
++!2 = !{!"air.position", !"air.arg_type_name", !"float4"}
++!3 = !{!4PARAM}
++!4 = !{i32 0, !"air.vertex_id", !"air.arg_type_name", !"uint", !"air.arg_name", !"vid"}
++!5 = !{i32 1, !"air.base_vertex", !"air.arg_type_name", !"uint", !"air.arg_name", !"bv"}
++"#;
++
+ /// Splice an attribute tail into a template. `attr` is the operand text plus any node definitions
+ /// it needs; an empty `attr` yields the same shader with a bare root.
+ fn with_attribute(template: &str, attr: &str) -> String {
+@@ -338,3 +363,31 @@
+         "the refusal must name the attribute: {error}"
+     );
+ }
++
++/// `[[base_vertex]]` is the first index of an indexed draw, which Vulkan's `VertexIndex` already
++/// folds in, so it cannot be recovered from the vertex index and needs its own `BaseVertex`
++/// builtin. The builtin only exists under `SPV_KHR_shader_draw_parameters`, which therefore has to
++/// be named in a module that uses it -- and the body reads it, so a zeroed lowering would show up
++/// as a dropped `fadd` operand rather than passing on declarations alone.
++#[test]
++fn base_vertex_reaches_spirv_as_the_extension_builtin() {
++    let declaring = VERTEX_WITH_BASE.replace("PARAM", ", !5");
++    assert_ne!(declaring, VERTEX_WITH_BASE, "template has no PARAM splice point");
++    let asm = translate(&declaring, "", Stage::Vertex)
++        .expect("a vertex declaring base_vertex translates");
++
++    assert!(
++        asm.contains("OpExtension \"SPV_KHR_shader_draw_parameters\""),
++        "the BaseVertex builtin needs its extension declared:\n{asm}"
++    );
++    assert!(
++        asm.contains("BuiltIn BaseVertex"),
++        "the parameter must arrive as the BaseVertex builtin:\n{asm}"
++    );
++    // A shader that does not mention the role must not be handed the extension.
++    let plain = translate(VERTEX_WITH_BASE, "", Stage::Vertex).expect("bare vertex translates");
++    assert!(
++        !plain.contains("SPV_KHR_shader_draw_parameters"),
++        "the extension must be requested only when the role is used:\n{plain}"
++    );
++}

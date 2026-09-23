@@ -1,0 +1,18 @@
+--- a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -3496,6 +3496,15 @@
+         owner,
+     } = plane;
+ 
++    // A mapping's pages may hold the frame *before* the one this device
++    // rendered and deliberately left in a resident. A writeback debt is a frame
++    // with no command on any queue, so queue order cannot put it ahead of this
++    // gather the way it does for a submitted writeback — `try_linear_sample_zero_copy`
++    // states the rule and this rail was the exception to it. The payment is what
++    // puts the copy on the queue; without it the gather reads the pages the
++    // frame before last, which is a window that never updates over a running
++    // game.
++    crate::runtime::writeback_debt::pay_for_mapping(state, host, mapping_id);
+     let (import, _footprint) =
+         crate::runtime::mapper::ensure_contig_import_with_footprint(state, host, mapping_id)?;
+     let end = base_off.checked_add(span)?;

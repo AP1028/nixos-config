@@ -1,0 +1,39 @@
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+--- b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -8984,15 +8984,32 @@
+             .first()
+             .filter(|color| color.multisample_source_ref != 0)
+         {
++            use reims_vgpu_protocol::pass_action::{
++                MTL_STORE_ACTION_MULTISAMPLE_RESOLVE, MTL_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE,
++            };
++            // `StoreAndMultisampleResolve` keeps the multisample image *and*
++            // resolves it. A multisample image is device scratch here — no rail
++            // ever writes one back to guest pages, and Metal itself forbids
++            // sampling it — so the resolve is the whole observable effect and
++            // the store half has nothing to land. A driven Unity title stores
++            // this action on every MSAA scene pass, and refusing it lost the
++            // pass's geometry (the missing tanks and the flat, fogged scene).
++            if color.store_action != MTL_STORE_ACTION_MULTISAMPLE_RESOLVE
++                && color.store_action != MTL_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE
++            {
+-            use reims_vgpu_protocol::pass_action::MTL_STORE_ACTION_MULTISAMPLE_RESOLVE;
+-            if color.store_action != MTL_STORE_ACTION_MULTISAMPLE_RESOLVE {
+                 return Err(DrawError::Unsupported(
+                     crate::backend::vulkan::engine::reason::DrawReason::MultisampleStoreActionUnsupported {
+                         store_action: color.store_action,
+                     },
+                 ));
+             }
++            // A LOAD on the multisample scratch is only answerable while the
++            // slot that holds it is still open, which is exactly what a
++            // continuing record is: the engine keeps one multisample target per
++            // key and reuses it, so the second and later records of one MSAA
++            // render pass load what the first wrote. A *new* record asking LOAD
++            // would read an undeclared scratch image, and that stays refused.
++            if color.load_action == MTL_LOAD_ACTION_LOAD && !req.continues_render_pass {
+-            if color.load_action == MTL_LOAD_ACTION_LOAD {
+                 return Err(DrawError::Unsupported(
+                     crate::backend::vulkan::engine::reason::DrawReason::MultisampleLoadActionUnsupported {
+                         load_action: color.load_action,

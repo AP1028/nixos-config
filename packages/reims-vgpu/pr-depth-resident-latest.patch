@@ -1,0 +1,150 @@
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs b/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
++++ a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
+--- b/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
+@@ -2365,6 +2365,20 @@
+     resident_content_backing(identity) != ResidentContentBacking::NotReady
+ }
+ 
++/// The most recently ready depth resident of this geometry, as the identity a
++/// sampled bind may name — see
++/// [`ResourcePools::recent_ready_depth_resident`] for why a depth bind needs it.
++pub fn recent_ready_depth_resident(
++    width: u32,
++    height: u32,
++    exclude_ref: u32,
++) -> Option<TargetIdentity> {
++    let guard = lock_engine();
++    guard
++        .pools
++        .recent_ready_depth_resident(width, height, exclude_ref)
++}
++
+ #[cfg(test)]
+ mod resident_content_backing_tests {
+     use super::*;
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/pools/images_and_registry.rs b/crates/reims-vgpu/src/backend/vulkan/engine/pools/images_and_registry.rs
++++ a/crates/reims-vgpu/src/backend/vulkan/engine/pools/images_and_registry.rs
+--- b/crates/reims-vgpu/src/backend/vulkan/engine/pools/images_and_registry.rs
+@@ -782,6 +782,51 @@
+         self.registry.get(identity)
+     }
+ 
++    /// The most recently ready depth resident of one geometry, with the identity
++    /// a sampled bind can name.
++    ///
++    /// A guest that ping-pongs or re-slots its camera depth renders a frame into
++    /// one texture reference and samples *another* one in the same frame — the
++    /// standard double-buffered depth shape, and Unity's. The sampled name then
++    /// finds no resident of its own even though the frame this device just
++    /// rendered is exactly the content it asked for, and the sampled bind falls
++    /// to the CPU rails, which cannot name a depth layout at all.
++    ///
++    /// This is the bridge: the newest ready depth resident at the same geometry
++    /// is the frame the sample wants. Geometry is an exact match on purpose —
++    /// depth is meaningless across shapes — and only depth formats are
++    /// considered, so this cannot serve colour content under a stale name.
++    ///
++    /// `exclude_ref` is the depth reference the *current* draw binds as its own
++    /// attachment, `0` when it binds none. A resident under that name is the
++    /// frame being rendered right now, and serving it to a sample inside the
++    /// same draw is a feedback read — the engine answers one with an
++    /// attachment snapshot, a full copy of the image per bind, which on a
++    /// driven Unity menu pinned the host GPU at 100 % and stalled the scene.
++    /// Skipping it leaves the other half of the guest's depth ping-pong, which
++    /// is the frame the sample actually asked for.
++    pub(crate) fn recent_ready_depth_resident(
++        &self,
++        width: u32,
++        height: u32,
++        exclude_ref: u32,
++    ) -> Option<TargetIdentity> {
++        self.registry
++            .iter()
++            .filter(|(identity, slot)| {
++                slot.content_ready
++                    && slot.width == width
++                    && slot.height == height
++                    && super::super::format_is_depth(slot.format.declared())
++                    && !matches!(
++                        identity,
++                        TargetIdentity::Texture { ref_, .. } if *ref_ == exclude_ref && exclude_ref != 0
++                    )
++            })
++            .max_by_key(|(_, slot)| slot.last_touch_ms)
++            .map(|(identity, _)| identity.clone())
++    }
++
+     /// The generation the registry holds for the *same target* as `identity`,
+     /// when the exact key is absent.
+     ///
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+--- b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -1225,6 +1225,7 @@
+     texture_ref: u32,
+     resource: Option<std::sync::Arc<crate::model::TaskResource>>,
+     may_bind_resident: bool,
++    depth_target_ref: u32,
+ ) -> Option<(u32, u32, u32, SampledSourceRequest)> {
+     if texture_ref == 0 {
+         return None;
+@@ -1831,7 +1832,9 @@
+             // The texture-keyed resident first: a depth texture this device
+             // rendered into is the only case it exists, and the GVA rails below
+             // cannot see it at all (see `try_texture_resident_sample`).
++            if let Some((w, h, src)) =
++                try_texture_resident_sample(task_id, texture_ref, tex, depth_target_ref)
++            {
+-            if let Some((w, h, src)) = try_texture_resident_sample(texture_ref, tex) {
+                 return Some((w, h, 0, src));
+             }
+             // Above the gather: a span whose pages a render Store published and
+@@ -4539,8 +4542,10 @@
+ /// aspect first.
+ #[must_use]
+ pub(super) fn try_texture_resident_sample(
++    task_id: u32,
+     texture_ref: u32,
+     tex: &TextureDescriptor,
++    depth_target_ref: u32,
+ ) -> Option<(u32, u32, SampledSourceRequest)> {
+     use crate::backend::vulkan::engine::{resident_content_ready, TargetIdentity};
+     use crate::protocol::pixel_format as p;
+@@ -4576,6 +4581,17 @@
+             return Some((w, h, SampledSourceRequest::Target(identity, format)));
+         }
+     }
++    // The guest's identical-name resident never appeared, but a depth frame of
++    // this exact geometry is ready under another name: the standard
++    // double-buffered camera depth, where this bind samples the frame the device
++    // just rendered. Serving it is the difference between a sharp scene and one
++    // whose depth-driven passes read a synthetic constant.
++    if let Some(identity) =
++        crate::backend::vulkan::engine::recent_ready_depth_resident(w, h, depth_target_ref)
++    {
++        crate::runtime::drain::note_store_route("depth_resident_latest");
++        return Some((w, h, SampledSourceRequest::Target(identity, format)));
++    }
+     None
+ }
+ 
+@@ -7916,6 +7932,11 @@
+                         let _s = crate::runtime::sampled_phase::Span::open(
+                             crate::runtime::sampled_phase::Part::ResolveSource,
+                         );
++                        let depth_target_ref = req
++                            .depth_attach
++                            .as_ref()
++                            .map(|d| d.texture_ref)
++                            .unwrap_or(0);
+                         let loaded = match resolve_sampled_source(
+                             state,
+                             host,
+@@ -7923,6 +7944,7 @@
+                             texture_ref,
+                             texture_resource.clone(),
+                             view_swizzle.is_none(),
++                            depth_target_ref,
+                         ) {
+                             Some(loaded) => loaded,
+                             None => {

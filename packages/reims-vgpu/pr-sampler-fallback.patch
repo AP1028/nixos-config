@@ -1,0 +1,53 @@
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+index 08ac2dbd..0f334d70 100644
+--- a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -8147,9 +8147,45 @@ fn try_metal2vulkan_draw<M: HostMemory + HostOps>(
+                 let smp_bind = SAMPLER_BINDING_BASE + index + base_off;
+                 if sampler_binds.insert(smp_bind) {
+                     let mut sampler = if sampler_ref != 0 {
+-                        sampler_origin.insert(smp_bind, b'g');
+-                        load_vulkan_sampler(state, host, req.task_id, sampler_ref, smp_bind)
+-                            .map_err(DrawError::DrawPreparation)?
++                        match load_vulkan_sampler(state, host, req.task_id, sampler_ref, smp_bind) {
++                            Ok(sampler) => {
++                                sampler_origin.insert(smp_bind, b'g');
++                                sampler
++                            }
++                            Err(reason) => {
++                                // A guest bind that cannot be resolved is not a
++                                // reason to lose the draw. The macOS rail has
++                                // always degraded to the binding's fallback and
++                                // reported it (`metal_draw_sampler_fallback`);
++                                // this rail refused the record instead, and a
++                                // driven Easy Red 2 session measured what that
++                                // cost: 661 of 692 draws refused, 639 of them
++                                // one full-screen composite per frame, and a
++                                // black screen with the frame texture intact.
++                                // The reflected loop below already knows the
++                                // right answer for this binding — the shader's
++                                // own static sampler when it has one, the
++                                // normalized default otherwise — so release the
++                                // claim and let it provision the binding, with
++                                // the refusal kept visible.
++                                crate::observe::Emit::decline(
++                                    "linux_m2v_sampler_fallback",
++                                    &reason,
++                                )
++                                .field("task", req.task_id)
++                                .field("pipe", req.pipeline_ref)
++                                .field("stage", if frag_stage { "fragment" } else { "vertex" })
++                                .field("sampler", sampler_ref)
++                                .field("binding", smp_bind)
++                                .fail_once(
++                                    (u64::from(sampler_ref) << 32)
++                                        | (1_u64 << 31)
++                                        | u64::from(smp_bind),
++                                );
++                                sampler_binds.remove(&smp_bind);
++                                return Ok(());
++                            }
++                        }
+                     } else {
+                         sampler_origin.insert(smp_bind, b'd');
+                         crate::backend::vulkan::engine::SamplerResource::normalized_default(

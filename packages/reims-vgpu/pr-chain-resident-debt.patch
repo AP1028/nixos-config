@@ -1,0 +1,54 @@
+--- a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -215,8 +215,23 @@
+                     req.pipeline_ref, pass_w, pass_h, req.vertex_count
+                 ));
+             }
+-            Ok(M2vDrawSpan::ResidentChain) => {
++            Ok(M2vDrawSpan::ResidentChain { identity }) => {
+                 req.chain_resident_established = true;
++                // The content stays in the chain's resident and nothing has
++                // armed a copy into the guest's pages: the import-present rail
++                // that used to make it observable is gone, and this record
++                // skipped its readback by design. Arm the debt here so the
++                // pages are filled when something reads them. The guest's
++                // WindowServer compositing this window samples exactly those
++                // pages, and a zeroed surface is a black window over a running
++                // game — which is the whole of the failing-game report.
++                if let Some(c0) = req.colors.first() {
++                    let (mid, cw, ch) = (c0.mapping_id, c0.width, c0.height);
++                    if arm_surface_writeback_debt(state, host, mid, &identity, cw, ch) {
++                        crate::runtime::mapper::stamp_guest_write_gen(state, host, mid);
++                        note_mapper_ref_texture_store_route("chain_resident_debt_armed");
++                    }
++                }
+                 crate::observe::line(format!(
+                     "linux_m2v_draw ok resident_chain pipe={} {}x{} mid={} gva={:#x}",
+                     req.pipeline_ref,
+@@ -6451,7 +6466,14 @@
+     /// the protocol-keyed engine target (no CPU pixels, no fence wait, no guest
+     /// Store this record). The final record reads back and performs the
+     /// contract Store on portability devices.
+-    ResidentChain,
++    ///
++    /// `identity` is carried so the caller can arm the copy into the guest's
++    /// pages when the final record does not read back — a chain whose Store
++    /// skipped its readback leaves the content on the resident and nothing
++    /// observable in the pages a guest reader samples.
++    ResidentChain {
++        identity: crate::backend::vulkan::engine::TargetIdentity,
++    },
+     /// Final/single record of a GVA render Store executed into the registry
+     /// resident with `skip_readback`: the caller lands the frame from that
+     /// resident, which is where the pixels are — this record produced none on
+@@ -9737,7 +9759,9 @@
+         let pixels_bgra = out.pixels_bgra;
+         let pixels = out.pixels;
+         if resident_render_chain {
+-            return Ok(M2vDrawSpan::ResidentChain);
++            if let Some(identity) = resources.target_identity.clone() {
++                return Ok(M2vDrawSpan::ResidentChain { identity });
++            }
+         }
+         if let Some(identity) = gva_resident_store {
+             return Ok(M2vDrawSpan::ResidentGvaStore { identity });

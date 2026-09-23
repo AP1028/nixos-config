@@ -1,0 +1,140 @@
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
++++ a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
+--- b/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs
+@@ -2509,6 +2509,22 @@
+     let with_stencil = req.depth.as_ref().and_then(|d| d.stencil).is_some();
+     let sample_count = req.raster_sample_count.max(1);
+     if let Some(identity) = req.depth.as_ref().and_then(|d| d.identity.clone()) {
++        // DIAGNOSTIC (temporary, opt-in): names the depth identity the render
++        // side uses, against `diag_depth_sample_probe`'s candidates. Remove
++        // once the scene's depth resolves.
++        if std::env::var_os("REIMS_VGPU_DIAG_CHAIN_READBACK").is_some()
++            && crate::observe::first_sight(
++                "depth_resident_use",
++                crate::backend::hash::hash_bytes(format!("{identity:?}").as_bytes()),
++            )
++        {
++            crate::observe::fail(format!(
++                "depth_resident_use identity={identity:?} {}x{} stencil={}",
++                req.width,
++                req.height,
++                u8::from(with_stencil),
++            ));
++        }
+         // Asked before `registry_ensure_depth`, because that call creates the
+         // slot when it is absent and a fresh slot is `content_ready == false`.
+         // Asking after would answer about the image this draw just made rather
+@@ -5722,6 +5738,20 @@
+     // `registry_mark_depth_ready` for the sole-copy line that is deliberately
+     // absent from it.
+     if let Some(identity) = depth_attachment.as_ref().and_then(|d| d.identity.as_ref()) {
++        // DIAGNOSTIC (temporary, opt-in): every depth identity that actually
++        // receives content, so a sampled ref can be told from one no pass ever
++        // rendered. Remove once the scene's depth resolves.
++        if std::env::var_os("REIMS_VGPU_DIAG_CHAIN_READBACK").is_some()
++            && crate::observe::first_sight(
++                "depth_mark_ready",
++                crate::backend::hash::hash_bytes(format!("{identity:?}").as_bytes()),
++            )
++        {
++            crate::observe::fail(format!(
++                "depth_mark_ready identity={identity:?} {}x{}",
++                req.width, req.height,
++            ));
++        }
+         pools.registry_mark_depth_ready(identity);
+     }
+     phase.enter(super::draw_phase::Phase::PostSampled);
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+--- b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -260,6 +260,29 @@
+                             note_mapper_ref_texture_store_route("chain_resident_debt_armed");
+                         }
+                     }
++                    // DIAGNOSTIC (temporary, opt-in): force the chain resident
++                    // to be read back and stored into the guest's pages, so a
++                    // scene target's actual rendered content is observable on
++                    // the `m2v_store_gva … rgb_nz=` line. Without this the
++                    // chain rail keeps the frame in the image by design and
++                    // nothing says whether the geometry rasterized. Remove once
++                    // the scene is visible.
++                    if std::env::var_os("REIMS_VGPU_DIAG_CHAIN_READBACK").is_some() {
++                        let (rw, rh) = (c0.width, c0.height);
++                        if crate::observe::first_sight(
++                            "diag_chain_target",
++                            (u64::from(req.task_id) << 32) | u64::from(c0.texture_ref),
++                        ) {
++                            crate::observe::fail(format!(
++                                "diag_chain_target task={} ref={} gva={:#x} fmt={:#x} {rw}x{rh}",
++                                req.task_id, c0.texture_ref, c0.target_gva, c0.format,
++                            ));
++                        }
++                        draw_rgba = read_resident_chain(req, &identity);
++                        if draw_rgba.is_some() {
++                            note_mapper_ref_texture_store_route("diag_chain_readback");
++                        }
++                    }
+                 }
+                 crate::observe::line(format!(
+                     "linux_m2v_draw ok resident_chain pipe={} {}x{} mid={} gva={:#x}",
+@@ -4711,6 +4734,24 @@
+     let (gva, layout) = tex.level_gva(0, state.page_shift)?;
+     let (w, h) = (layout.width, layout.height);
+     let row_stride = u32::try_from(layout.row_stride).ok()?;
++    // DIAGNOSTIC (temporary, opt-in): what the sampled bind's own address is,
++    // and whether any resource holds a debt there — the join that says whether
++    // a rendered target and the texture a later pass samples are the same
++    // allocation. Remove once the scene is visible.
++    if std::env::var_os("REIMS_VGPU_DIAG_CHAIN_READBACK").is_some()
++        && crate::observe::first_sight(
++            "diag_sample_probe",
++            (u64::from(task_id) << 32) | u64::from(texture_ref),
++        )
++    {
++        let debt = state.pending_writebacks.gva_debt_at(gva, w, h);
++        crate::observe::fail(format!(
++            "diag_sample_probe task={task_id} ref={texture_ref} fmt={:#x} {w}x{h} \
++             gva={gva:#x} debt={:?}",
++            tex.pixel_format,
++            debt.map(|d| (d.width, d.height, d.format, d.generation)),
++        ));
++    }
+     let identity = match gva_resident_if_current(
+         state,
+         host,
+@@ -4822,6 +4863,7 @@
+         p::MTL_FORMAT_DEPTH24_UNORM_STENCIL8 | p::MTL_FORMAT_DEPTH32_FLOAT_STENCIL8
+     );
+     let aspects = if carries_stencil { [true, false] } else { [false, true] };
++    let mut outcomes = String::new();
+     for stencil in aspects {
+         let identity = TargetIdentity::Texture {
+             ref_: texture_ref,
+@@ -4831,11 +4873,26 @@
+             stencil,
+         };
+         let ready = resident_content_ready(&identity);
++        outcomes.push_str(&format!(" [stencil={} ready={}]", u8::from(stencil), u8::from(ready)));
+         if ready {
+             crate::runtime::drain::note_store_route("depth_resident_sample");
+             return Some((w, h, SampledSourceRequest::Target(identity, format)));
+         }
+     }
++    // DIAGNOSTIC (temporary, opt-in): the sampled depth identity candidates
++    // against the render side's, which the `depth_resident_use` line names.
++    // Remove once the scene's depth resolves.
++    if std::env::var_os("REIMS_VGPU_DIAG_CHAIN_READBACK").is_some()
++        && crate::observe::first_sight(
++            "diag_depth_sample_probe",
++            u64::from(task_id) << 32 | u64::from(texture_ref),
++        )
++    {
++        crate::observe::fail(format!(
++            "diag_depth_sample_probe task={task_id} ref={texture_ref} fmt={declared:#x} \
++             {w}x{h}{outcomes}",
++        ));
++    }
+     // The guest's identical-name resident never appeared, but a depth frame of
+     // this exact geometry is ready under another name: the standard
+     // double-buffered camera depth, where this bind samples the frame the device

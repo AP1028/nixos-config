@@ -1,0 +1,70 @@
+--- a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -4517,6 +4517,44 @@
+     }
+ }
+ 
++/// Latch `(task, ref) -> mapping` for a linear sample whose bytes are a guest
++/// surface, so a writeback debt armed by mapping can be paid by the ref a
++/// sample names.
++///
++/// Conservative by construction: the first physical page of the buffer must
++/// appear in a mapping's page list, and exactly one mapping may claim it. A
++/// miss or an ambiguity latches nothing, which is the behaviour this rail had
++/// before the latch existed.
++fn latch_linear_sample_mapping(
++    latch: &mut std::collections::BTreeMap<(u32, u32), u32>,
++    mappings: &std::collections::BTreeMap<u32, crate::model::MappingEntry>,
++    task_id: u32,
++    texture_ref: u32,
++    first_page: Option<u64>,
++) {
++    let Some(first_page) = first_page else {
++        return;
++    };
++    let mut found: Option<u32> = None;
++    for (&mid, mapping) in mappings.iter() {
++        if mapping
++            .page_entries
++            .iter()
++            .any(|&page| u64::from(page) == first_page)
++        {
++            if found.is_some() {
++                return;
++            }
++            found = Some(mid);
++        }
++    }
++    if let Some(mid) = found {
++        if latch.insert((task_id, texture_ref), mid).is_none() {
++            crate::runtime::drain::note_store_route("linear_sample_mapping_latched");
++        }
++    }
++}
++
+ pub(super) fn try_linear_sample_zero_copy<M: HostMemory + HostOps>(
+     state: &mut DeviceState,
+     host: &mut M,
+@@ -4723,6 +4761,22 @@
+                 if span < SAMPLED_GATHER_MIN_BYTES {
+                     crate::runtime::drain::note_store_route("zc_lin_direct_under_floor_span");
+                 }
++                // A linear texture's bytes are a guest surface too — a drawable
++                // ring is exactly this shape — and the writeback debt a draw
++                // arms for that surface is keyed by *mapping*, while the
++                // payment below resolves a texture ref through
++                // `texture_to_mapping`, which only the mapper-ref-texture
++                // resolution writes. Latch the association here so the payment
++                // can find the debt; without it the frame stays in the
++                // resident, the pages keep the previous content, and the
++                // guest's WindowServer composites a window that never updates.
++                latch_linear_sample_mapping(
++                    &mut state.texture_to_mapping,
++                    &state.mappings,
++                    task_id,
++                    texture_ref,
++                    packed.gpas.first().copied(),
++                );
+                 return Some((w, h, request));
+             }
+         }

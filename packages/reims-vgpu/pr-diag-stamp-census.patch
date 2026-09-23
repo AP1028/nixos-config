@@ -1,0 +1,182 @@
+--- a/crates/reims-vgpu/src/runtime/drain/mod.rs
++++ b/crates/reims-vgpu/src/runtime/drain/mod.rs
+@@ -2411,6 +2411,118 @@
+ /// is the whole of the second half of the switch: the loop above puts packets
+ /// into the model and this takes work out of it, and neither is a function of
+ /// where a ring's head happens to be.
++/// Diagnostic census: every stamp slot's guest-visible word, the ordering
++/// plane's held point, and any queued word still owed a landing.
++///
++/// `sN=page:plane:owed`. A slot whose page trails `plane` is a fence the guest
++/// has been told about but cannot read; `owed` names the queued point the
++/// device believes is still on its way.
++///
++/// The trailing `parked=`/`wait[...]` fields name the positions this device is
++/// holding and the stamps they are watching, so a stuck wait can be read
++/// against the page it is waiting on.
++fn emit_stamp_slot_census<H: HostMemory + HostOps>(state: &DeviceState, host: &mut H) {
++    use std::sync::atomic::{AtomicU64, Ordering};
++    static LAST_MS: AtomicU64 = AtomicU64::new(0);
++    const WINDOW_MS: u64 = 1000;
++    let now = crate::observe::elapsed_ms() as u64;
++    let last = LAST_MS.load(Ordering::Relaxed);
++    if now.saturating_sub(last) < WINDOW_MS || state.gfx.fifo_base_page == 0 {
++        return;
++    }
++    LAST_MS.store(now, Ordering::Relaxed);
++    let page_size = state.page_size();
++    let slots = crate::model::stamp_slot_count(page_size);
++    let base = state.pfn_gpa(state.gfx.fifo_base_page);
++    let mut line = String::from("stamp_slots");
++    for index in 0..slots {
++        let gpa = base + u64::from(index) * u64::from(crate::model::STAMP_SLOT_LEN);
++        let page = crate::runtime::host::read_u32(host, gpa)
++            .map(|v| v.to_string())
++            .unwrap_or_else(|_| "?".to_string());
++        let plane = state
++            .published_completion_stamp(reims_vgpu_core::identity::StampSlot(index))
++            .map(|v| v.0.to_string())
++            .unwrap_or_else(|| "-".to_string());
++        let owed = state
++            .pending_stamp_page_writes
++            .get(&index)
++            .map(|v| v.to_string())
++            .unwrap_or_else(|| "-".to_string());
++        line.push_str(&format!(" s{index}={page}:{plane}:{owed}"));
++    }
++    let waiting = state.parked.waiting_in_order();
++    line.push_str(&format!(" parked={}", waiting.len()));
++    let mut shown = 0usize;
++    // Per-domain histogram: which channel's positions are parked and on which
++    // slots. A permanently parked domain is a channel whose publication head is
++    // held, which is what a kernel event wait looks like from this side.
++    let mut domains: std::collections::BTreeMap<u32, std::collections::BTreeMap<u32, u32>> =
++        std::collections::BTreeMap::new();
++    for ingress in &waiting {
++        let domain = state.parked.domain_of(*ingress).unwrap_or(u32::MAX);
++        for index in state.parked.awaited_slots(*ingress) {
++            *domains
++                .entry(domain)
++                .or_default()
++                .entry(stamp_slot_index(index))
++                .or_insert(0) += 1;
++        }
++    }
++    for (domain, slots) in &domains {
++        line.push_str(&format!(" d{domain}["));
++        for (slot, count) in slots {
++            line.push_str(&format!("s{slot}x{count} "));
++        }
++        line.push(']');
++    }
++    for ingress in waiting {
++        for index in state.parked.awaited_slots(ingress) {
++            if shown >= 8 {
++                break;
++            }
++            shown += 1;
++            let index = stamp_slot_index(index);
++            let domain = state.parked.domain_of(ingress).unwrap_or(u32::MAX);
++            line.push_str(&format!(" wait[d{domain},s{index}]"));
++        }
++    }
++    crate::observe::off(line);
++    // Child-channel register state, beside the stamps: which channels have
++    // bytes the drain has not taken, and which stamp index each is telling this
++    // device to complete on.
++    let mut chline = String::from("child_channels");
++    for channel in 1..crate::model::MAX_CHANNELS as u32 {
++        let Some(off) = crate::model::child_reg_block_offset(channel) else {
++            continue;
++        };
++        let regs = state.pfn_gpa(state.gfx.root_page) + off;
++        let tail = crate::runtime::host::read_u32(host, regs + crate::model::CHILD_REG_TAIL)
++            .map(|v| v.to_string())
++            .unwrap_or_else(|_| "?".into());
++        let head = crate::runtime::host::read_u32(host, regs + crate::model::CHILD_REG_HEAD)
++            .map(|v| v.to_string())
++            .unwrap_or_else(|_| "?".into());
++        let sidx =
++            crate::runtime::host::read_u32(host, regs + crate::model::CHILD_REG_STAMP_INDEX)
++                .map(|v| v.to_string())
++                .unwrap_or_else(|_| "?".into());
++        let ring = &state.child_rings[channel as usize];
++        if !ring.valid {
++            continue;
++        }
++        chline.push_str(&format!(
++            " ch{channel}[t{tail} h{head} pend={} si{sidx} len={}]",
++            tail.parse::<u32>()
++                .ok()
++                .and_then(|t| head.parse::<u32>().ok().map(|h| t.wrapping_sub(h)))
++                .unwrap_or(u32::MAX),
++            ring.length
++        ));
++    }
++    crate::observe::off(chline);
++}
++
+ /// Drop the outstanding stamp points whose page has caught up, and keep the
+ /// rest for the publication point to re-attach.
+ ///
+@@ -2436,6 +2548,7 @@
+         // A page at or past the point means the ordered write landed (or a
+         // later one did): nothing left to attach.
+         if (current.wrapping_sub(value) as i32) >= 0 {
++            note_store_route("diag_stamp_pending_caught_up");
+             continue;
+         }
+         // A point the plane no longer holds is not one the guest is owed.
+@@ -2449,7 +2562,19 @@
+                 .satisfied_by(published)
+             });
+         if held {
++            note_store_route("diag_stamp_pending_kept");
++            if crate::observe::first_sight(
++                "diag_stamp_pending_kept",
++                u64::from(index),
++            ) {
++                crate::observe::off(format!(
++                    "diag_stamp_pending_kept index={index} value={value} page={current} \
++                     (page behind the point the plane holds; waiting for the ordered write)"
++                ));
++            }
+             state.pending_stamp_page_writes.insert(index, value);
++        } else {
++            note_store_route("diag_stamp_pending_unheld");
+         }
+     }
+ }
+@@ -2475,6 +2600,7 @@
+     for (index, value) in pending {
+         if index == current_index {
+             // Superseded by the publication in flight.
++            note_store_route("diag_stamp_reissue_skipped_current");
+             continue;
+         }
+         if crate::backend::selected().order_completion_stamp(
+@@ -2486,7 +2612,15 @@
+         ) == crate::backend::StampOrdering::Queued
+         {
+             note_store_route("stamp_page_reissued");
++            if crate::observe::first_sight("diag_stamp_reissued", u64::from(index)) {
++                crate::observe::off(format!(
++                    "diag_stamp_reissued index={index} value={value} \
++                     (the outstanding point was handed back to the GPU-ordered rail)"
++                ));
++            }
+             state.pending_stamp_page_writes.insert(index, value);
++        } else {
++            note_store_route("diag_stamp_reissue_settled");
+         }
+         // A non-`Queued` answer means the rail ordered it inline or wrote the
+         // page itself, so the point is no longer outstanding.
+@@ -8203,6 +8337,8 @@
+     // Unpin engine residents of linear cache entries dropped by task/object
+     // deletes this drain, so they become LRU-evictable instead of leaking.
+     crate::runtime::render_writeback::retire_linear_residents(state);
++    // Diagnostic: the stamp page against the plane. One line a second.
++    emit_stamp_slot_census(state, host);
+ }
+ 
+ #[cfg(test)]

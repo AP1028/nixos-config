@@ -1,0 +1,73 @@
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+--- b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -4696,7 +4696,38 @@
+         },
+     ) {
+         Ok(identity) => identity,
++        Err(GvaResidentRefusal::NoGeneration) => {
++            // The same allocation, named by another task's texture object: the
++            // ledger keys by `(task, reference)` and the page walk for this
++            // task's name came up short, yet a render thread's debt may name
++            // this very address under its own reference. If one does, the
++            // resident it holds is the newest frame of this allocation and is
++            // what a sample of it wants — see `gva_debt_at`. Tried under the
++            // bind's own format first, then the debt's declaration: the two
++            // objects may view one allocation differently.
++            let Some(debt) = state.pending_writebacks.gva_debt_at(gva, w, h) else {
++                return None;
++            };
++            let mut bridged = None;
++            for declared in [tex.pixel_format, debt.format] {
++                let candidate = crate::backend::vulkan::engine::TargetIdentity::Gva {
++                    gva,
++                    width: w,
++                    height: h,
++                    generation: debt.generation,
++                    format: gva_resident_format(declared),
++                };
++                if crate::backend::vulkan::engine::resident_content_ready(&candidate) {
++                    bridged = Some(candidate);
++                    break;
++                }
++            }
++            let Some(candidate) = bridged else {
++                return None;
++            };
++            note_store_route("gvarung_resident_cross_task");
++            candidate
++        }
+-        Err(GvaResidentRefusal::NoGeneration) => return None,
+         Err(GvaResidentRefusal::Wrote(verdict)) => {
+             note_store_route(verdict.route());
+             return None;
+diff --git a/crates/reims-vgpu/src/runtime/writeback_debt.rs b/crates/reims-vgpu/src/runtime/writeback_debt.rs
++++ a/crates/reims-vgpu/src/runtime/writeback_debt.rs
+--- b/crates/reims-vgpu/src/runtime/writeback_debt.rs
+@@ -543,6 +543,26 @@
+             .map(|resource| (resource.generation, resource.span, resource.pages.is_some()))
+     }
+ 
++    /// The newest armed debt whose window starts exactly at `gva`, under **any**
++    /// resource, when its geometry matches.
++    ///
++    /// One guest allocation can be described by two task-local texture objects:
++    /// a render thread renders into its own reference while another task's
++    /// object samples the same storage, and `GvaPlaneKey` — deliberately, for
++    /// ordinary lifetime reasons — keys the ledger by `(task, reference)`. A
++    /// sampled bind arriving under the other name can then find no generation
++    /// even though the resident holding the frame is exactly the image it
++    /// wants. This answers that lookup by allocation instead of by name. The
++    /// caller is responsible for checking that the resident it names is ready
++    /// (`resident_content_ready`), which is where readiness and reclaim live.
++    pub(crate) fn gva_debt_at(&self, gva: u64, width: u32, height: u32) -> Option<GvaWritebackDebt> {
++        self.gva_debts
++            .values()
++            .filter(|debt| debt.gva == gva && debt.width == width && debt.height == height)
++            .max_by_key(|debt| debt.seq)
++            .copied()
++    }
++
+     /// Release the transfer buffer of each named resource while preserving its
+     /// host texture and lifetime identity.
+     ///
