@@ -1,0 +1,77 @@
+diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/src/host_window/present.rs
+--- a/crates/reims-vgpu/src/host_window/present.rs
++++ b/crates/reims-vgpu/src/host_window/present.rs
+@@ -1376,7 +1376,58 @@
+     /// Present one frame through the running rail, or decide there is
+     /// nothing to present.
+     ///
+-    /// The guard is teardown, not a rail choice: `exiting` releases the
++    /// Write the resident behind a published frame as a P6 PPM, at most a few times.
++///
++/// DIAGNOSTIC (temporary): `REIMS_VGPU_PRESENT_DUMP=<dir>` names the directory.
++/// The read goes through the engine's own `read_resident_bgra`, which is the
++/// same resident the present takes, so a black file here is the device's frame
++/// being black and not the window's blit failing. Bounded to a handful of dumps
++/// so one boot cannot fill the disk, and every attempt is logged with the
++/// identity it read and the RGB census of the pixels.
++#[cfg(feature = "backend-vulkan")]
++fn dump_present_resident(resident: Option<&crate::backend::window::WindowResident>) {
++    use std::sync::atomic::{AtomicU32, Ordering};
++    static DUMPS: AtomicU32 = AtomicU32::new(0);
++    if DUMPS.load(Ordering::Relaxed) >= 4 {
++        return;
++    }
++    let Some(crate::backend::window::WindowResident::Vulkan(src)) = resident else {
++        return;
++    };
++    let (w, h) = (src.width, src.height);
++    let need = (w as usize).saturating_mul(h as usize).saturating_mul(4);
++    if need == 0 {
++        return;
++    }
++    let Ok(dir) = std::env::var("REIMS_VGPU_PRESENT_DUMP") else {
++        return;
++    };
++    let Some(bgra) = crate::backend::vulkan::engine::read_resident_bgra(&src.identity, need) else {
++        crate::observe::off(format!(
++            "present_dump skip identity={:?} {w}x{h} (no readable resident)",
++            src.identity
++        ));
++        return;
++    };
++    let n = DUMPS.fetch_add(1, Ordering::Relaxed);
++    let (rgb_nz, max_rgb, px0) = crate::observe::bgra_rgb_stats(&bgra);
++    let path = format!("{dir}/present-dump-{n}.ppm");
++    let mut out = Vec::with_capacity(need / 4 * 3 + 32);
++    out.extend_from_slice(format!("P6\n{w} {h}\n255\n").as_bytes());
++    for px in bgra.chunks_exact(4) {
++        out.extend_from_slice(&[px[2], px[1], px[0]]);
++    }
++    match std::fs::write(&path, &out) {
++        Ok(()) => crate::observe::off(format!(
++            "present_dump wrote={path} identity={:?} {w}x{h} rgb_nz={rgb_nz} max_rgb={max_rgb} \
++             px0=[{},{},{},{}]",
++            src.identity, px0[0], px0[1], px0[2], px0[3]
++        )),
++        Err(error) => crate::observe::off(format!("present_dump fail={error} path={path}")),
++    }
++}
++
++/// The guard is teardown, not a rail choice: `exiting` releases the
+     /// presenter before the loop ends, and an attach that failed never stored a
+     /// window at all. Both already named themselves where they happened, so a
+     /// redraw arriving after either is expected control flow and stays quiet.
+@@ -1385,6 +1436,13 @@
+             return;
+         }
+         let frame = self.frames.lock().ok().and_then(|guard| guard.clone());
++        // DIAGNOSTIC (temporary, opt-in): `REIMS_VGPU_PRESENT_DUMP=<dir>` writes
++        // the resident this window is about to present, so the frame the device
++        // actually rendered is inspectable directly instead of being inferred
++        // from counters. See `dump_present_resident`.
++        if std::env::var_os("REIMS_VGPU_PRESENT_DUMP").is_some() {
++            Self::dump_present_resident(frame.as_ref().and_then(|frame| frame.resident.as_ref()));
++        }
+         self.request_guest_geometry(frame.as_deref());
+         if self.pending_guest_resize.is_some() {
+             // A guest mode change is being applied to the native window

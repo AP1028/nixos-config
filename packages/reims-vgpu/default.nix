@@ -446,6 +446,12 @@ let
       # frequency of the real alias are both visible.
       patch -p1 -d reims-vgpu < ${./pr-starbirds-mapping-gva-alias.patch}
 
+      # DIAGNOSTIC (temporary, opt-in via REIMS_VGPU_PRESENT_DUMP=<dir>): write
+      # the resident the host window is about to present as a P6 PPM, so the
+      # frame the device actually rendered can be looked at directly instead of
+      # being inferred from counters. Remove once the black window is fixed.
+      patch -p1 -d reims-vgpu < ${./pr-diag-present-dump.patch}
+
 
 
 
