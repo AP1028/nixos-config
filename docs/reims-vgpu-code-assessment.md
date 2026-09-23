@@ -973,6 +973,12 @@ So: not the VM's RAM, not the guest's 64 MB, and not nvidia-smi's figure during 
 host — the device allocates its own images from the host GPU's heap, and the 16 GB
 discrete heap is what it filled. The iGPU route removes the failure class entirely.
 
+> **Falsified by cycle 11.** That cycle's game never reached gameplay, so it measured
+> boot and the desktop, where 0 retries is the right answer for the wrong reason. With
+> the title actually rendering a scene, the same wall arrives on the iGPU's 46.6 GB
+> unified heap — just later. The ceiling is the device's own retention, not the heap;
+> see cycle 11.
+
 **The remaining artifacts are pre-existing, and not the rail.** The user reports the
 tearing band on the NVIDIA rail as well, before any of this session's changes. A burst of
 window captures plus the 40 present dumps measured with a row-discontinuity metric show
@@ -1036,4 +1042,48 @@ NVIDIA rail before any of these changes; the missing 3D artwork in the menu (cyc
 the menu to render, the scene geometry is still refused or absent); `present_black`
 (2 this boot); and the three temporary diagnostics that must come out before anything is
 offered upstream.
+
+## Star Birds cycle 11 (the game actually runs): the wall is the device's retention
+
+Cycle 10's tooling bug is fixed (a console user that is not `_windowserver`, `lsappinfo`
+plus the title's Unity log as launch evidence, `open -a` on the title's bundle when no
+window answers) and the title finally reached **gameplay**:
+
+```
+lsappinfo  "Star Birds" ASN:0x0-0x8008, …/StarBirds/StarBirds.app/Contents/MacOS/Star Birds
+Player.log 15 424 bytes, in-game ambient music (context=Sablena, 6 tracks eligible)
+```
+
+And the device's own frames say the rest:
+
+```
+present_black                 554 events         (cycle 10: 2)
+linux_m2v_draw                model_pipeline=ready, refused_by=vk_slab_allocate_memory, 2 640×
+vk_slab_allocate_memory       vk_result=A_device_memory_allocation_has_failed
+                              pipe=2784 task=3 geom=1920x1080 vtx=3 colors=[s0:r90:mid0:…fmt=0x51…]
+vram_pool_reclaim_retry       3 185   released=0   held_bytes=31 885 099 008
+first reclaim retry t=377884 → first refusal t=378025 → session end t=470739
+```
+
+So roughly six minutes into gameplay the device's slab reaches ~29.7 GiB of planned
+blocks, an allocation is refused, the reclaim path empties the recycle pools and frees
+**nothing** (`released=0`), and from then on every scene draw is refused
+(`refused_by=vk_slab_allocate_memory`) and the fallback writes its black clear
+(`linux_clear_store … clear=[0,0,0,1]`), which is the `present_black` the display shows.
+
+**This inverts cycle 9's conclusion.** The ceiling is not the host GPU's heap: the same
+wall is reached on a 46.6 GB unified heap, only later, and `released=0` says the memory
+is not the reclaim path's to free — it is held. The 16 GB discrete heap merely reaches it
+sooner, which is why cycle 3 read it as a heap limit and cycle 9 as an iGPU cure. The
+real question is retention: what holds ~30 GB of 1920×1080 images (≈8 MB each, so on the
+order of 4 000 of them) when the recycle pools are empty, and whether that is a registry
+that never evicts, transient per-draw images that are never disposed, or plans that
+outlive their images.
+
+**Method note.** Three cycles in a row (9, 10, 11's first attempt) measured the desktop
+believing it was the game, because "a game process exists" was the only launch evidence
+the harness demanded. The corrected cycle prints `lsappinfo` and the title's own log, and
+the difference is exactly the difference between "the device is fine on the iGPU" and
+"the device refuses 2 640 draws and blacks the screen".
+
 
