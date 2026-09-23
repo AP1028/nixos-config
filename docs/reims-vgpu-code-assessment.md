@@ -791,3 +791,55 @@ attachment's own `target_gva`/geometry (and the resident's generation, or the `0
 texture-keyed identity already uses) whenever `target_gva != 0`, instead of requiring
 the identity to be in the `Gva` namespace. `diag_chain_readback` succeeded for only 10 of
 the 62 chain targets, so the resident-readback path is limited by the same gate.
+
+## Star Birds cycles 5–6 (present dump): the device's own frames are black
+
+The present-dump diagnostic (`REIMS_VGPU_PRESENT_DUMP=<dir>`, temporary patch
+`pr-diag-present-dump.patch`) writes the resident the host window is about to present as
+a P6 PPM. That is the witness the counters could not give.
+
+- **Boot/desktop phase: the device's frames are perfect.** Dumps of `Surface { id: 2/4/6 }`
+  show the wallpaper, menu bar, dock and the Steam window, `rgb_nz≈2.03M max_rgb=255`.
+- **Game phase: the device's frames are black.** The dumps become `rgb_nz=0 max_rgb=0`
+  or `rgb_nz=2073600 max_rgb=4` — a full 1920×1080 frame whose brightest channel is 4/255
+  — for the surfaces the guest presents (`Surface { id: 11/13/39 }`, generation counts
+  into the teens). Rendered to PNG, they are the black window.
+- So the black is **not** the window's blit, not a stale present, and not the debt
+  lookup: the device itself presents black frames. (The reader-side aliasing experiment
+  above fired only 3× in a whole boot, so it is not the mechanism; it stays as a
+  conservative correctness change, not a fix.)
+
+The refusal lines name the pass that would have put the scene there:
+
+```
+linux_m2v_draw reason=draw_prepare_texture_resolve_missing stage=fragment index=0
+  texture_ref=2546 detail=…_fmt=0x69_mips=1_…_L0=1920x1080_bpr=15360_reason=linear_sample
+  pipe=2616 task=2 geom=1920x1080 vtx=3 inst=1 prim=3 first=0 idx=0
+  colors=[s0:r2602:mid0:gva=0x29add000:1920x1080:fmt=0x5c:l0:s3]
+linux_clear_store draws_skipped … refused_by=draw_prepare_texture_resolve_missing mid=0
+  gva=0x29add000 1920x1080 load=0x1 store=0x3 clear=[0.000,0.000,0.000,1.000]
+rt_resolve reason=rt_linear_format base=… fmt=0x69 task=9 …
+```
+
+`fmt=0x69` is **`MTLPixelFormatRG32Float`** (`bpr=15360` at 1920 wide = 8 bytes/texel).
+The chain is complete and every link is evidenced:
+
+1. The game's scene pass renders into an RG32Float target — refused as a render target
+   (`rt_linear_format`), so the target never receives the scene.
+2. The game's full-screen composite (pipe 2616, `vtx=3`) samples that RG32Float texture —
+   refused as a sampled bind (`linear_sample`), so the composite that would write the
+   game's final HDR frame is skipped (`draw_fail_clear_fallback clears=0`).
+3. WindowServer's composite (pipe 30, sources `src_mid=2/3/4/7`, targets
+   `target_mid=11/13/39`) then composites an empty window correctly onto the display
+   surfaces, and the device presents them — black, at `max_rgb=4`.
+
+The device has **no rail at all** for `RG32Float`: no constant, no `TexelLayout`, no
+`SampledClass`, no render-target numeric class, no store order. It is the same class of
+gap the four Easy Red 2 formats had, and it needs the same treatment: a `Rg32Float`
+layout (8 bytes/texel, float class, Vulkan `R32G32_SFLOAT`), a sampled class and the
+sampled/linear maps, render-target admission with `store_texel_order` for the byte copy,
+CPU narrow/expand/row arms (lossy — two f32 channels into eight bits), the compute
+sampled class, and the test tables. Estimated footprint: the four files
+`pr-render-target-formats.patch` touched (protocol `pixel_format.rs`,
+`reims-vgpu-vulkan/src/pixel.rs`, `runtime/backend/vulkan/translate/pixel.rs`,
+`runtime/compute_exec/vulkan.rs`) and roughly the same number of hunks.
