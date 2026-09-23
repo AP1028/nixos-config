@@ -900,3 +900,38 @@ UNDEFINED` and load undefined contents, which is harmless for a full-screen over
 not for a partial pass. That decision — whether the device may load an undeclared scratch
 image when the guest asks — is the one the patch's own comment says stays refused, so it
 belongs to the maintainer rather than to a diagnostic round.
+
+## Star Birds cycle 8 (MSAA load from slot liveness): **the menu renders**
+
+The last blocker was the MSAA load contract, and it is fixed the way §"cycle 7" said it
+should be, not by widening the predicate:
+
+- `pools::multisample_slot_is_live` is now the one predicate the acquisition's reuse check
+  and the pass choice both call, so they cannot drift;
+- `execute_draw_request` re-fetches the MSAA pass with `color0_load = Clear` when the
+  record declares `Preserve` and the slot is not live — asked where the key exists,
+  because the resolve and depth views it names are resolved above the point the pass is
+  first chosen. A live slot keeps the load; a fresh one begins with a defined clear
+  instead of loading an image created `UNDEFINED`;
+- the runtime no longer refuses the record.
+
+Also folded into the RG32Float patch: the engine's own `EXPECTED` format table, which the
+first cut missed (`the_engine_rails_accept_exactly_these_formats` caught it).
+
+One cycle on the new build (`9z9llyq0…`):
+
+```
+draw refusals: multisample_load_action_unsupported  0   (was 4)
+               vk_slab_allocate_memory              6
+               draw_prepare_pipeline_missing        1
+present_dump:  30 of 38 frames carry content (rgb_nz 747 005 … 2 073 600, max_rgb 255)
+               the 8 black ones are the pre-paint frames of the display swapchain
+```
+
+And the host window shows **the Star Birds main menu** — the logo, `Continue`, `Level
+Selection` — where every previous cycle showed black. Screenshot:
+`/tmp/opencode/shots/msaa-1-host.png` (crop `msaa-1-crop.png`).
+
+Remaining, unrelated to the menu: `vk_slab_allocate_memory` pressure (6 this boot, the
+16.4 GB class from cycle 3) and one `draw_prepare_pipeline_missing`. Both are the
+already-open items, not blockers for the menu.
