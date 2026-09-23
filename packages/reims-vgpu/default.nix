@@ -498,6 +498,18 @@ let
       # questions) is measured rather than assumed away.
       patch -p1 -d reims-vgpu < ${./pr-slot0-stale-attachment-clear.patch}
 
+      # DIAGNOSTIC (temporary): what the image slab is actually holding. With
+      # the title finally rendering a scene, the device reaches a wall ~378 s in
+      # and never recovers: `vram_pool_reclaim_retry` 3 185 with `released=0`
+      # against `held_bytes=31 885 099 008`, 2 640 draws refused by
+      # `vk_slab_allocate_memory`, 554 `present_black` events. `slab_mib=
+      # carved/held` says 27 GiB of 30 GiB is occupied and cannot say by what,
+      # nor whether the gap is spares or slivers — the two readings with
+      # opposite fixes. This prints the live population by size bucket, and
+      # splits the blocks into empty (reclaimable outright) and partial (free
+      # space no large image fits in). Remove once the wall is answered.
+      patch -p1 -d reims-vgpu < ${./pr-diag-slab-live-census.patch}
+
       # Which GPU the rail binds, selectable at run time: this host's discrete
       # GPU has a 16 GB device-local heap and the integrated one ~46 GB of
       # unified memory, and which is the better rail is a question to measure.

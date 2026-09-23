@@ -1,0 +1,202 @@
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/slab.rs b/crates/reims-vgpu/src/backend/vulkan/engine/slab.rs
+@@ -290,6 +290,24 @@
+ /// states it at its own `empty_block_victims`.
+ const SLAB_KEEP_EMPTY: usize = 2;
+ 
++/// DIAGNOSTIC (temporary) bucket count and limits for [`SlabPool::live_census`].
++pub(crate) const SLAB_LIVE_BUCKETS: usize = 6;
++pub(crate) const SLAB_LIVE_BUCKET_LIMIT_MIB: [u64; SLAB_LIVE_BUCKETS] =
++    [1, 4, 16, 64, 256, u64::MAX];
++
++/// DIAGNOSTIC (temporary): see [`SlabPool::live_census`].
++#[derive(Default)]
++pub(crate) struct SlabLiveCensus {
++    pub live_count: u64,
++    pub live_bytes: u64,
++    pub empty_blocks: u64,
++    pub empty_bytes: u64,
++    pub partial_blocks: u64,
++    pub partial_free_bytes: u64,
++    pub bucket_count: [u64; SLAB_LIVE_BUCKETS],
++    pub bucket_bytes: [u64; SLAB_LIVE_BUCKETS],
++}
++
+ /// A live sub-allocation handed out by [`SlabPool::acquire`]: which block, at
+ /// what offset, of what size, backed by which `VkDeviceMemory`. The caller
+ /// binds its image to `(memory, offset)`, then either registers the token
+@@ -388,6 +406,50 @@
+         (held, carved)
+     }
+ 
++    /// What the live population and the retained blocks are actually made of.
++    ///
++    /// DIAGNOSTIC (temporary): read by the `slab_live` census line.
++    ///
++    /// `held_bytes` says what the driver has given this device and `carved` how
++    /// much of it images occupy, and the difference has two readings that mean
++    /// opposite things for an allocation that just failed: a couple of empty
++    /// blocks kept as spares (`SLAB_KEEP_EMPTY`), which is nothing to reclaim,
++    /// or thousands of slivers no 8 MiB image fits in, which is fragmentation
++    /// wearing the same number. Nor does either figure say what the carved side
++    /// is made of — three thousand multi-MiB images and thirty thousand small
++    /// ones hold the same bytes and need different answers.
++    ///
++    /// The buckets are by size, in MiB, first bucket under one: `[<1, <4, <16,
++    /// <64, <256, >=256]`. A driven title's 1920x1080 colour targets land in
++    /// `<16`, so a dominant `<16` bucket with a count in the thousands is the
++    /// render-target population and not the sampled-cache textures.
++    pub(crate) fn live_census(&self) -> SlabLiveCensus {
++        let mut census = SlabLiveCensus::default();
++        for token in self.live.values() {
++            census.live_count += 1;
++            census.live_bytes = census.live_bytes.saturating_add(token.size);
++            let mib = token.size >> 20;
++            let bucket = SLAB_LIVE_BUCKET_LIMIT_MIB
++                .iter()
++                .position(|limit| mib < *limit)
++                .unwrap_or(SLAB_LIVE_BUCKETS - 1);
++            census.bucket_count[bucket] += 1;
++            census.bucket_bytes[bucket] = census.bucket_bytes[bucket].saturating_add(token.size);
++        }
++        for b in self.blocks.iter().flatten() {
++            let size = b.plan.size();
++            let free = b.plan.free_bytes();
++            if free == size {
++                census.empty_blocks += 1;
++                census.empty_bytes = census.empty_bytes.saturating_add(size);
++            } else if free > 0 {
++                census.partial_blocks += 1;
++                census.partial_free_bytes = census.partial_free_bytes.saturating_add(free);
++            }
++        }
++        census
++    }
++
+     pub(crate) fn new() -> Self {
+         Self {
+             blocks: Vec::new(),
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/counters.rs b/crates/reims-vgpu/src/backend/vulkan/engine/counters.rs
+@@ -907,6 +907,28 @@
+         /// this device that hold nothing.
+         slab_held_bytes,
+         slab_carved_bytes,
++        /// DIAGNOSTIC (temporary): what the live slab population and the
++        /// retained blocks are made of, for the `slab_live` census line. See
++        /// `SlabPool::live_census` for why `held - carved` alone cannot answer
++        /// "is this fragmentation or spares" or "what is holding the bytes".
++        slab_live_count,
++        slab_live_bytes,
++        slab_empty_blocks,
++        slab_empty_bytes,
++        slab_partial_blocks,
++        slab_partial_free_bytes,
++        slab_live_lt1_count,
++        slab_live_lt1_bytes,
++        slab_live_lt4_count,
++        slab_live_lt4_bytes,
++        slab_live_lt16_count,
++        slab_live_lt16_bytes,
++        slab_live_lt64_count,
++        slab_live_lt64_bytes,
++        slab_live_lt256_count,
++        slab_live_lt256_bytes,
++        slab_live_ge256_count,
++        slab_live_ge256_bytes,
+         /// The same high-water in attachment bytes, sampled from the same
+         /// population at the same instant as `registry_non_pinned_peak`.
+         ///
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs b/crates/reims-vgpu/src/backend/vulkan/engine/mod.rs
+@@ -5797,8 +5797,26 @@
+     let (slab_held, slab_carved) = eng.pools.slab_held_bytes();
+     snap.slab_held_bytes = slab_held;
+     snap.slab_carved_bytes = slab_carved;
+-    snap
+-}
++    let slab_live = eng.pools.slab_live_census();
++    snap.slab_live_count = slab_live.live_count;
++    snap.slab_live_bytes = slab_live.live_bytes;
++    snap.slab_empty_blocks = slab_live.empty_blocks;
++    snap.slab_empty_bytes = slab_live.empty_bytes;
++    snap.slab_partial_blocks = slab_live.partial_blocks;
++    snap.slab_partial_free_bytes = slab_live.partial_free_bytes;
++    snap.slab_live_lt1_count = slab_live.bucket_count[0];
++    snap.slab_live_lt1_bytes = slab_live.bucket_bytes[0];
++    snap.slab_live_lt4_count = slab_live.bucket_count[1];
++    snap.slab_live_lt4_bytes = slab_live.bucket_bytes[1];
++    snap.slab_live_lt16_count = slab_live.bucket_count[2];
++    snap.slab_live_lt16_bytes = slab_live.bucket_bytes[2];
++    snap.slab_live_lt64_count = slab_live.bucket_count[3];
++    snap.slab_live_lt64_bytes = slab_live.bucket_bytes[3];
++    snap.slab_live_lt256_count = slab_live.bucket_count[4];
++    snap.slab_live_lt256_bytes = slab_live.bucket_bytes[4];
++    snap.slab_live_ge256_count = slab_live.bucket_count[5];
++    snap.slab_live_ge256_bytes = slab_live.bucket_bytes[5];
++    snap}
+ 
+ /// Reset create/alloc/hit-miss counters (not device_lost/recreates). For reuse-gate tests.
+ pub fn reset_draw_counters() {
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs b/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
+@@ -1141,6 +1141,12 @@
+         self.slab.held_bytes()
+     }
+ 
++    /// DIAGNOSTIC (temporary): the live population and retained blocks of the
++    /// image slab. See [`slab::SlabPool::live_census`].
++    pub(crate) fn slab_live_census(&self) -> slab::SlabLiveCensus {
++        self.slab.live_census()
++    }
++
+     /// The worst gap between a resident being touched and being read again, for
+     /// the life of the pools. See
+     /// [`ResourcePools::resident_resample_peak_ms`] for what it is the margin
+diff --git a/crates/reims-vgpu/src/backend/vulkan/census.rs b/crates/reims-vgpu/src/backend/vulkan/census.rs
+@@ -135,9 +135,49 @@
+     }
+     crate::observe::off(line);
+     emit_registry_pressure(&now);
++    emit_slab_live(&now);
+     emit_draw_phase();
+ }
+ 
++/// DIAGNOSTIC (temporary): what the image slab's live population is made of,
++/// beside the blocks it is holding.
++///
++/// `registry_pressure`'s `slab_mib=carved/held` says 27 GiB of 30 GiB is
++/// occupied and cannot say by what, nor whether the 3 GiB difference is spares
++/// or slivers. This is the line that can: `count`/`mib` are the live
++/// sub-allocations, the buckets are their sizes (`lt1/lt4/lt16/lt64/lt256/ge256`
++/// MiB, each `count/mib`), and `empty`/`partial` split the blocks the driver has
++/// given this device into those holding nothing (reclaimable outright) and those
++/// with free space no large image fits in (fragmentation).
++fn emit_slab_live(now: &crate::backend::vulkan::engine::CounterSnapshot) {
++    use std::fmt::Write as _;
++    let buckets = [
++        ("lt1", now.slab_live_lt1_count, now.slab_live_lt1_bytes),
++        ("lt4", now.slab_live_lt4_count, now.slab_live_lt4_bytes),
++        ("lt16", now.slab_live_lt16_count, now.slab_live_lt16_bytes),
++        ("lt64", now.slab_live_lt64_count, now.slab_live_lt64_bytes),
++        ("lt256", now.slab_live_lt256_count, now.slab_live_lt256_bytes),
++        ("ge256", now.slab_live_ge256_count, now.slab_live_ge256_bytes),
++    ];
++    let mut rendered = String::new();
++    for (i, (name, count, bytes)) in buckets.iter().enumerate() {
++        if i > 0 {
++            rendered.push(',');
++        }
++        let _ = write!(rendered, "{name}:{count}/{}mib", bytes >> 20);
++    }
++    crate::observe::off(format!(
++        "slab_live count={} mib={} buckets={rendered} \
++         empty={}/{}mib partial={}/{}mib",
++        now.slab_live_count,
++        now.slab_live_bytes >> 20,
++        now.slab_empty_blocks,
++        now.slab_empty_bytes >> 20,
++        now.slab_partial_blocks,
++        now.slab_partial_free_bytes >> 20,
++    ));
++}
++
+ /// How far the resident registries reached, and what the populations that
+ /// cannot be given back cost.
+ ///
