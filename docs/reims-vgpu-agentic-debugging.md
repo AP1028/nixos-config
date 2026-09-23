@@ -179,7 +179,7 @@ but a *derived metric* over it is a locator and never a verdict. Real case, cycl
 
 ```sh
 # per-row census: how many rows are red-saturated, in how many bands
-python3 /tmp/opencode/ppm-rows.py /tmp/opencode/dumps-fresh
+scripts/reims-vgpu-ppm-rows.py /tmp/opencode/dumps-fresh
 present-dump-3.ppm 1920x1080 mean=(230,142,61) red_rows=822/1080 bands=3 flips=5
 ```
 
@@ -229,15 +229,26 @@ Preference order:
 
 ---
 
-## 6. The one-cycle script
+## 6. The one-cycle scripts
 
 ```sh
 scripts/reims-game-test.sh <qemu-bin> <tag> [appid]     # default appid 2719750
+scripts/reims-vgpu-cycle-transition.sh <qemu-bin> <tag> [appid] [device-env]
 ```
 
-It boots, launches, waits for the game process, captures host (`<tag>-host.png`) and
-guest (`<tag>-guest.png`) into `/tmp/opencode/shots/`, prints the refusal census, and
-shuts the guest down. Read the host PNG before believing anything else.
+`reims-game-test.sh` boots, launches, waits for the game process, captures host
+(`<tag>-host.png`) and guest (`<tag>-guest.png`) into `/tmp/opencode/shots/`, prints the
+refusal census, and shuts the guest down. Read the host PNG before believing anything
+else; its single capture answers "what does the menu look like".
+
+`reims-vgpu-cycle-transition.sh` is the same cycle aimed at the *transition*: it waits for
+the guest's own console session, starts a 40-frame host burst, launches the title under
+the burst, then prints the census (including `color0_preserve_unhonoured`, `present_black`
+and the dump count) before shutting the guest down. It takes a device env (default
+`REIMS_VGPU_VK_DEVICE_TYPE=integrated`), adds `REIMS_VGPU_PRESENT_DUMP`, and writes the
+dumps to `/tmp/opencode/dumps-<tag>/`. Its per-row census helper is
+`scripts/reims-vgpu-ppm-rows.py`, whose counts locate frames to open — see §4.5 for why
+they never decide.
 
 ---
 
