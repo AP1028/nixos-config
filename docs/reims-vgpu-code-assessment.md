@@ -1133,3 +1133,35 @@ cycle should read `slab_live` and `vram_pool_reclaim_retry released=` at the wal
 `empty` is large the fix should show `released>0` and the refusals stopping, and if
 `partial` dominates the follow-up is a fragmentation answer (a dedicated allocation for
 targets that size, or a larger block class) rather than another retry.
+
+### Cycle 12a: the boot works, and the census names the holder
+
+Retried immediately and the guest came up normally — the earlier `rc=0` exit was transient VM
+state, not the build. One session with the census and the reclaim fix, the title driven to
+gameplay (`lsappinfo` answers it, `Player.log` 15 762 bytes), 10.4 minutes of device time:
+
+```
+slab_live count=1332 mib=23317 buckets=lt1:86/4mib,lt4:10/19mib,lt16:23/185mib,
+          lt64:1213/23108mib,lt256:0/0mib,ge256:0/0mib empty=0/0mib partial=408/2738mib
+vk_slab_allocate_memory  0 refusals        present_black  1        (was 2 640 and 554)
+vram_pool_reclaim_retry  none
+```
+
+**The holder is a population, not a leak of handles**: 1 213 live extents of 16–64 MiB carry
+23.1 GiB of the 23.3 GiB live, so ~19 MiB each — the game's larger intermediate targets, not
+the 8 MiB 1920x1080 colour targets this was first read as. Small textures are negligible
+(`lt1:86/4mib`) and the registry was already known to be tiny, which rules out both of the
+earlier candidates.
+
+**The fix's premise does not hold, and the census says so**: `empty=0`. There are no empty
+blocks to give back, so counting freed blocks into the reclaim return value changes nothing
+here; the 2.7 GiB free that does exist sits in 408 partially-carved blocks (~6.7 MiB each), too
+small for a 19 MiB image. If the wall returns it will be *fragmentation* of a ~1 200-image
+population, and the answer is to bound or evict that population (or allocate that size
+dedicated) rather than to trim anything.
+
+**What this run does not show**: no wall arrived, so the reclaim fix is neither validated nor
+refuted — zero refusals means zero retries, and one black present against 554 before is a
+different session's workload, not evidence of a fix. The next step is a workload that
+reproduces the wall (the earlier session reached `held=30 408mib`, this one stopped at ~26 GiB)
+and then a fix aimed at the population itself.
