@@ -935,3 +935,52 @@ Selection` — where every previous cycle showed black. Screenshot:
 Remaining, unrelated to the menu: `vk_slab_allocate_memory` pressure (6 this boot, the
 16.4 GB class from cycle 3) and one `draw_prepare_pipeline_missing`. Both are the
 already-open items, not blockers for the menu.
+
+## Star Birds cycle 9 (iGPU rail): the memory ceiling, answered
+
+Two things were settled by one cycle on the integrated GPU plus the guest's own report.
+
+**The guest's GPU is a 64 MB paravirtual device.** `system_profiler SPDisplaysDataType`
+inside the guest:
+
+```
+Chipset Model: Apple Paravirtualized Graphics Device
+VRAM (Total): 64 MB
+Vendor: Apple (0x106b)   Device ID: 0xeeee   Metal Support: Metal 2
+```
+
+So macOS puts essentially every resource in *guest RAM*, and the device imports those
+pages as host pointers (the `host_ram_import … heap_mb=47695` lines). The guest's VRAM
+number is not the constraint and never was.
+
+**What actually runs out is the device's own host-side image pool against the host GPU's
+heap.** On the discrete 5080 (`device_local_mb=16303`) the device's slab reported
+`held_bytes=16 382 951 424` (≈15.26 GiB, ~96 % of that heap) with **1 685**
+`vram_pool_reclaim_retry` events whose `released=` was 0–112, and `vkAllocateMemory`
+itself began failing (`vk_result=A_device_memory_allocation_has_failed`) on the game's
+1920×1080 passes. `held_bytes` is `slab.rs`'s sum of block *plan* sizes, so treat the
+figure as the device's own accounting rather than a driver reading — but the failures were
+real, and on the integrated GPU, whose heap is unified and 46.6 GB
+(`vk_caps memory=unified device_local_mb=47695`), the same workload recorded:
+
+```
+vram_pool_reclaim_retry        0          (was 1 685)
+linux_m2v_draw reason=…        1 × draw_prepare_pipeline_missing  (was ~1 700 slab refusals)
+nvidia-smi memory.used         2 MiB, 0 % util   (the rail is not on the 5080)
+```
+
+So: not the VM's RAM, not the guest's 64 MB, and not nvidia-smi's figure during an idle
+host — the device allocates its own images from the host GPU's heap, and the 16 GB
+discrete heap is what it filled. The iGPU route removes the failure class entirely.
+
+**The remaining artifacts are pre-existing, and not the rail.** The user reports the
+tearing band on the NVIDIA rail as well, before any of this session's changes. A burst of
+window captures plus the 40 present dumps measured with a row-discontinuity metric show
+both the device's frames and the window's frames internally smooth (median row-diff
+0.24–0.70) with discontinuities only at fixed content edges (rows 23/89/889/1074, the same
+in every dump) — no torn frame is present in the dumps sampled, so the tear is transient
+and animation-dependent, and the present dumps' 40-frame cap was reached during boot
+before the interesting part of the session. Catching it needs a temporal witness (compare
+each presented frame against the previous one) rather than a single-frame measure.
+`present_black` fired 4 times this boot (1 of the 40 dumps was black), which is the
+"black flash" class the earlier cycles also saw.
