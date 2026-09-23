@@ -510,6 +510,18 @@ let
       # space no large image fits in). Remove once the wall is answered.
       patch -p1 -d reims-vgpu < ${./pr-diag-slab-live-census.patch}
 
+      # The wall itself, first half: the reclaim that runs when an image cannot
+      # be allocated empties the image slab's blocks (`idle_slab_trim_keep(true)`
+      # is zero, so every empty block goes back to the driver) and then throws
+      # that count away — `trim_recycle_pools` returned only the recycle-pool
+      # entries it trimmed. `bind_image_slab` retries an out-of-memory
+      # allocation only when the reclaim reports something released, so at the
+      # wall the device freed what it had and refused the draw anyway, every
+      # draw, for as long as the workload kept asking: 2 640 refusals, 554 black
+      # presents, no recovery. Counting the freed blocks into the return value
+      # is what lets the retry run.
+      patch -p1 -d reims-vgpu < ${./pr-slab-retry-counts-blocks.patch}
+
       # Which GPU the rail binds, selectable at run time: this host's discrete
       # GPU has a 16 GB device-local heap and the integrated one ~46 GB of
       # unified memory, and which is the better rail is a question to measure.

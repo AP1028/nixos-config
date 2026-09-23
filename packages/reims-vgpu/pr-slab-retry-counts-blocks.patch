@@ -1,0 +1,27 @@
+diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs b/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_buffers.rs
+@@ -496,10 +496,21 @@
+         // Not inside the `if` above, because the switch that restores the old
+         // behaviour has to be able to reach this on an unsettled pass; the
+         // policy is [`idle_slab_trim_keep`] and this is its only caller.
+-        if let Some(keep) = idle_slab_trim_keep(trim_buffers) {
+-            self.slab.trim_empty_blocks(device, keep);
+-        }
+-        trimmed + buf_trimmed
++        // The emptied *blocks* are counted into the return value, and that is
++        // not tidiness. `bind_image_slab` retries an out-of-memory allocation
++        // only when this call says something was given back, so a trim that
++        // empties a 64 MiB block and reports zero converts a recoverable
++        // refusal into a refused draw. At the wall that is every draw, for as
++        // long as the workload keeps asking: a driven Star Birds boot read
++        // `vram_pool_reclaim_retry` 3 185 with `released=0`, 2 640 draws refused
++        // by `vk_slab_allocate_memory` and 554 black presents, and never
++        // recovered. `keep` is zero on this path (`idle_slab_trim_keep(true)`),
++        // so the blocks really do go back; only the count was missing.
++        let slab_freed = match idle_slab_trim_keep(trim_buffers) {
++            Some(keep) => self.slab.trim_empty_blocks(device, keep),
++            None => 0,
++        };
++        trimmed + buf_trimmed + slab_freed
+     }
+ 
+     /// Reclaim direct images only after their serialized resource dies.
