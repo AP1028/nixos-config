@@ -91,7 +91,7 @@
              timeline_semaphore: true,
              descriptor_binding_partially_bound: true,
 --- a/crates/reims-vgpu/src/backend/vulkan/engine/context.rs
-+++ b/crates/reims-vgpu/crates/reims-vgpu/src/backend/vulkan/engine/context.rs
++++ b/crates/reims-vgpu/src/backend/vulkan/engine/context.rs
 @@ -1216,6 +1216,10 @@
          // was promoted into the 1.1 struct instead, which this chain does not
          // carry, so it keeps its own.

@@ -1,0 +1,388 @@
+diff --git a/crates/reims-vgpu-protocol/src/pass_action.rs b/crates/reims-vgpu-protocol/src/pass_action.rs
+--- a/crates/reims-vgpu-protocol/src/pass_action.rs
++++ b/crates/reims-vgpu-protocol/src/pass_action.rs
+@@ -399,6 +399,15 @@
+ 
+ /// Whether the action publishes a single-sample destination the guest may
+ /// subsequently read.
++///
++/// `MTLStoreActionUnknown` answers with [`MTL_STORE_ACTION_STORE`]: the model
++/// folds the deferred form to `Store` (see [`crate::pass::StoreAction::parse`]
++/// and its own note on the deferred form), so the rail has to fold it the same
++/// way or the two planes disagree about a stream that never carries the
++/// `SetStoreAction` record Apple requires. The rail's answer is what decides
++/// `skip_readback`, and a `false` here would leave a frame the model ordered as
++/// a Store on a resident with nothing publishing it — the readback is the only
++/// way a Store's pixels reach guest pages on this rail.
+ #[must_use]
+ pub fn store_action_publishes_single_sample(raw: u16) -> bool {
+     matches!(
+@@ -406,6 +415,7 @@
+         MTL_STORE_ACTION_STORE
+             | MTL_STORE_ACTION_MULTISAMPLE_RESOLVE
+             | MTL_STORE_ACTION_STORE_AND_MULTISAMPLE_RESOLVE
++            | MTL_STORE_ACTION_UNKNOWN
+     )
+ }
+ 
+diff --git a/crates/reims-vgpu-protocol/src/pixel_format.rs b/crates/reims-vgpu-protocol/src/pixel_format.rs
+--- a/crates/reims-vgpu-protocol/src/pixel_format.rs
++++ b/crates/reims-vgpu-protocol/src/pixel_format.rs
+@@ -1115,6 +1115,16 @@
+     pub fn cpu_loader_arm_is_lossy(self) -> bool {
+         match self {
+             Self::Rgba16Float | Self::Rg16Float | Self::Rgba8Snorm => true,
++            // The two packed HDR words narrow to eight bits through their arms
++            // (`rgba8_from_rg11b10_word`, `rgb10a2_word_to_rgba8`), so they are
++            // lossy in exactly the sense this predicate exists for: an arm that
++            // answers `true` here while the layout is exact lets the sampled
++            // cost floor decline the native gather and take the eight-bit
++            // conversion *silently* — ten- and eleven-bit channels truncated,
++            // values above 1.0 clamped. They are listed here so the floor leaves
++            // the native rail alone and `narrow_to_unorm8`-shaped reporting can
++            // see them.
++            Self::Rgb10a2Unorm | Self::Rg11b10Float => true,
+             Self::Rgba8
+             | Self::Bgra8
+             | Self::R8
+@@ -1126,9 +1136,7 @@
+             | Self::Rg16Uint
+             | Self::Rgba32Float
+             | Self::Rgba16Unorm
+-            | Self::Rgb10a2Unorm
+-            | Self::Bgr10a2Unorm
+-            | Self::Rg11b10Float => false,
++            | Self::Bgr10a2Unorm => false,
+             // Vacuously false: there is no arm, so no arm loses anything.
+             // `has_cpu_loader_arm` is the question a caller should be asking
+             // about these, and it answers `false`.
+@@ -2764,9 +2772,11 @@
+ 
+ /// One semantic RGBA8 channel as its signed-normalized eight-bit encoding.
+ ///
+-/// Unorm's range maps onto snorm's: `0` becomes `-128`, `128` lands near zero,
+-/// and `255` becomes `127`. The scale is 127 rather than 128 so both endpoints
+-/// are exact and zero is representable.
++/// Unorm's range maps onto snorm's: `0` becomes `-127` (`-1.0` as snorm spells
++/// it at this scale), `128` lands at `0`, and `255` becomes `127`. The scale is
++/// 127 so that zero is representable and the unorm endpoints are exact; `-128`
++/// is the one snorm byte this direction never produces, and
++/// [`snorm_byte_to_unorm8`] reads both `-128` and `-127` back as `0`.
+ fn unorm8_to_snorm_byte(value: u8) -> u8 {
+     let v = f32::from(value) / 255.0 * 2.0 - 1.0;
+     (v * 127.0).round().clamp(-128.0, 127.0) as i8 as u8
+diff --git a/crates/reims-vgpu/src/runtime/blit_exec/mod.rs b/crates/reims-vgpu/src/runtime/blit_exec/mod.rs
+--- a/crates/reims-vgpu/src/runtime/blit_exec/mod.rs
++++ b/crates/reims-vgpu/src/runtime/blit_exec/mod.rs
+@@ -2185,6 +2185,22 @@
+ /// spanning this change stays comparable — it is now the refusal's volume
+ /// rather than a silent truncation's. A firing is a workload this rig has not
+ /// seen, and it will be loud instead of a wrong texture.
++/// The extent a copy endpoint can offer along one axis, in the unit the guest's
++/// size is in.
++///
++/// For an uncompressed format a block is one texel and this is the texel count.
++/// For a block-compressed one the guest names whole blocks, and a level smaller
++/// than a single block still holds (and is copied as) exactly one: the block
++/// grid rounds the texel extent *up*, which is why a 2x2 BC1 level offers 4.
++/// A zero-texel axis offers nothing, so a non-zero request is still refused.
++fn copy_available_extent(level_texels: u64, block: u32) -> u64 {
++    if level_texels == 0 {
++        return 0;
++    }
++    let block = u64::from(block.max(1));
++    level_texels.div_ceil(block) * block
++}
++
+ fn copy_extent(kind: &'static str, axis: &'static str, requested: u64, max: u64) -> Option<u64> {
+     if requested == 0 {
+         // Metal size 0 is a no-op extent; keep 0. The callers below turn an
+@@ -3183,15 +3199,33 @@
+     // and the destination half used to have no instrument at all — it did not
+     // even come through the extent helper, which made it the quieter of two
+     // quiet paths.
++    //
++    // **The available extent is block-aligned**, because that is the unit the
++    // guest's `MTLSize` is in for a block-compressed format: a mip level
++    // smaller than one block still occupies a whole block, and the guest copies
++    // it as that block. Comparing the block-unit size against the level's texel
++    // count refused every mip tail — a driven Unity title lost ~1 000 copies a
++    // boot at levels 7..11 with `requested=4 available=2`, and the copy below
++    // this check already documents that from here on the unit *is* a 4x4 block.
++    let src_block = pixel_format::block_geometry(src.pixel_format());
++    let dst_block = pixel_format::block_geometry(dst.pixel_format());
++    let (src_avail_w, src_avail_h) = (
++        copy_available_extent(src.width() as u64 - sox, src_block.map_or(1, |b| b.width)),
++        copy_available_extent(src.height() as u64 - soy, src_block.map_or(1, |b| b.height)),
++    );
++    let (dst_avail_w, dst_avail_h) = (
++        copy_available_extent(dst.width() as u64 - dox, dst_block.map_or(1, |b| b.width)),
++        copy_available_extent(dst.height() as u64 - doy, dst_block.map_or(1, |b| b.height)),
++    );
+     let (Some(copy_w), Some(_)) = (
+-        copy_extent("t2t_src", "w", cmd.size.width, src.width() as u64 - sox),
+-        copy_extent("t2t_dst", "w", cmd.size.width, dst.width() as u64 - dox),
++        copy_extent("t2t_src", "w", cmd.size.width, src_avail_w),
++        copy_extent("t2t_dst", "w", cmd.size.width, dst_avail_w),
+     ) else {
+         return br(BlitFailure::Bounds, "t2t_extent_oob");
+     };
+     let (Some(copy_h), Some(_)) = (
+-        copy_extent("t2t_src", "h", cmd.size.height, src.height() as u64 - soy),
+-        copy_extent("t2t_dst", "h", cmd.size.height, dst.height() as u64 - doy),
++        copy_extent("t2t_src", "h", cmd.size.height, src_avail_h),
++        copy_extent("t2t_dst", "h", cmd.size.height, dst_avail_h),
+     ) else {
+         return br(BlitFailure::Bounds, "t2t_extent_oob");
+     };
+diff --git a/crates/reims-vgpu/src/runtime/blit_exec/tests.rs b/crates/reims-vgpu/src/runtime/blit_exec/tests.rs
+--- a/crates/reims-vgpu/src/runtime/blit_exec/tests.rs
++++ b/crates/reims-vgpu/src/runtime/blit_exec/tests.rs
+@@ -3240,3 +3240,24 @@
+         "three agreeing formats with no stored-texel layout are still not a byte copy"
+     );
+ }
++
++/// A block-compressed mip tail is one whole block, so a copy that names it fits.
++///
++/// The guest's `MTLSize` for a compressed texture is in blocks, and every level
++/// below the block side still occupies exactly one — the refusal this covers
++/// (`t2t_extent_oob`, `requested=4 available=2`) lost ~1 000 copies a boot on a
++/// driven Unity title, one per level from the block side down to the tail.
++#[test]
++fn a_compressed_mip_tail_offers_a_whole_block() {
++    // A 2x2 BC1 level (4x4, 8-byte blocks): the tail of a 1024-wide chain.
++    assert_eq!(copy_available_extent(2, 4), 4);
++    assert_eq!(copy_available_extent(1, 4), 4);
++    assert_eq!(copy_available_extent(3, 4), 4);
++    // Whole blocks round up, never down: a 7-texel level holds two block columns.
++    assert_eq!(copy_available_extent(7, 4), 8);
++    assert_eq!(copy_available_extent(8, 4), 8);
++    // An uncompressed axis is unchanged, and an empty axis offers nothing.
++    assert_eq!(copy_available_extent(8, 1), 8);
++    assert_eq!(copy_available_extent(0, 4), 0);
++    assert_eq!(copy_available_extent(0, 1), 0);
++}
+diff --git a/crates/reims-vgpu/src/runtime/drain/mod.rs b/crates/reims-vgpu/src/runtime/drain/mod.rs
+--- a/crates/reims-vgpu/src/runtime/drain/mod.rs
++++ b/crates/reims-vgpu/src/runtime/drain/mod.rs
+@@ -2620,10 +2620,21 @@
+             }
+             state.pending_stamp_page_writes.insert(index, value);
+         } else {
++            // `Settled` means the caller writes the word, and this caller had
++            // been dropping the point instead: the rail answered "nothing is in
++            // flight for this slot", the page stayed behind the plane's point,
++            // and the guest's channel re-read the fence forever. Everything owed
++            // guest RAM has landed before this answer (that is what the rail
++            // quiesces for), so the inline write cannot outrun the work.
+             note_store_route("diag_stamp_reissue_settled");
++            if let Some(off) = stamp_slot_offset(index, state.page_size()) {
++                let gpa = state.pfn_gpa(state.gfx.fifo_base_page) + off;
++                let page_size = state.page_size() as usize;
++                note_stamp_direction(host, gpa, index, value);
++                land_stamp_page(state, host, index, value, gpa, page_size, "stamp_visible_reissued");
++                note_store_route("stamp_page_reissued_inline");
++            }
+         }
+-        // A non-`Queued` answer means the rail ordered it inline or wrote the
+-        // page itself, so the point is no longer outstanding.
+     }
+ }
+ 
+@@ -3393,21 +3404,44 @@
+     let gpa = state.pfn_gpa(state.gfx.fifo_base_page) + off;
+     let page_size = state.page_size() as usize;
+     note_stamp_direction(host, gpa, index, stamp_value);
+-    if gpa_map::write_u32(host, gpa, stamp_value, page_size).is_ok() {
+-        // The word is in the page: from here the guest can read it, which is
+-        // the event the ordering plane's stamp waits are about.
+-        note_stamp_visible(state, index, stamp_value, "stamp_visible_inline");
+-        // The guest's fence has moved. Everything it allocated for the work this
+-        // stamp completes may be freed from here on, which is why a Store's
+-        // guest-page write has to have landed before the stamp rather than
+-        // after — see `runtime::render_writeback`.
+-        state.completion_stamp_seq = state.completion_stamp_seq.wrapping_add(1);
+-        state
+-            .gfx
+-            .interrupt_status_gpu
+-            .fetch_or(1u32 << (index & 0x1f), std::sync::atomic::Ordering::AcqRel);
+-        host.enqueue(HostAction::irq_gfx());
++    land_stamp_page(state, host, index, stamp_value, gpa, page_size, "stamp_visible_inline");
++}
++
++/// Put a stamp point in its guest page and report it visible.
++///
++/// The tail both the publication path and the re-issue path owe a non-`Queued`
++/// answer: [`crate::backend::StampOrdering::Settled`] means *the caller writes
++/// the word* and that everything owed guest RAM has already landed, so an inline
++/// write here cannot outrun the work the point completes. Shared rather than
++/// duplicated because the re-issue path used to read the same answer as "the
++/// rail ordered it inline" and drop the point without writing anything, which
++/// left the page behind the ordering plane's point — a guest fence that never
++/// lands, in exactly the superseded case the re-issue exists for.
++fn land_stamp_page<H: HostMemory + HostOps>(
++    state: &mut DeviceState,
++    host: &mut H,
++    index: u32,
++    stamp_value: u32,
++    gpa: u64,
++    page_size: usize,
++    site: &'static str,
++) {
++    if gpa_map::write_u32(host, gpa, stamp_value, page_size).is_err() {
++        return;
+     }
++    // The word is in the page: from here the guest can read it, which is
++    // the event the ordering plane's stamp waits are about.
++    note_stamp_visible(state, index, stamp_value, site);
++    // The guest's fence has moved. Everything it allocated for the work this
++    // stamp completes may be freed from here on, which is why a Store's
++    // guest-page write has to have landed before the stamp rather than
++    // after — see `runtime::render_writeback`.
++    state.completion_stamp_seq = state.completion_stamp_seq.wrapping_add(1);
++    state
++        .gfx
++        .interrupt_status_gpu
++        .fetch_or(1u32 << (index & 0x1f), std::sync::atomic::Ordering::AcqRel);
++    host.enqueue(HostAction::irq_gfx());
+ }
+ 
+ /// Answer `CmdGetDeviceInfo` into the guest's reply page.
+diff --git a/crates/reims-vgpu/src/runtime/draw/mod.rs b/crates/reims-vgpu/src/runtime/draw/mod.rs
+--- a/crates/reims-vgpu/src/runtime/draw/mod.rs
++++ b/crates/reims-vgpu/src/runtime/draw/mod.rs
+@@ -1763,15 +1763,21 @@
+     all(feature = "backend-metal", target_os = "macos")
+ ))]
+ pub(crate) fn store_action_in_contract(pipeline_ref: u32, store_action: u16) -> bool {
+-    if is_declared_store_action(store_action) {
++    // The deferred form is in contract: the model parses it to `Store` and the
++    // stream's own `SetStoreAction` record is what discharges it, so reporting
++    // it as unmapped here contradicted the model on the very passes the
++    // deferred-action fix repaired.
++    if is_declared_store_action(store_action)
++        || store_action == reims_vgpu_protocol::pass_action::MTL_STORE_ACTION_UNKNOWN
++    {
+         return true;
+     }
+     if degrade_log_first(pipeline_ref, "store_action_unmapped") {
+         crate::observe::fail(format!(
+             "pass_state_degraded reason=store_action_unmapped \
+              pipe={pipeline_ref} store_action={store_action} \
+-             (not one of the represented MTLStoreAction values 0/1/2/3; \
+-              attachment result may be dropped)"
++             (not one of the represented MTLStoreAction values 0/1/2/3 and not \
++              the deferred 4; attachment result may be dropped)"
+         ));
+     }
+     false
+diff --git a/crates/reims-vgpu/src/runtime/draw/tests.rs b/crates/reims-vgpu/src/runtime/draw/tests.rs
+--- a/crates/reims-vgpu/src/runtime/draw/tests.rs
++++ b/crates/reims-vgpu/src/runtime/draw/tests.rs
+@@ -3801,7 +3801,7 @@
+     // from a cache entry is what used to happen.
+     let mut host = crate::runtime::host::FakeHost::new();
+     assert!(
+-        resolve_sampled_source(&mut state, &mut host, 0, tex_ref, None, true).is_none(),
++        resolve_sampled_source(&mut state, &mut host, 0, tex_ref, None, true, 0).is_none(),
+         "a ref with no object-list entry must resolve to no sampled source"
+     );
+ }
+@@ -4543,7 +4543,7 @@
+     );
+ 
+     let (width, height, sampled_mid, sampled) =
+-        resolve_sampled_source(&mut state, &mut host, 1, texture_ref, None, true)
++        resolve_sampled_source(&mut state, &mut host, 1, texture_ref, None, true, 0)
+             .expect("ref-texture descriptor surface must sample");
+     assert_eq!((width, height, sampled_mid), (4, 3, surface_id));
+     let SampledSourceRequest::Bytes(sampled, _, layout, _) = sampled else {
+@@ -4572,6 +4572,7 @@
+         texture_ref,
+         threaded_resource,
+         true,
++        0,
+     )
+     .expect("threaded-resource sample must resolve");
+     assert_eq!(
+@@ -4681,7 +4682,7 @@
+     );
+ 
+     let resolve = |state: &mut DeviceState, host: &mut FakeHost| {
+-        let (_, _, _, src) = resolve_sampled_source(state, host, 1, texture_ref, None, true)
++        let (_, _, _, src) = resolve_sampled_source(state, host, 1, texture_ref, None, true, 0)
+             .expect("host-cache rung must serve the stored frame");
+         let SampledSourceRequest::Bytes(bytes, identity, layout, _) = src else {
+             panic!("cache-backed fixture unexpectedly resolved a resident target");
+@@ -4880,7 +4881,7 @@
+     assert!(state.set_mapping_device_desc(surface_id, &device_desc));
+ 
+     let (sample_w, sample_h, sample_mid, sampled) =
+-        resolve_sampled_source(&mut state, &mut host, 1, texture_ref, None, true)
++        resolve_sampled_source(&mut state, &mut host, 1, texture_ref, None, true, 0)
+             .expect("serialized RG8 view must sample the 2-byte surface");
+     assert_eq!(
+         (sample_w, sample_h, sample_mid),
+diff --git a/crates/reims-vgpu/src/runtime/draw/vulkan.rs b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+--- a/crates/reims-vgpu/src/runtime/draw/vulkan.rs
++++ b/crates/reims-vgpu/src/runtime/draw/vulkan.rs
+@@ -4756,6 +4756,21 @@
+         crate::backend::vulkan::engine::recent_ready_depth_resident(w, h, depth_target_ref)
+     {
+         crate::runtime::drain::note_store_route("depth_resident_latest");
++        // A substitution of another name's content, so it belongs on the fail
++        // channel and not only in a counter: a wrong serve here is
++        // indistinguishable from a right one in the frame, and the identity
++        // served is what a later reader needs to tell them apart.
++        if crate::observe::first_sight(
++            "depth_resident_latest",
++            u64::from(task_id) << 32 | u64::from(texture_ref),
++        ) {
++            crate::observe::fail(format!(
++                "depth_resident_latest task={task_id} ref={texture_ref} fmt={declared:#x} \
++                 {w}x{h} served={identity:?} (no resident under this name; the newest ready \
++                 depth resident of this geometry, excluding the draw's own depth ref \
++                 {depth_target_ref}, was bound instead)"
++            ));
++        }
+         return Some((w, h, SampledSourceRequest::Target(identity, format)));
+     }
+     None
+@@ -4806,6 +4821,7 @@
+ fn latch_linear_sample_mapping(
+     latch: &mut std::collections::BTreeMap<(u32, u32), u32>,
+     mappings: &std::collections::BTreeMap<u32, crate::model::MappingEntry>,
++    page_shift: u32,
+     task_id: u32,
+     texture_ref: u32,
+     first_page: Option<u64>,
+@@ -4815,11 +4831,15 @@
+     };
+     let mut found: Option<u32> = None;
+     for (&mid, mapping) in mappings.iter() {
+-        if mapping
+-            .page_entries
+-            .iter()
+-            .any(|&page| u64::from(page) == first_page)
+-        {
++        // A `page_entries` word is `(valid | PFN << PAGE_ENTRY_PFN_SHIFT)`, not
++        // an address. Comparing it with a page-aligned GPA directly is a
++        // predicate between two vocabularies that never coincide — a valid
++        // entry always has bit 0 set and a GPA never does — so the latch could
++        // never fire and a mapping-keyed debt was never paid through the ref.
++        if mapping.page_entries.iter().any(|&page| {
++            reims_vgpu_protocol::iosurface_pages::entry_gpa_shift(page, page_shift)
++                == Some(first_page)
++        }) {
+             if found.is_some() {
+                 return;
+             }
+@@ -5051,6 +5071,7 @@
+                 latch_linear_sample_mapping(
+                     &mut state.texture_to_mapping,
+                     &state.mappings,
++                    state.page_shift,
+                     task_id,
+                     texture_ref,
+                     packed.gpas.first().copied(),

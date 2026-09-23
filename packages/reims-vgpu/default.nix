@@ -422,6 +422,19 @@ let
       # depth rails no longer need reading.
       patch -p1 -d reims-vgpu < ${./pr-diag-sampled-depth.patch}
 
+      # Assessment fixes (see docs/reims-vgpu-code-assessment.md): the five
+      # `resolve_sampled_source` test call sites `pr-depth-resident-latest`
+      # left behind (the crate's test target did not compile), the dead
+      # `page_entries` comparison in the linear-sample mapping latch, the
+      # `Settled`-answer drop in the stamp re-issue, the block-aligned
+      # texture-to-texture bounds check (compressed mip tails), the deferred
+      # store ordinal on the contract/publish predicates, the lossy marking the
+      # two packed HDR layouts never got, the `depth_resident_latest` fail line,
+      # and the `unorm8_to_snorm_byte` doc correction.
+      patch -p1 -d reims-vgpu < ${./pr-assessment-fixes.patch}
+
+
+
 
       cd reims-vgpu/vendor/qemu
       ./configure \
