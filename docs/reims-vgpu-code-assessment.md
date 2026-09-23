@@ -1165,3 +1165,31 @@ refuted — zero refusals means zero retries, and one black present against 554 
 different session's workload, not evidence of a fix. The next step is a workload that
 reproduces the wall (the earlier session reached `held=30 408mib`, this one stopped at ~26 GiB)
 and then a fix aimed at the population itself.
+
+### Cycle 12b: the device presents a correct menu — the red is not in the presented frame
+
+The last run's present dumps (`/tmp/opencode/dumps-slab2`, 30 frames over ~7 680 presents, the
+run the user watched and called "red artifact still there, unchanged") hold a **clean Star
+Birds main menu**: the logo badge, Continue / Level Selection / Free Play Mode / Rewards, the
+star count, the gift/news/"Get in touch!" icons, `v0.3.8`. No red band anywhere in it
+(`dumps-slab2/present-dump-9.ppm`, converted: `/tmp/opencode/slab2-last.png`). The right-hand
+panel is pure black, which is the separately-open missing-3D-artwork item, not the artifact.
+
+So the artifact the user sees is **not present in the resident the device hands to the
+window**, at least not in the 30 frames sampled. That splits the remaining candidates in two,
+and it retires the ones this session chased:
+
+- the red is not a load-op/fresh-attachment matter (`Color0Load`), not the slab population, and
+  not missing content — those all live *inside* the presented frame, which is correct here;
+- what is left is a **transient mixing of two frames**: bands of the previous content (the
+  guest's own desktop wallpaper, whose orange/red is what "mixed with the ocean's blue into
+  orange" describes) blended into the current one. Either the guest's WindowServer composites
+  that way at a full-screen transition, or the device's present path reads the scanout resident
+  while the guest's write to it is still in flight — sharing a queue family orders submission,
+  not completion, so that needs an explicit dependency, not an assumption.
+
+The test that separates them is cheap and does not need a rebuild of behaviour: dump **every**
+present for the presents around the game's launch instead of every 256th, so the transition is
+in the sample set rather than between samples, and compare those frames against simultaneous
+host-window captures. A torn dump frame is the device's (or the guest's composite's) doing; a
+clean dump frame with a torn host window puts it in the host presentation path.
