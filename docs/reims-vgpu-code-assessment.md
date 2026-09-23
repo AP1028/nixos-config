@@ -1087,3 +1087,49 @@ the difference is exactly the difference between "the device is fine on the iGPU
 "the device refuses 2 640 draws and blacks the screen".
 
 
+
+## Star Birds cycle 12 (parked): the wall is the slab's retention, and the reclaim lied about it
+
+The wall from cycle 11, chased through counters that already existed rather than guessed at.
+`vk_alloc_sites` is `count:mebibytes:milliseconds`, all cumulative; `vk_create_sites` counts
+objects. One wall session reads:
+
+```
+vk_alloc_sites   slab_block=4341:277712:94255   depth_resident=6203:92422:1
+                 mrt_secondary=0:0:0            staging_block=479:7650:0
+vk_create_sites  mrt_image=6194  target_image=3502  registry_image=671  mrt_framebuffer=14
+registry_pressure current=64/21mib recoverable=0/0mib pinned=0/0mib slab_mib=27228/30408
+```
+
+So ~9 700 slab images were created and ~27 GiB is still *carved* (live), at ~2.9 MiB each,
+while the registry that names guest resources holds 64 residents and 21 MiB. The holder is
+not the guest's residents and not the host heap: it is the device's own slab population,
+retained through retirement.
+
+**The defect fixed** (`pr-slab-retry-counts-blocks.patch`): on allocation failure,
+`bind_image_slab` retries only if the reclaim reports something released. That reclaim does
+empty the image slab's blocks — `idle_slab_trim_keep(true)` is `IDLE_SLAB_KEEP_EMPTY` = 0 —
+and then discards the count, because `trim_recycle_pools` returned only the recycle-pool
+entries it trimmed. At the wall those are empty by construction, so 64 MiB blocks went back
+to the driver and the reclaim reported **0**: no retry, draw refused, every draw after it the
+same. That is the measured signature — 3 185 reclaims with `released=0`, 2 640 refusals,
+554 black presents, no recovery.
+
+**Not yet validated, and what would validate it** (`pr-diag-slab-live-census.patch`): a
+retry only helps if the missing space is in *empty* blocks; if `held - carved` (3.2 GiB) is
+mostly slivers too small for a 1920x1080 target, the retry fails again and the wall is
+fragmentation instead. The `slab_live` line answers which — live count/bytes by size bucket
+(`lt1/lt4/lt16/lt64/lt256/ge256`, each `count/mib`) plus `empty`/`partial` blocks — and it has
+not yet been read, because the validation boot died before sshd came up:
+`boot-x86.sh: persistent boot exited rc=0` while the device presented 30 fps, i.e. the guest
+rebooted under a `reboot=exit` device. The serial log ends at the XNU handoff with no panic
+captured. Nothing in either change touches boot (the census is read-only; the fix is one
+return value on an allocation-failure path), so this is VM state to check, not a code
+regression to chase.
+
+**State handed over.** Build `sp2jknjldckf7nbgapgx2ff5rvvm49yd` contains both patches: the
+census (temporary) and the reclaim fix (compile-checked, built, never driven). The next
+cycle should read `slab_live` and `vram_pool_reclaim_retry released=` at the wall; if
+`empty` is large the fix should show `released>0` and the refusals stopping, and if
+`partial` dominates the follow-up is a fragmentation answer (a dedicated allocation for
+targets that size, or a larger block class) rather than another retry.
