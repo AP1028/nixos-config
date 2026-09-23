@@ -9,7 +9,7 @@
 # the device's own winit window (`-display none` means there is no QEMU console
 # surface to `screendump`).
 #
-#   scripts/reims-game-test.sh <qemu-bin> <tag> [appid]
+#   scripts/reims-game-test.sh <qemu-bin> <tag> [appid] [extra-device-env]
 #
 # App ids seen in this guest's library: Star Birds 2719750, Easy Red 2 1324780,
 # Universe Sandbox 230290. Star Birds needs no interaction; Easy Red 2 needs a
@@ -19,6 +19,8 @@ set -uo pipefail
 QEMU_BIN="${1:?usage: reims-game-test.sh <qemu-bin> <tag> [appid]}"
 TAG="${2:?usage: reims-game-test.sh <qemu-bin> <tag> [appid]}"
 APPID="${3:-2719750}"
+# Optional device env for this cycle, e.g. REIMS_VGPU_PRESENT_DUMP=/tmp/opencode/dump.
+EXTRA_ENV="${4:-}"
 SHOTS="/tmp/opencode/shots"
 GUEST="macos-vm"
 GUEST_PW=12345678
@@ -48,7 +50,7 @@ PY
 
 mkdir -p "$SHOTS"
 echo "== booting ($TAG)"
-/tmp/opencode/run-game.sh "$QEMU_BIN" "$TAG" || exit 1
+EXTRA_ENV="$EXTRA_ENV" /tmp/opencode/run-game.sh "$QEMU_BIN" "$TAG" || exit 1
 
 echo "== launching appid $APPID"
 ssh_guest "nohup /Applications/Steam.app/Contents/MacOS/steam_osx 'steam://rungameid/$APPID' >/tmp/steam-launch.log 2>&1 &" >/dev/null 2>&1
