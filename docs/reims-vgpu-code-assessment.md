@@ -1193,3 +1193,43 @@ present for the presents around the game's launch instead of every 256th, so the
 in the sample set rather than between samples, and compare those frames against simultaneous
 host-window captures. A torn dump frame is the device's (or the guest's composite's) doing; a
 clean dump frame with a torn host window puts it in the host presentation path.
+
+## Star Birds cycle 13: the red IS in the device's frames — the menu panel alternates blue/red
+
+The present dump now censuses each frame's own regions (`panel` = left sixth of the columns,
+`scene` = right third, `top`/`bottom` thirds of the rows, plus `red_px` = pixels whose red
+exceeds blue by 24) and samples every 8th present from present 256 up to 2 000 files, because
+1-in-256 sampling is what let three cycles call a contaminated frame clean. One driven
+session, 194 dumps:
+
+```
+phases: blackx10, red/orange panelx2, blackx7, … menu(no scene)x11, red/orange panelx5,
+        menu(no scene)x5, red/orange panelx8, menu(no scene)x5
+classes: panel_blue=67  panel_red=109  scene_black=127
+last frames: panel=(80,30,164) scene=(4,4,3)      (blue menu)
+             panel=(166,30,78)  scene=(3,4,4)      (red menu)
+refusals in the whole session: 1 x draw_prepare_pipeline_missing — nothing else
+```
+
+`present-dump-188` is the **same menu** as the blue frames — logo, Continue, Level Selection,
+Free Play Mode, Rewards, star count, the same icons — with the panel backdrop **crimson**
+instead of blue, a bright orange-red edge down its left, and **horizontal blue stripes across
+the bottom** (the stripes the user has been reporting as "near the boundary"). So:
+
+- the artifact is inside the resident the device presents, not introduced by the host window;
+- the device refuses nothing while it happens, so it is *drawing* that content, not dropping a
+  draw and leaving stale pixels;
+- the two states persist for tens of presents at a time (one run of 52 consecutive red frames),
+  which is the "still there, unchanged" the user sees;
+- it is **not** the desktop showing through: comparing the red panel's signature against a
+  verified wallpaper frame scores L1 81.6 where a true copy scores 2.8 (control: the wallpaper
+  against itself), so the panel is not the scanout's or the wallpaper's pixels.
+
+That leaves the game's own menu-panel *content*: either the texture the panel samples holds
+wrong pixels (a write/upload/blit landing the wrong content, or a stale resident served for a
+recreated one) or the draw is bound to the wrong resource. The blue stripes are the tell that
+matters — two contents meeting at a row boundary is a partial update, not a wrong bind.
+Next instrument: read back the sampled images bound to the panel's draw (the engine already has
+resident readback for the chain diagnostics) and compare *them* against the panel's appearance;
+a crimson sampled resident names the write side, blue residents under a crimson panel name the
+read side.
