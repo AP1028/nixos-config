@@ -150,7 +150,7 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/pools/submission_and_bu
      /// the life of the pools. See
      /// [`ResourcePools::resident_resample_peak_ms`] for what it is the margin
 diff --git a/crates/reims-vgpu/src/backend/vulkan/census.rs b/crates/reims-vgpu/src/backend/vulkan/census.rs
-@@ -135,9 +135,49 @@
+@@ -135,9 +135,56 @@
      }
      crate::observe::off(line);
      emit_registry_pressure(&now);
@@ -186,10 +186,17 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/census.rs b/crates/reims-vgpu/
 +        let _ = write!(rendered, "{name}:{count}/{}mib", bytes >> 20);
 +    }
 +    crate::observe::off(format!(
-+        "slab_live count={} mib={} buckets={rendered} \
++        "slab_live count={} mib={} carved={}mib held={}mib buckets={rendered} \
 +         empty={}/{}mib partial={}/{}mib",
 +        now.slab_live_count,
 +        now.slab_live_bytes >> 20,
++        // Beside the live population, because the two figures answer different
++        // questions and a reader has to be able to see them disagree: `live` is
++        // what this census walked, `carved` is what the blocks say is occupied
++        // (including per-carve alignment padding, which no token accounts for).
++        // Printing `live` alone invites reading it as the whole population.
++        now.slab_carved_bytes >> 20,
++        now.slab_held_bytes >> 20,
 +        now.slab_empty_blocks,
 +        now.slab_empty_bytes >> 20,
 +        now.slab_partial_blocks,

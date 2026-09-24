@@ -85,7 +85,29 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-
              let primary_image = t.image;
              let primary_view = attachment_view;
              let primary_access = t.access;
-@@ -6575,6 +6612,56 @@
+@@ -3825,8 +3862,19 @@
+         // record instead lost the whole pass: the driven title's scene composite
+         // is exactly this shape (a full-screen resolve whose first record
+         // declares `Load`).
+-        let msaa_pass = if matches!(pass_key.color0_load, super::caches::Color0Load::Preserve)
+-            && !pools.multisample_slot_is_live(&msaa_key)
++        // Both unwritten begins need this, not just `Preserve`. `Undefined` is
++        // `DONT_CARE` over `UNDEFINED`: it is lawful while the attachment holds
++        // the guest's own prior contents, and on a *fresh* multisample scratch
++        // there are none — the image was created `UNDEFINED` and the resolve
++        // would read whatever the pool's memory last held. That is the same hole
++        // this arm was written for, in the other spelling, and it is reachable
++        // precisely because `slot0_begin` now elects `Undefined` where it used
++        // to elect `Clear`: the primary attachment being live says nothing about
++        // the scratch slot's liveness.
++        let msaa_pass = if matches!(
++            pass_key.color0_load,
++            super::caches::Color0Load::Preserve | super::caches::Color0Load::Undefined
++        ) && !pools.multisample_slot_is_live(&msaa_key)
+         {
+             let mut fresh = pass_key;
+             fresh.color0_load = super::caches::Color0Load::Clear;
+@@ -6575,6 +6623,56 @@
  mod tests {
      use super::*;
  
@@ -142,7 +164,7 @@ diff --git a/crates/reims-vgpu/src/backend/vulkan/engine/exec.rs b/crates/reims-
      fn sampled_identity() -> TargetIdentity {
          TargetIdentity::Surface {
              id: 7,
-@@ -8649,3 +8736,72 @@
+@@ -8649,3 +8747,72 @@
          assert_eq!(checked, COMPARES.len() * OPS.len() * 2);
      }
  }

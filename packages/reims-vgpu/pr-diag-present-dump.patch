@@ -1,7 +1,5 @@
 diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/src/host_window/present.rs
---- a/crates/reims-vgpu/src/host_window/present.rs
-+++ b/crates/reims-vgpu/src/host_window/present.rs
-@@ -1376,7 +1376,68 @@
+@@ -1376,7 +1376,161 @@
      /// Present one frame through the running rail, or decide there is
      /// nothing to present.
      ///
@@ -23,12 +21,34 @@ diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/sr
 +    static CALLS: AtomicU32 = AtomicU32::new(0);
 +    static DUMPS: AtomicU32 = AtomicU32::new(0);
 +    let call = CALLS.fetch_add(1, Ordering::Relaxed);
-+    // Every 256th present, not every 32nd: a boot reaches its first interesting
-+    // transition ~1000 presents in, so a fine-grained cap spends all forty
-+    // dumps on the pre-paint frames and has none left for the launch it was
-+    // meant to catch. 256 × 40 covers ten thousand presents, which is a whole
-+    // session's worth of frames at forty files.
-+    if call % 256 != 0 || DUMPS.load(Ordering::Relaxed) >= 40 {
++    // Sampled *densely* across the window that matters, and it has to be both.
++    // The artifact this exists for is a transition: at 256 presents between
++    // samples a boot's worth of dumps lands either side of it and the frame
++    // that is wrong is never in a file — which is exactly what happened, three
++    // cycles running. But sampling every present from zero spends the whole cap
++    // on the pre-paint frames again. So: every `EVERY`th present (default 8,
++    // ~4-8 samples a second at a driven title's present rate), starting at
++    // `START` (default 256, past the pre-paint frames), up to `CAP` files
++    // (default 800, so ~6 600 presents of coverage at full resolution).
++    static SAMPLING: std::sync::OnceLock<(u32, u32, u32)> = std::sync::OnceLock::new();
++    let (every, start, cap) = *SAMPLING.get_or_init(|| {
++        let read = |name: &str, fallback: u32| {
++            std::env::var(name)
++                .ok()
++                .and_then(|v| v.trim().parse::<u32>().ok())
++                .unwrap_or(fallback)
++                .max(1)
++        };
++        (
++            read("REIMS_VGPU_PRESENT_DUMP_EVERY", 8),
++            std::env::var("REIMS_VGPU_PRESENT_DUMP_START")
++                .ok()
++                .and_then(|v| v.trim().parse::<u32>().ok())
++                .unwrap_or(256),
++            read("REIMS_VGPU_PRESENT_DUMP_CAP", 800),
++        )
++    });
++    if call < start || (call - start) % every != 0 || DUMPS.load(Ordering::Relaxed) >= cap {
 +        return;
 +    }
 +    let Some(crate::backend::window::WindowResident::Vulkan(src)) = resident else {
@@ -51,6 +71,76 @@ diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/sr
 +    };
 +    let n = DUMPS.fetch_add(1, Ordering::Relaxed);
 +    let (rgb_nz, max_rgb, px0) = crate::observe::bgra_rgb_stats(&bgra);
++    // The frame's own regions, in the line and not only in the file, because
++    // the question this session kept answering wrongly with a metric is "does
++    // THIS frame hold the artifact". `panel` is the left sixth of the columns
++    // (where a driven title's menu backdrop is), `scene` the right third (where
++    // its 3D content is), `top`/`bottom` the top and bottom thirds of the rows
++    // (where the stale bands were reported: red at the top, the bottom
++    // unaffected). `red_px` counts pixels whose red exceeds blue by more than
++    // 24 — the artifact is red over blue, so a frame that is full of them is
++    // the artifact's and a frame with none of them is not, whatever its rows
++    // average to.
++    let (mut panel, mut scene, mut top, mut bottom) = ((0u64, 0u64, 0u64), (0u64, 0u64, 0u64), (0u64, 0u64, 0u64), (0u64, 0u64, 0u64));
++    let (mut panel_n, mut scene_n, mut top_n, mut bottom_n, mut red_px) = (0u64, 0u64, 0u64, 0u64, 0u64);
++    let (wi, hi) = (w as usize, h as usize);
++    // The writer below tolerates a short read through `chunks_exact`; this loop
++    // indexes, so it must not be handed one. A readback that comes back shorter
++    // than the geometry asked for is a resident whose size changed under the
++    // ask, and it is a diagnostic's business to say so rather than to take the
++    // window thread down with an out-of-bounds index.
++    if bgra.len() < need {
++        crate::observe::off(format!(
++            "present_dump short identity={:?} {w}x{h} got={} want={need}",
++            src.identity,
++            bgra.len(),
++        ));
++        return;
++    }
++    for y in 0..hi {
++        for x in 0..wi {
++            let at = (y * wi + x) * 4;
++            let (b, g, r) = (bgra[at] as u64, bgra[at + 1] as u64, bgra[at + 2] as u64);
++            if r > b + 24 {
++                red_px += 1;
++            }
++            let add = |slot: &mut (u64, u64, u64), count: &mut u64| {
++                slot.0 += r;
++                slot.1 += g;
++                slot.2 += b;
++                *count += 1;
++            };
++            if x < wi / 6 {
++                add(&mut panel, &mut panel_n);
++            }
++            if x >= 2 * wi / 3 {
++                add(&mut scene, &mut scene_n);
++            }
++            if y < hi / 3 {
++                add(&mut top, &mut top_n);
++            }
++            if y >= 2 * hi / 3 {
++                add(&mut bottom, &mut bottom_n);
++            }
++        }
++    }
++    let mean = |sum: (u64, u64, u64), count: u64| {
++        if count == 0 {
++            (0, 0, 0)
++        } else {
++            (
++                (sum.0 / count) as u32,
++                (sum.1 / count) as u32,
++                (sum.2 / count) as u32,
++            )
++        }
++    };
++    let (p, s, t, bo) = (
++        mean(panel, panel_n),
++        mean(scene, scene_n),
++        mean(top, top_n),
++        mean(bottom, bottom_n),
++    );
 +    let path = format!("{dir}/present-dump-{n}.ppm");
 +    let mut out = Vec::with_capacity(need / 4 * 3 + 32);
 +    out.extend_from_slice(format!("P6\n{w} {h}\n255\n").as_bytes());
@@ -60,8 +150,9 @@ diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/sr
 +    match std::fs::write(&path, &out) {
 +        Ok(()) => crate::observe::off(format!(
 +            "present_dump wrote={path} identity={:?} {w}x{h} rgb_nz={rgb_nz} max_rgb={max_rgb} \
-+             px0=[{},{},{},{}]",
-+            src.identity, px0[0], px0[1], px0[2], px0[3]
++             px0=[{},{},{},{}] red_px={red_px} panel_rgb={:?} scene_rgb={:?} top_rgb={:?} \
++             bottom_rgb={:?}",
++            src.identity, px0[0], px0[1], px0[2], px0[3], p, s, t, bo
 +        )),
 +        Err(error) => crate::observe::off(format!("present_dump fail={error} path={path}")),
 +    }
@@ -71,7 +162,7 @@ diff --git a/crates/reims-vgpu/src/host_window/present.rs b/crates/reims-vgpu/sr
      /// presenter before the loop ends, and an attach that failed never stored a
      /// window at all. Both already named themselves where they happened, so a
      /// redraw arriving after either is expected control flow and stays quiet.
-@@ -1385,6 +1441,13 @@
+@@ -1385,6 +1539,13 @@
              return;
          }
          let frame = self.frames.lock().ok().and_then(|guard| guard.clone());
