@@ -18,8 +18,10 @@
   davinciSrc = builtins.readFile (pkgs.path + "/pkgs/by-name/da/davinci-resolve/package.nix");
   davinciSrcFixed = builtins.replaceStrings (builtins.attrNames davinci-hash-fixes) (builtins.attrValues davinci-hash-fixes) davinciSrc;
 
-  # DaVinci Resolve needs the NVIDIA dGPU — wrap it with the offload environment
-  # variables so it always runs on the discrete GPU.
+  # DaVinci Resolve needs the NVIDIA dGPU. With Cardwire in smart mode the
+  # environment variables alone are not enough — the eBPF LSM hook blocks
+  # /dev/nvidia* until a process is routed to the dGPU — so it also gets
+  # CARDWIRE_FORCE_DGPU (the same variables Cardwire's Switcheroo shim sets).
   davinci-resolve-wrapped = pkgs.symlinkJoin {
     name = "davinci-resolve-wrapped";
     paths = [pkgs.davinci-resolve];
@@ -27,6 +29,7 @@
 
     postBuild = ''
       wrapProgram $out/bin/davinci-resolve \
+        --set CARDWIRE_FORCE_DGPU 1 \
         --set __NV_PRIME_RENDER_OFFLOAD 1 \
         --set __GLX_VENDOR_LIBRARY_NAME nvidia \
         --set CUDA_VISIBLE_DEVICES 0 \

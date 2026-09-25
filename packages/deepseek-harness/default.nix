@@ -1,5 +1,5 @@
-# DeepSeek Harness (dsh) — built from the upstream monorepo at dsh-v0.1.6-alpha.2
-# (commit ddefc45fbc7f8e46dd73185e68295696d1297887).
+# DeepSeek Harness (dsh) — built from the upstream monorepo at dsh-v0.1.7-rc.2
+# (commit 477b4f420553e8a52c2fbccc464d7561b239c443).
 #
 # Uses the upstream pnpm-lock.yaml via fetchPnpmDeps and builds the TS/web
 # workspace with pnpmBuildHook. The whole tree is shipped because dsh resolves
@@ -15,20 +15,31 @@
 #   and add back native landlock, Nix bash, official Node runtime, and richer
 #   install checks.
 #
+# The Electron desktop client is packaged from the same tree: upstream has no
+# Linux release, so the shell runs unpackaged ("development" mode) against the
+# built workspace, with a desktop-runtime.json descriptor and a "primary
+# runtime" payload (pinned Node, Python, and Office wheels) assembled from
+# scripts/primary-runtime/lock.json. `dsh-desktop` wraps the Nixpkgs Electron.
+#
 # Update notes: bump `version`, `rev`/`hash`, and the `fetchPnpmDeps` hash. The
 # source tarball has no .git, so also update `DSH_CLIENT_COMMIT_HASH` in
 # `preBuild` to the new pinned commit. Bump `nodeRuntimeVersion` (and its hash)
-# when upstream moves to a Node release the current runtime cannot run.
+# when upstream moves to a Node release the current runtime cannot run. The
+# primary-runtime assets are read from the pinned source's lock.json, so no
+# hashes change there; bump `desktopProtocolVersion` when upstream's
+# apps/desktop/src/host-protocol.ts does.
 
 {
   lib,
   stdenv,
   bashInteractive,
+  electron_44,
   fetchFromGitHub,
   fetchPnpmDeps,
   fetchurl,
   glibc,
   makeBinaryWrapper,
+  makeWrapper,
   nodejs_24,
   nodejs-slim_24,
   patchelf,
@@ -37,6 +48,7 @@
   pnpmBuildHook,
   pnpmConfigHook,
   versionCheckHook,
+  zlib,
 }:
 
 let
@@ -88,16 +100,42 @@ let
   };
 
   runtimePnpm = pnpm_11.override { nodejs-slim = nodejs-slim_24; };
+
+  # Electron desktop release metadata (see apps/desktop/src/host-protocol.ts).
+  desktopProtocolVersion = 4;
 in
-stdenv.mkDerivation (finalAttrs: {
+stdenv.mkDerivation (finalAttrs: let
+  # Primary runtime inputs pinned by the same source tree. `builtins.readFile`
+  # on the fixed-output source path makes the lock available at evaluation
+  # time, so wheel and interpreter URLs never need to be copied here.
+  lock = builtins.fromJSON (builtins.readFile "${finalAttrs.src}/scripts/primary-runtime/lock.json");
+  primaryTarget = "linux-x64";
+  primaryLock = lock.targets.${primaryTarget};
+  primaryPythonArchive = "cpython-${lock.pythonVersion}+${lock.pythonRelease}-${primaryLock.pythonTarget}-install_only_stripped.tar.gz";
+  primaryNodeAsset = fetchurl {
+    url = "https://nodejs.org/dist/v${lock.nodeVersion}/node-v${lock.nodeVersion}-${primaryLock.nodeArchive}";
+    sha256 = primaryLock.nodeSha256;
+  };
+  primaryPythonAsset = fetchurl {
+    url = "https://github.com/astral-sh/python-build-standalone/releases/download/${lock.pythonRelease}/${primaryPythonArchive}";
+    sha256 = primaryLock.pythonSha256;
+  };
+  primaryWheelAssets = map (wheel: {
+    inherit (wheel) sha256;
+    asset = fetchurl {
+      inherit (wheel) url sha256;
+    };
+  }) (primaryLock.wheels ++ lock.wheels);
+in
+{
   pname = "deepseek-harness";
-  version = "0.1.6-alpha.2";
+  version = "0.1.7-rc.2";
 
   src = fetchFromGitHub {
     owner = "deepseek-ai";
     repo = "deepseek-harness";
-    rev = "ddefc45fbc7f8e46dd73185e68295696d1297887";
-    hash = "sha256-zoO7+AFR5KiNgmA+4agclQm7oPiE+T0WgMCM0j4Vcdw=";
+    rev = "477b4f420553e8a52c2fbccc464d7561b239c443";
+    hash = "sha256-bWeyipPsY5KclNGJPIttZ9CKRXCqkNIoKmK8VKN7FnI=";
   };
 
   # fetchPnpmDeps downloads the entire dependency tree (several GB of
@@ -117,7 +155,7 @@ stdenv.mkDerivation (finalAttrs: {
     inherit (finalAttrs) pname version src;
     pnpm = pnpm_11;
     fetcherVersion = 4;
-    hash = "sha256-ec8cTYvji3Xw5+vkETJk62aZ8Ku0YEU9rrUvgcmT6LY=";
+    hash = "sha256-rDV6HxYwnPROBOP7/JY/cZ7kqmxv0zxOncjJghIvvM4=";
   }).overrideAttrs (old: {
     installPhase = ''
       runHook preInstall
@@ -179,7 +217,9 @@ stdenv.mkDerivation (finalAttrs: {
 
   nativeBuildInputs = [
     makeBinaryWrapper
+    makeWrapper
     nodejs_24
+    patchelf
     pnpm_11
     pnpmConfigHook
     pnpmBuildHook
@@ -219,18 +259,64 @@ stdenv.mkDerivation (finalAttrs: {
       --replace-fail \
         "const fileId = virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)" \
         "const fileId = resolvePath(virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))"
+
+    # The primary-runtime staging directory contains the extracted Python
+    # distribution's read-only directories, which Node's recursive rmSync
+    # cannot unlink; GNU rm chmods them before removing.
+    substituteInPlace scripts/primary-runtime/prepare.ts \
+      --replace-fail \
+        "rmSync(staging, { recursive: true, force: true })" \
+        "execFileSync('rm', ['-rf', staging])"
+
+    # Run the Desktop Host under the official Node runtime: its runtime-probing
+    # addon (node-addon-require-builtin) does not recognize Electron's Node.
+    substituteInPlace apps/desktop/src/main.ts \
+      --replace-fail \
+        "  const node = process.execPath" \
+        "  const node = process.env.DSH_DESKTOP_NODE_EXECUTABLE ?? process.execPath"
   '';
 
   dontPatchShebangs = true;
 
+  # The bundled Node and Python runtimes are patched by hand in installPhase;
+  # the default strip/patchELF fixup pass corrupts the official Node binary.
+  dontPatchELF = true;
+  dontStrip = true;
+
   preBuild = ''
     # Source tarballs do not include .git; supply the pinned commit hash that
     # scripts/client-build-environment.ts embeds into client artifacts.
-    export DSH_CLIENT_COMMIT_HASH=ddefc45
+    export DSH_CLIENT_COMMIT_HASH=477b4f4
   '';
 
   postBuild = ''
     pnpm --dir native/system run build:native
+
+    # Assemble the desktop primary runtime (upstream Node, Python, and Office
+    # wheels) without network: the pinned fetchurl assets are pre-seeded into
+    # the download cache the preparation script reads by sha256.
+    primaryCache="$NIX_BUILD_TOP/dsh-primary-cache"
+    primaryOut="$NIX_BUILD_TOP/dsh-primary-out"
+    mkdir -p "$primaryCache" "$primaryOut"
+    cp ${primaryNodeAsset} "$primaryCache/${primaryLock.nodeSha256}"
+    cp ${primaryPythonAsset} "$primaryCache/${primaryLock.pythonSha256}"
+    ${lib.concatMapStrings (wheel: ''
+      cp ${wheel.asset} "$primaryCache/${wheel.sha256}"
+    '') primaryWheelAssets}
+    chmod u+w "$primaryCache"/*
+
+    cat > prepare-primary-runtime.mjs <<'EOF'
+    import { preparePrimaryRuntime } from './scripts/primary-runtime/prepare.ts'
+
+    await preparePrimaryRuntime({
+      target: 'linux-x64',
+      output: process.argv[2],
+      cache: process.argv[3],
+      version: process.argv[4],
+    })
+    EOF
+    ${lib.getExe nodejs_24} --import tsx/esm prepare-primary-runtime.mjs "$primaryOut" "$primaryCache" ${finalAttrs.version}
+    rm -f prepare-primary-runtime.mjs prepare-primary-runtime.mjs.tsbuildinfo
   '';
 
   installPhase = ''
@@ -268,6 +354,80 @@ stdenv.mkDerivation (finalAttrs: {
       --add-flags "--expose-internals" \
       --add-flags "$out/libexec/dsh/apps/cli/lib/bin.js" \
       --prefix PATH : ${lib.makeBinPath [ runtimeNode runtimePnpm ]}
+
+    # --- Electron desktop client -------------------------------------------
+
+    # The primary runtime lives beside its office-skills assets, and dsh's
+    # desktop-host resolves pnpm/node-addon assets from the workspace root.
+    mkdir -p $out/libexec/dsh-desktop
+    cp -r "$NIX_BUILD_TOP/dsh-primary-out/primary-runtime" $out/libexec/dsh-desktop/primary-runtime
+    cp -r "$NIX_BUILD_TOP/dsh-primary-out/office-skills" $out/libexec/dsh-desktop/office-skills
+
+    # Upstream's prebuilt Node/Python expect a system loader; patch them for
+    # the Nix store the same way runtimeNode is patched.
+    chmod -R u+w $out/libexec/dsh-desktop
+    runtimeLibPath="${lib.makeLibraryPath [ glibc stdenv.cc.cc.lib ]}"
+    patchelf --set-interpreter ${stdenv.cc.bintools.dynamicLinker} \
+      --set-rpath "$runtimeLibPath" \
+      $out/libexec/dsh-desktop/primary-runtime/dependencies/node/bin/node
+    # python, python3, and python3.12 are hardlinks in the archive; patchelf
+    # replaces the file, breaking the link, so patch each name separately.
+    for pythonBin in python python3 python3.12; do
+      patchelf --set-interpreter ${stdenv.cc.bintools.dynamicLinker} \
+        --add-rpath "$runtimeLibPath" \
+        "$out/libexec/dsh-desktop/primary-runtime/dependencies/python/bin/$pythonBin"
+    done
+
+    # Release metadata the shell validates before starting the host: only the
+    # two core packages are required at runtime, and the host runs under the
+    # bundled Node runtime, not Electron's.
+    LEAD_VERSION=${finalAttrs.version} \
+    BUNDLED_NODE_VERSION=${nodeRuntimeVersion} \
+    ${lib.getExe nodejs_24} - "$out" <<'NODE'
+    const { readFileSync, writeFileSync } = require('node:fs')
+    const out = process.argv[2]
+    const version = process.env.LEAD_VERSION
+    const pnpmVersion = JSON.parse(
+      readFileSync(out + '/libexec/dsh/apps/desktop/node_modules/pnpm/package.json', 'utf8')).version
+    const release = {
+      schemaVersion: 1,
+      version,
+      hostProtocolVersion: ${toString desktopProtocolVersion},
+      nodeVersion: process.env.BUNDLED_NODE_VERSION,
+      pnpmVersion,
+    }
+    const sharedPackages = ['@deepseek-ai/dsh', '@deepseek-ai/dsh-desktop-host'].map((name) => ({
+      name,
+      version,
+      path: 'node_modules/' + name,
+    }))
+    writeFileSync(out + '/libexec/dsh/desktop-runtime.json',
+      JSON.stringify({ schemaVersion: 1, release, platform: 'linux', arch: 'x64', sharedPackages, files: [] }, null, 2) + '\n')
+    NODE
+
+    makeWrapper ${lib.getExe' electron_44 "electron"} $out/bin/dsh-desktop \
+      --add-flags "$out/libexec/dsh/apps/desktop" \
+      --set DSH_DESKTOP_DSH_DIR "$out/libexec/dsh" \
+      --set DSH_DESKTOP_PRIMARY_RUNTIME_DIR "$out/libexec/dsh-desktop/primary-runtime" \
+      --set DSH_DESKTOP_NODE_EXECUTABLE ${lib.getExe runtimeNode} \
+      --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath [ glibc stdenv.cc.cc.lib zlib ]}"
+
+    install -Dm644 $out/libexec/dsh/apps/desktop/resources/icon.png \
+      $out/share/icons/hicolor/512x512/apps/dsh-desktop.png
+    install -Dm644 $out/libexec/dsh/apps/desktop/resources/icon.png \
+      $out/share/icons/hicolor/256x256/apps/dsh-desktop.png
+    mkdir -p $out/share/applications
+    cat > $out/share/applications/dsh-desktop.desktop <<'EOF'
+    [Desktop Entry]
+    Type=Application
+    Name=DeepSeek Harness
+    Comment=DeepSeek Harness AI agent desktop client
+    Exec=dsh-desktop %U
+    Icon=dsh-desktop
+    Terminal=false
+    Categories=Development;Utility;
+    Keywords=DeepSeek;Harness;AI;Agent;
+    EOF
 
     runHook postInstall
   '';
@@ -376,6 +536,24 @@ stdenv.mkDerivation (finalAttrs: {
     if grep -RIlE --exclude-dir=node_modules '/build/(source|tmp\.|\.home)' "$app"; then
       exit 1
     fi
+
+    # --- Desktop client checks ---------------------------------------------
+
+    desktop="$out/libexec/dsh-desktop"
+    test -f "$app/desktop-runtime.json"
+    test -x "$out/bin/dsh-desktop"
+    test -f "$out/share/applications/dsh-desktop.desktop"
+    test -f "$desktop/office-skills/scripts/check_office.py"
+
+    # The patched bundled interpreters must run without nix-ld. The wheels need
+    # libstdc++ and zlib, which the runtime Node would normally provide through
+    # its DT_RPATH; a direct Python launch gets them from the library path.
+    bundledNode="$desktop/primary-runtime/dependencies/node/bin/node"
+    bundledPython="$desktop/primary-runtime/dependencies/python/bin/python3"
+    "$bundledNode" -e 'process.exit(globalThis.process.versions.node ? 0 : 1)'
+    LD_LIBRARY_PATH="${lib.makeLibraryPath [ glibc stdenv.cc.cc.lib zlib ]}" \
+      "$bundledPython" -I -B -c 'import numpy, pandas, docx, pptx, openpyxl, lxml, PIL'
+    "$bundledNode" "$desktop/primary-runtime/dependencies/pnpm/bin/pnpm.mjs" --version
   '';
 
   meta = {

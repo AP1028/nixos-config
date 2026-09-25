@@ -36,4 +36,9 @@
   # ComfyUI must NOT auto-start at boot (manual `systemctl start comfyui`).
   # The comfyui-nix module wants multi-user.target; force that off.
   systemd.services.comfyui.wantedBy = lib.mkForce [];
+
+  # Headless CUDA workload: Cardwire's eBPF LSM hook blocks /dev/nvidia* by
+  # default, so this service needs an explicit allow (ALLOW is enough — CUDA
+  # does not care which GPU is the "default").
+  systemd.services.comfyui.environment.CARDWIRE_ALLOW = "1";
 }

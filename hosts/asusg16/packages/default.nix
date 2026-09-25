@@ -21,7 +21,6 @@ in {
     ../../../modules/packages/flatpak-flatseal.nix
     ../../../modules/packages/flatpak-netease.nix
     ../../../modules/packages/r2modman.nix
-    ../../../modules/packages/electron-hide-nvidia.nix
     ../../../modules/packages/davinci.nix
     ../../../modules/packages/opencode.nix
     ../../../modules/packages/codex.nix
@@ -68,6 +67,7 @@ in {
     zotero
     qalculate-qt
     pinta
+    peazip
     audacity
     easyeffects
     (whisper-cpp.override { cudaSupport = true; }) # local speech-to-text, CUDA-accelerated for lecture transcription

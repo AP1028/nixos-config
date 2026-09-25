@@ -25,6 +25,7 @@
     ./comfyui.nix
 
     ../../modules/hardware/nvidia.nix
+    ../../modules/hardware/cardwire.nix
     ../../modules/hardware/i915-sriov.nix
     ../../modules/hardware/secureboot.nix
     ../../modules/hardware/asusctl.nix

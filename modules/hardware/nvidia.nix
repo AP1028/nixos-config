@@ -24,7 +24,10 @@
     prime = {
       offload = {
         enable = true;
-        enableOffloadCmd = true;
+        # The stock nvidia-offload script is replaced by the one in
+        # modules/hardware/cardwire.nix, which adds CARDWIRE_FORCE_DGPU so
+        # Cardwire's eBPF LSM hook unblocks /dev/nvidia* for the process.
+        enableOffloadCmd = false;
       };
       intelBusId = "PCI:0:2:0";
       nvidiaBusId = "PCI:1:0:0";
@@ -46,12 +49,23 @@
 
   services.power-profiles-daemon.enable = false;
 
-  # Default to iGPU (Mesa) — use nvidia-offload for NVIDIA.
-  # This keeps the dGPU free for VFIO passthrough without rogue
-  # WebKit / Electron / Vulkan processes holding /dev/nvidia*.
+  # Keeping the dGPU asleep is now Cardwire's job (see
+  # modules/hardware/cardwire.nix): its eBPF LSM hooks deny /dev/nvidia* to
+  # every process that has not been explicitly allowed, so no environment pin
+  # is needed to stop rogue WebKit / Electron / Vulkan clients from waking it.
+  #
+  # `__GLX_VENDOR_LIBRARY_NAME = "mesa"` is kept as a cheap default: it is
+  # overridden per process by nvidia-offload and by Cardwire's Switcheroo
+  # environment, so offloaded apps still get NVIDIA GLX.
+  #
+  # The EGL vendor pin that used to live here had to go: with
+  # CARDWIRE_FORCE_DGPU the iGPU is hidden from the app, so a hard
+  # Mesa-only EGL list would leave offloaded EGL clients with no usable
+  # device. Without it libglvnd tries 10_nvidia.json first (denied instantly
+  # with -ENOENT for blocked apps, so it falls back to Mesa and the dGPU never
+  # resumes) and succeeds for allowed apps.
   environment.variables = {
     __GLX_VENDOR_LIBRARY_NAME = "mesa";
-    __EGL_VENDOR_LIBRARY_FILENAMES = "/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json";
   };
 
   environment.systemPackages = with pkgs; [
