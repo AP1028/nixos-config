@@ -114,6 +114,18 @@ in {
     script = "${lib.getExe' config.services.cardwired.package "cardwire"} set smart";
   };
 
+  # ── Hide the vendor manifests from blocked processes ─────────────────
+  # Upstream hides only the *device nodes* per process; the Vulkan ICD, EGL
+  # vendor, implicit-layer and OpenCL manifests stay readable, so a blocked app
+  # still enumerates a driver it cannot use — CEF/ANGLE calls that fatal and
+  # crash-loops (window appears ~13-20 s late, software rendered). The overlay
+  # extends the same per-process inode map to those manifests, so a blocked
+  # process sees no NVIDIA vendor at all while allowed ones (games, CUDA,
+  # nvidia-offload) keep full access.
+  nixpkgs.overlays = [
+    (import ../../packages/cardwire-hide-vendor-manifests.nix)
+  ];
+
   # ── Per-application allow list for Steam games ───────────────────────
   # Cardwire is only an allow/deny gate: "Allowed" means *both GPUs are
   # available* and the application itself decides which one to use — no forcing

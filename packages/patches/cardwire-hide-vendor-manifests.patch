@@ -1,0 +1,126 @@
+diff --git a/crates/cardwire-daemon/src/core/inode.rs b/crates/cardwire-daemon/src/core/inode.rs
+index 6a1d9f5..57336cb 100644
+--- a/crates/cardwire-daemon/src/core/inode.rs
++++ b/crates/cardwire-daemon/src/core/inode.rs
+@@ -81,6 +81,15 @@ pub fn get_inodes(
+                 );
+             }
+         };
++        // Also hide the vendor's user-space manifests: blocking device nodes
++        // alone still lets a blocked process enumerate the driver and watch it
++        // fail to open the denied device (see vendor_meta_inodes).
++        match vendor_meta_inodes() {
++            Ok(mut inodes) => total_inodes.append(&mut inodes),
++            Err(err) => {
++                error!("(ignoring) failed to get vendor metadata inodes: {}", err);
++            }
++        };
+     }
+ 
+     Ok(total_inodes)
+@@ -227,8 +236,104 @@ pub fn exp_nvidia_inodes() -> Result<Vec<InodeKey>> {
+     Ok(inodes)
+ }
+ 
+-pub fn sys_drm_inodes(render: u32, card: u32) -> Result<Vec<InodeKey>> {
++/// Driver metadata files that advertise a vendor to user space: Vulkan ICD
++/// manifests, libglvnd EGL/GLX vendor manifests, Vulkan implicit layers and
++/// OpenCL vendor files.
++///
++/// Blocking the device nodes is not enough on its own — a blocked process can
++/// still read these manifests, load the vendor driver, and then watch it fail
++/// to open the denied device. Consumers that treat that failure as fatal
++/// instead of falling back (CEF/ANGLE/SwANGLE: "Initialization of all EGL
++/// display types failed", GPU process crash loop, GPU acceleration disabled)
++/// start slowly and render in software because of it. Put in the *per-process*
++/// map, these inodes make the vendor look absent to non-allowed processes —
++/// ENOENT for reads and hidden from directory listings — while allowed
++/// processes keep full access.
++///
++/// Contrast `exp_nvidia_inodes()`, which the experimental global NVIDIA block
++/// uses: that map is global, so it also hides the vendor from allowed
++/// processes (which is why it breaks CUDA for them).
++pub fn vendor_meta_inodes() -> Result<Vec<InodeKey>> {
++    // (directory, files in it that belong to the vendor)
++    const VENDOR_MANIFESTS: &[(&str, &[&str])] = &[
++        // NixOS: the driver tree referenced by hardware.graphics
++        (
++            "/run/opengl-driver/share/vulkan/icd.d",
++            &["nvidia_icd.json", "nvidia_icd.x86_64.json"],
++        ),
++        (
++            "/run/opengl-driver-32/share/vulkan/icd.d",
++            &["nvidia_icd.json", "nvidia_icd.i686.json"],
++        ),
++        (
++            "/run/opengl-driver/share/vulkan/implicit_layer.d",
++            &["nvidia_layers.json"],
++        ),
++        (
++            "/run/opengl-driver/share/glvnd/egl_vendor.d",
++            &["10_nvidia.json"],
++        ),
++        (
++            "/run/opengl-driver-32/share/glvnd/egl_vendor.d",
++            &["10_nvidia.json"],
++        ),
++        ("/run/opengl-driver/etc/OpenCL/vendors", &["nvidia.icd"]),
++        // Standard Linux layouts
++        (
++            "/etc/vulkan/icd.d",
++            &[
++                "nvidia_icd.json",
++                "nvidia_icd.x86_64.json",
++                "nvidia_icd.i686.json",
++            ],
++        ),
++        (
++            "/usr/share/vulkan/icd.d",
++            &[
++                "nvidia_icd.json",
++                "nvidia_icd.x86_64.json",
++                "nvidia_icd.i686.json",
++            ],
++        ),
++        (
++            "/usr/share/vulkan/implicit_layer.d",
++            &["nvidia_layers.json"],
++        ),
++        ("/usr/share/glvnd/egl_vendor.d", &["10_nvidia.json"]),
++        ("/etc/OpenCL/vendors", &["nvidia.icd"]),
++    ];
++
+     let mut inodes: Vec<InodeKey> = Vec::new();
++
++    for (dir, names) in VENDOR_MANIFESTS {
++        let Ok(entries) = fs::read_dir(dir) else {
++            continue;
++        };
++
++        for entry in entries.flatten() {
++            let entry_name = entry.file_name();
++            let Some(name) = entry_name.to_str() else {
++                continue;
++            };
++
++            if !names.contains(&name) {
++                continue;
++            }
++
++            let Ok(metadata) = fs::metadata(entry.path()) else {
++                continue;
++            };
++
++            if metadata.is_file() {
++                inodes.push(InodeKey::new(name, metadata.ino()));
++            }
++        }
++    }
++
++    Ok(inodes)
++}
++
++pub fn sys_drm_inodes(render: u32, card: u32) -> Result<Vec<InodeKey>> {    let mut inodes: Vec<InodeKey> = Vec::new();
+     let sys_path = Path::new("/sys/class/drm");
+ 
+     let card = format!("card{}", card);
