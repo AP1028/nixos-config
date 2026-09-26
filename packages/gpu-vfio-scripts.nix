@@ -21,9 +21,35 @@
     SILENT=false
     case "''${1:-}" in -s) SILENT=true; shift;; esac
 
+    # ── Cardwire: pause the GPU manager for the handoff ──────────
+    # cardwired holds /dev/nvidia* open for its eBPF LSM hooks, and that LSM
+    # answers ENOENT on GPU device/sysfs paths. Left running it both pins the
+    # nvidia modules (rmmod fails) and hides the real holders from gpu_holders
+    # below — the two things this script depends on. The EXIT trap resumes it
+    # only if the GPU ends up back on the nvidia driver: on vfio-pci there is
+    # nothing for cardwire to manage.
+    if systemctl is-active --quiet cardwired.service 2>/dev/null; then
+        systemctl stop cardwired.service 2>/dev/null \
+            && ok "cardwired paused for GPU handoff" \
+            || warn "could not stop cardwired — module unload may fail"
+    fi
+    cardwire_resume() {
+        local drv="none"
+        if [ -n "''${GPU_BDF:-}" ]; then
+            drv=$(readlink "/sys/bus/pci/devices/$GPU_BDF/driver" 2>/dev/null | xargs basename 2>/dev/null || echo none)
+        fi
+        [ "$drv" = "nvidia" ] || return 0
+        systemctl is-enabled --quiet cardwired.service 2>/dev/null || return 0
+        systemctl is-active --quiet cardwired.service 2>/dev/null && return 0
+        systemctl start cardwired.service 2>/dev/null && ok "cardwired resumed"
+        return 0
+    }
+    trap cardwire_resume EXIT
+
     # ── GPU-holder helpers (used by the force path) ──────────────
-    # System daemons are tolerated here — they are stopped via systemd later
-    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced"
+    # System daemons are tolerated here — they are stopped via systemd later.
+    # cardwired is paused above; it is never a GPU holder to act on.
+    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced|cardwired"
 
     # List live (non-zombie) PIDs holding NVIDIA devices
     gpu_holders() {
@@ -420,6 +446,28 @@
     SILENT=false
     case "''${1:-}" in -s) SILENT=true; shift;; esac
 
+    # ── Cardwire: pause the GPU manager for the handoff ──────────
+    # Same as gpu-to-vfio: while cardwired runs, its LSM hides the GPU paths
+    # this script probes. Resumed by the EXIT trap when the GPU is back on
+    # nvidia (gpu-on handles the "GPU was powered off" path via exec below).
+    if systemctl is-active --quiet cardwired.service 2>/dev/null; then
+        systemctl stop cardwired.service 2>/dev/null \
+            && ok "cardwired paused for GPU handoff" \
+            || warn "could not stop cardwired — binding may misbehave"
+    fi
+    cardwire_resume() {
+        local drv="none"
+        if [ -n "''${GPU_BDF:-}" ]; then
+            drv=$(readlink "/sys/bus/pci/devices/$GPU_BDF/driver" 2>/dev/null | xargs basename 2>/dev/null || echo none)
+        fi
+        [ "$drv" = "nvidia" ] || return 0
+        systemctl is-enabled --quiet cardwired.service 2>/dev/null || return 0
+        systemctl is-active --quiet cardwired.service 2>/dev/null && return 0
+        systemctl start cardwired.service 2>/dev/null && ok "cardwired resumed"
+        return 0
+    }
+    trap cardwire_resume EXIT
+
     # ── Discover / wake NVIDIA dGPU ──────────────────────────────
     info "Discovering NVIDIA dGPU..."
 
@@ -814,6 +862,18 @@
             printf "  %-35s not active\n" "$svc"
         fi
     done
+
+    # ── Cardwire ─────────────────────────────────────────────────
+    # cardwired answers ENOENT on GPU device/sysfs paths for processes it has
+    # not allowed, so the checks above can report a GPU as absent while it runs.
+    # gpu-to-vfio / gpu-to-host / gpu-off / gpu-on pause it for their handoff.
+    if systemctl is-active --quiet cardwired.service 2>/dev/null; then
+        mode=$(cardwire get 2>/dev/null | awk -F': ' '/Current Mode/{print $2}')
+        printf "  \e[32m%-35s active (%s)\e[0m\n" "cardwired.service" "''${mode:-unknown mode}"
+        printf "  \e[33m%-35s GPU paths are filtered for non-allowed processes\e[0m\n" ""
+    else
+        printf "  %-35s not active\n" "cardwired.service"
+    fi
     echo ""
 
     # ── Kernel cmdline VFIO params ───────────────────────────────

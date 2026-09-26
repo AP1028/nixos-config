@@ -14,8 +14,29 @@
     green()  { echo -e "\e[32m$*\e[0m" >&2; }
     yellow() { echo -e "\e[33m$*\e[0m" >&2; }
     cyan()   { echo -e "\e[36m$*\e[0m" >&2; }
+    ok()     { echo -e "\e[32m[OK]\e[0m    $*" >&2; }
+    warn()   { echo -e "\e[33m[WARN]\e[0m  $*" >&2; }
 
-    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced"
+    # cardwired holds /dev/nvidia* itself and its eBPF LSM answers ENOENT on
+    # GPU paths, so while it runs this listing is both incomplete (holders are
+    # hidden) and polluted (cardwired shows up as a holder). Pause it for the
+    # inspection; the trap restores it on the way out.
+    CARDWIRE_WAS_ACTIVE=false
+    if systemctl is-active --quiet cardwired.service 2>/dev/null; then
+        CARDWIRE_WAS_ACTIVE=true
+        systemctl stop cardwired.service 2>/dev/null \
+            && ok "cardwired paused while inspecting the GPU" \
+            || warn "could not stop cardwired — listing may be incomplete"
+    fi
+    cardwire_resume() {
+        $CARDWIRE_WAS_ACTIVE || return 0
+        systemctl start cardwired.service 2>/dev/null && ok "cardwired resumed"
+        return 0
+    }
+    trap cardwire_resume EXIT
+
+    # cardwired is infrastructure, never a GPU user to report or kill.
+    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced|cardwired"
 
     echo ""
     cyan "── Processes Using NVIDIA Devices ──"
@@ -111,10 +132,28 @@
     yellow() { echo -e "\e[33m$*\e[0m" >&2; }
     cyan()   { echo -e "\e[36m$*\e[0m" >&2; }
     ok()     { echo -e "\e[32m[OK]\e[0m    $*" >&2; }
+    warn()   { echo -e "\e[33m[WARN]\e[0m  $*" >&2; }
 
     if [ "$EUID" -ne 0 ]; then exec sudo "$0" "$@"; fi
 
-    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced"
+    # See gpu-process-check: cardwired pins the devices and hides them from
+    # fuser, so pause it while we hunt for real holders and restore it after.
+    CARDWIRE_WAS_ACTIVE=false
+    if systemctl is-active --quiet cardwired.service 2>/dev/null; then
+        CARDWIRE_WAS_ACTIVE=true
+        systemctl stop cardwired.service 2>/dev/null \
+            && ok "cardwired paused while killing GPU holders" \
+            || warn "could not stop cardwired — some holders may be missed"
+    fi
+    cardwire_resume() {
+        $CARDWIRE_WAS_ACTIVE || return 0
+        systemctl start cardwired.service 2>/dev/null && ok "cardwired resumed"
+        return 0
+    }
+    trap cardwire_resume EXIT
+
+    # cardwired is infrastructure, never a GPU user to report or kill.
+    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced|cardwired"
 
     echo ""
     cyan "── Checking for Processes Using NVIDIA ──"

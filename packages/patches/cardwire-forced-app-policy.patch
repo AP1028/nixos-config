@@ -1,0 +1,146 @@
+diff --git a/crates/cardwire-daemon/src/analyzer/models.rs b/crates/cardwire-daemon/src/analyzer/models.rs
+index b9292c4..7819b6d 100644
+--- a/crates/cardwire-daemon/src/analyzer/models.rs
++++ b/crates/cardwire-daemon/src/analyzer/models.rs
+@@ -329,6 +329,9 @@ impl CardwireAnalyzer {
+                 match policy {
+                     GpuPolicy::Blocked => return None,
+                     GpuPolicy::Allowed => return Some((true, PidType::Allowed, 0)),
++                    // The eBPF maps use 0 = iGPU, 1 = dGPU; "Forced" means the
++                    // application may only ever see the dGPU.
++                    GpuPolicy::Forced => return Some((true, PidType::Forced, 1)),
+                 }
+             }
+         }
+diff --git a/crates/cardwire-daemon/src/file/sql.rs b/crates/cardwire-daemon/src/file/sql.rs
+index 96b8ff4..39d5ded 100644
+--- a/crates/cardwire-daemon/src/file/sql.rs
++++ b/crates/cardwire-daemon/src/file/sql.rs
+@@ -11,12 +11,17 @@ use zbus::zvariant;
+ pub enum GpuPolicy {
+     Blocked = 0,
+     Allowed = 1,
++    /// Keep the dGPU as the only visible GPU for this application: the
++    /// persistent equivalent of `CARDWIRE_FORCE_DGPU=1`, so no environment
++    /// variable has to be injected at launch.
++    Forced = 2,
+ }
+ impl GpuPolicy {
+     pub fn from_i32(val: i32) -> Self {
+         match val {
+             0 => GpuPolicy::Blocked,
+             1 => GpuPolicy::Allowed,
++            2 => GpuPolicy::Forced,
+             _ => GpuPolicy::Blocked,
+         }
+     }
+@@ -25,6 +30,7 @@ impl GpuPolicy {
+         match val {
+             0 => Some(GpuPolicy::Blocked),
+             1 => Some(GpuPolicy::Allowed),
++            2 => Some(GpuPolicy::Forced),
+             _ => None,
+         }
+     }
+diff --git a/crates/cardwire-daemon/src/interface/smart.rs b/crates/cardwire-daemon/src/interface/smart.rs
+index d97bc51..00c2af0 100644
+--- a/crates/cardwire-daemon/src/interface/smart.rs
++++ b/crates/cardwire-daemon/src/interface/smart.rs
+@@ -55,39 +55,39 @@ impl SmartPolicyInterface {
+             // Equivalent to CARDWIRE_ALLOW=1, show both iGPU and dGPU
+             "Allow_dGPU" => {
+                 {
+-                    // First remove the PID from the other map if present
++                    // First remove the PID from the other map if present. A pid
++                    // that is not tracked there is not an error: this is the
++                    // entry point for processes cardwire has not classified yet.
+                     let mut forced_map = self.forced_map.write().await;
+-                    forced_map
+-                        .remove(&pid)
+-                        .map_err(|err| fdo::Error::Failed(err.to_string()))?;
++                    let _ = forced_map.remove(&pid);
+                 }
+                 let mut pid_map = self.pid_map.write().await;
+                 pid_map
+                     .insert(pid, 0, 0)
+                     .map_err(|err| fdo::Error::Failed(err.to_string()))
+             }
+-            // Equivalent to CARDWIRE_FORCE_DGPU=value
++            // Equivalent to CARDWIRE_FORCE_DGPU=value (1 = dGPU). A caller
++            // passing 0 means "the dGPU", never "no GPU", so normalise it.
+             "Force_dGPU" => {
++                let gpu_id = if value == 0 { 1 } else { value };
+                 {
+-                    // First remove the PID from the other map if present
++                    // First remove the PID from the other map if present; an
++                    // untracked pid must not abort the request.
+                     let mut pid_map = self.pid_map.write().await;
+-                    pid_map
+-                        .remove(&pid)
+-                        .map_err(|err| fdo::Error::Failed(err.to_string()))?;
++                    let _ = pid_map.remove(&pid);
+                 }
+                 let mut force_map = self.forced_map.write().await;
+                 force_map
+-                    .insert(pid, value, 0)
++                    .insert(pid, gpu_id, 0)
+                     .map_err(|err| Failed(err.to_string()))
+             }
+             // Equivalent to CARDWIRE_FORCE_GPU=value
+             "Force_GPU" => {
+                 {
+-                    // First remove the PID from the other map if present
++                    // First remove the PID from the other map if present; an
++                    // untracked pid must not abort the request.
+                     let mut pid_map = self.pid_map.write().await;
+-                    pid_map
+-                        .remove(&pid)
+-                        .map_err(|err| fdo::Error::Failed(err.to_string()))?;
++                    let _ = pid_map.remove(&pid);
+                 }
+                 let mut force_map = self.forced_map.write().await;
+                 force_map
+diff --git a/crates/cardwire-gui/src/ui.rs b/crates/cardwire-gui/src/ui.rs
+index 6235626..fab457a 100644
+--- a/crates/cardwire-gui/src/ui.rs
++++ b/crates/cardwire-gui/src/ui.rs
+@@ -1275,7 +1275,8 @@ pub fn smart_mode_page<'a>(
+         );
+     } else {
+         for (app_id, app) in filtered_apps {
+-            let is_allowed = app.gpu_policy == 1;
++            let is_allowed = app.gpu_policy >= 1;
++            let is_forced = app.gpu_policy == 2;
+ 
+             // App badge icon resolution
+             let initial = app
+@@ -1352,7 +1353,13 @@ pub fn smart_mode_page<'a>(
+             .spacing(2);
+ 
+             // Policy toggle widget & status label
+-            let policy_label = if is_allowed {
++            let policy_label = if is_forced {
++                text("Forced (dGPU)").size(15).color(if is_smart {
++                    Color::from_rgb(0.35, 0.85, 0.45)
++                } else {
++                    Color::from_rgb(0.4, 0.65, 0.4)
++                })
++            } else if is_allowed {
+                 text("Allowed (dGPU)").size(15).color(if is_smart {
+                     Color::from_rgb(0.35, 0.85, 0.45)
+                 } else {
+@@ -1369,7 +1376,13 @@ pub fn smart_mode_page<'a>(
+             let app_id_owned = app_id.clone();
+             let toggle_widget = if is_smart {
+                 toggler(is_allowed).on_toggle(move |val| {
+-                    Message::SetAppPolicy(app_id_owned.clone(), if val { 1 } else { 0 })
++                    // Re-enabling a forced app keeps it forced (policy 2).
++                    let policy = if val {
++                        if is_forced { 2 } else { 1 }
++                    } else {
++                        0
++                    };
++                    Message::SetAppPolicy(app_id_owned.clone(), policy)
+                 })
+             } else {
+                 toggler(is_allowed)

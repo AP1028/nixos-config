@@ -99,6 +99,31 @@
         fi
     fi
 
+    # ── Cardwire: pause the GPU manager for the handoff ──────────
+    # cardwired keeps /dev/nvidia* open (its eBPF LSM hooks need them) and that
+    # LSM answers ENOENT on GPU device and sysfs paths, so leaving it running
+    # makes lspci/fuser below see a GPU that looks absent or unused while the
+    # nvidia modules stay pinned and refuse to unload. Resume it only if the
+    # GPU ends up back on the nvidia driver — on vfio-pci, or with the firmware
+    # dgpu_disable set, cardwire has nothing to manage.
+    if systemctl is-active --quiet cardwired.service 2>/dev/null; then
+        systemctl stop cardwired.service 2>/dev/null \
+            && ok "cardwired paused for GPU handoff" \
+            || warn "could not stop cardwired — module unload may fail"
+    fi
+    cardwire_resume() {
+        local drv="none"
+        if [ -n "''${GPU_BDF:-}" ]; then
+            drv=$(readlink "/sys/bus/pci/devices/$GPU_BDF/driver" 2>/dev/null | xargs basename 2>/dev/null || echo none)
+        fi
+        [ "$drv" = "nvidia" ] || return 0
+        systemctl is-enabled --quiet cardwired.service 2>/dev/null || return 0
+        systemctl is-active --quiet cardwired.service 2>/dev/null && return 0
+        systemctl start cardwired.service 2>/dev/null && ok "cardwired resumed"
+        return 0
+    }
+    trap cardwire_resume EXIT
+
     # ── Discover NVIDIA dGPU functions ───────────────────────────
     GPU_BDF=$(${pciutils}/bin/lspci -D -d 10DE::0300 2>/dev/null | awk 'NR==1{print $1}')
     if [ -z "$GPU_BDF" ]; then
@@ -159,7 +184,9 @@
     fi
 
     # ── Blocker: processes using nvidia devices ──────────────────
-    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced"
+    # cardwired is infrastructure, not a user of the GPU: it is paused above,
+    # and must never be counted here (or killed by the force path).
+    IGNORE_PROCS="nvidia-powerd|nvidia-persistenced|cardwired"
     has_procs=false
     for nvdev in /dev/nvidia*; do
         [ -e "$nvdev" ] || continue
@@ -302,6 +329,29 @@
 
     SILENT=false
     case "''${1:-}" in -s) SILENT=true; shift;; esac
+
+    # ── Cardwire: pause the GPU manager for the handoff ──────────
+    # Same reasoning as gpu-off: while cardwired runs, its eBPF LSM hides GPU
+    # device/sysfs paths from this script, so the GPU reappearing on the bus
+    # would go unnoticed. It is resumed by the EXIT trap once the GPU is back
+    # on the nvidia driver.
+    if systemctl is-active --quiet cardwired.service 2>/dev/null; then
+        systemctl stop cardwired.service 2>/dev/null \
+            && ok "cardwired paused for GPU handoff" \
+            || warn "could not stop cardwired — module load may misbehave"
+    fi
+    cardwire_resume() {
+        local drv="none"
+        if [ -n "''${GPU_BDF:-}" ]; then
+            drv=$(readlink "/sys/bus/pci/devices/$GPU_BDF/driver" 2>/dev/null | xargs basename 2>/dev/null || echo none)
+        fi
+        [ "$drv" = "nvidia" ] || return 0
+        systemctl is-enabled --quiet cardwired.service 2>/dev/null || return 0
+        systemctl is-active --quiet cardwired.service 2>/dev/null && return 0
+        systemctl start cardwired.service 2>/dev/null && ok "cardwired resumed"
+        return 0
+    }
+    trap cardwire_resume EXIT
 
     ASUS_DGPU_DISABLE=/sys/devices/platform/asus-nb-wmi/dgpu_disable
     STATE_DIR=/var/lib/gpu-power
