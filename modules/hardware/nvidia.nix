@@ -25,8 +25,9 @@
       offload = {
         enable = true;
         # The stock nvidia-offload script is replaced by the one in
-        # modules/hardware/cardwire.nix, which adds CARDWIRE_FORCE_DGPU so
-        # Cardwire's eBPF LSM hook unblocks /dev/nvidia* for the process.
+        # modules/hardware/cardwire.nix, which adds CARDWIRE_ALLOW=1 so
+        # Cardwire's eBPF LSM hook unblocks /dev/nvidia* for the process
+        # (both GPUs stay visible; only the vendor vars select NVIDIA).
         enableOffloadCmd = false;
       };
       intelBusId = "PCI:0:2:0";
@@ -58,12 +59,13 @@
   # overridden per process by nvidia-offload and by Cardwire's Switcheroo
   # environment, so offloaded apps still get NVIDIA GLX.
   #
-  # The EGL vendor pin that used to live here had to go: with
-  # CARDWIRE_FORCE_DGPU the iGPU is hidden from the app, so a hard
-  # Mesa-only EGL list would leave offloaded EGL clients with no usable
-  # device. Without it libglvnd tries 10_nvidia.json first (denied instantly
-  # with -ENOENT for blocked apps, so it falls back to Mesa and the dGPU never
-  # resumes) and succeeds for allowed apps.
+  # The EGL vendor pin that used to live here had to go: offloaded apps get
+  # their EGL vendor from the PRIME variables in nvidia-offload (or from
+  # Cardwire's Switcheroo environment). Without a global pin, libglvnd tries
+  # 10_nvidia.json first (denied instantly with -ENOENT for blocked apps, so it
+  # falls back to Mesa and the dGPU never resumes) and succeeds for allowed
+  # apps. Note that cardwire never hides the iGPU: hiding it breaks window
+  # presentation for Xwayland clients (Steam/CEF, Proton games).
   environment.variables = {
     __GLX_VENDOR_LIBRARY_NAME = "mesa";
   };

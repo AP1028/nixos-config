@@ -4,14 +4,11 @@
   pkgs,
   ...
 }: let
-  # Environment for a process that must render/compute on the NVIDIA dGPU.
-  # This is the set Cardwire's Switcheroo shim advertises for "Launch using
-  # Discrete Graphics Card", plus an explicit NVIDIA EGL vendor file.
-  dgpuEnv = {
-    # Cardwire: unblock /dev/nvidia* for this process and hide the iGPU from it.
-    CARDWIRE_FORCE_DGPU = "1";
-
-    # Vendor offload variables (libglvnd / Vulkan loader).
+  # Vendor offload variables (libglvnd / Vulkan loader): these are what make a
+  # process actually *pick* the NVIDIA GPU while the iGPU stays visible and
+  # keeps handling presentation (Xwayland DRI3/Present is backed by the iGPU —
+  # KWin's render node — so hiding the iGPU breaks CEF and Proton games).
+  vendorEnv = {
     __NV_PRIME_RENDER_OFFLOAD = "1";
     __NV_PRIME_RENDER_OFFLOAD_PROVIDER = "NVIDIA-G0";
     __GLX_VENDOR_LIBRARY_NAME = "nvidia";
@@ -23,9 +20,20 @@
     __EGL_VENDOR_LIBRARY_FILENAMES = "/run/opengl-driver/share/glvnd/egl_vendor.d/10_nvidia.json";
   };
 
-  dgpuExports = lib.concatLines (
-    lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") dgpuEnv
+  # Cardwire only ever switches between "iGPU only" (Blocked) and "both GPUs
+  # available" (Allowed); CARDWIRE_FORCE_DGPU is deliberately NOT used anywhere,
+  # because it hides the iGPU and that breaks any windowed client on a
+  # Wayland+Xwayland session (measured: Steam's CEF GPU process crash-loops,
+  # Proton games die on swapchain creation).
+  dgpuEnv = vendorEnv // {
+    CARDWIRE_ALLOW = "1";
+  };
+
+  exportsOf = env: lib.concatLines (
+    lib.mapAttrsToList (name: value: "export ${name}=${lib.escapeShellArg value}") env
   );
+
+  dgpuExports = exportsOf dgpuEnv;
 
   # Where the Steam libraries live (used by the policy seeding below).
   mainUser = config.local.username;
@@ -38,9 +46,10 @@ in {
   # workarounds: a blocked GPU cannot be woken by Vulkan ICD enumeration, an
   # Electron renderer, a GTK app or nvtop, no matter how it is packaged.
   #
-  # Smart mode blocks the dGPU by default and allows it per application:
+  # Smart mode blocks the dGPU by default and allows it per application. Only
+  # two states exist here — "iGPU only" and "both GPUs" — never "iGPU hidden":
   #   - KDE's "Launch using Discrete Graphics Card" (Switcheroo D-Bus shim)
-  #   - `nvidia-offload` / `CARDWIRE_FORCE_DGPU=1` / `CARDWIRE_ALLOW=1`
+  #   - `nvidia-offload` (CARDWIRE_ALLOW=1 + PRIME vendor vars)
   #   - the per-application list in cardwire-gui
   services.cardwired = {
     enable = true;
@@ -105,23 +114,20 @@ in {
     script = "${lib.getExe' config.services.cardwired.package "cardwire"} set smart";
   };
 
-  # ── Persistent per-application "force dGPU" policy ───────────────────
-  # nixpkgs' cardwire only knows Blocked/Allowed per application, so pinning an
-  # app to the dGPU otherwise needs CARDWIRE_FORCE_DGPU=1 at launch — and for a
-  # Steam game that means a per-game launch option, because a game inherits the
-  # environment of the already-running Steam client, not of whatever started
-  # the shortcut. The overlay (packages/cardwire-forced-policy.nix) adds
-  # GpuPolicy::Forced = 2 and fixes RequestProcessAccess; the services below
-  # then seed every installed Steam app id into cardwire's policy DB, so games
-  # run on the dGPU with no per-game configuration while the Steam client
-  # itself stays blocked on the iGPU.
-  nixpkgs.overlays = [
-    (import ../../packages/cardwire-forced-policy.nix)
-  ];
+  # ── Per-application allow list for Steam games ───────────────────────
+  # Cardwire is only an allow/deny gate: "Allowed" means *both GPUs are
+  # available* and the application itself decides which one to use — no forcing
+  # and no environment variables (CARDWIRE_FORCE_DGPU hides the iGPU, which
+  # breaks window presentation for CEF and Proton games, and is never used).
+  # Seeding the policy for every installed game just pre-fills the same list
+  # cardwire-gui shows, so a game needs no per-game launch option; the client
+  # itself has no row, so it stays Blocked/iGPU and never wakes the dGPU.
+  # Existing rows are left untouched (ON CONFLICT DO NOTHING), so whatever you
+  # toggle in the GUI survives reboots.
 
   # The daemon only reads app_policies at startup: seed before it starts.
   systemd.services.cardwire-steam-policies = {
-    description = "Pin installed Steam games to the dGPU in cardwire";
+    description = "Allow the dGPU for installed Steam games in cardwire";
     wantedBy = ["multi-user.target"];
     before = ["cardwired.service"];
     serviceConfig = {
@@ -159,14 +165,15 @@ in {
       count=0
       while IFS= read -r id; do
           [ -n "$id" ] || continue
-          # policy 2 = Forced (added by the patch), 1 = Allowed, 0 = Blocked.
+          # 1 = Allowed (both GPUs available, the app picks), 0 = Blocked.
+          # DO NOTHING keeps any choice already made in cardwire-gui.
           sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
-                         VALUES ('steam_app_$id', 'Steam Game $id', NULL, 'steam_icon_$id', 2)
-                         ON CONFLICT(binary_name) DO UPDATE SET policy = 2;"
+                         VALUES ('steam_app_$id', 'Steam Game $id', NULL, 'steam_icon_$id', 1)
+                         ON CONFLICT(binary_name) DO NOTHING;"
           count=$((count + 1))
       done < <(for d in "''${dirs[@]}"; do grep -hoP '"appid"\s+"\K[0-9]+' "$d"/appmanifest_*.acf 2>/dev/null || true; done | sort -u)
 
-      echo "cardwire: pinned $count Steam game(s) to the dGPU"
+      echo "cardwire: $count installed Steam game(s) allowlisted (existing entries untouched)"
     '';
   };
 
@@ -189,9 +196,11 @@ in {
 
   environment.systemPackages = [
     # Replaces the stock nvidia-offload script (disabled in nvidia.nix): the
-    # same vendor variables plus the Cardwire routing variable, without which
-    # the LSM hook keeps /dev/nvidia* blocked. Also how CUDA/CLI work reaches
-    # the dGPU: `nvidia-offload python train.py`.
+    # same PRIME vendor variables plus CARDWIRE_ALLOW=1, without which the LSM
+    # hook keeps /dev/nvidia* blocked. Note ALLOW, not FORCE: both GPUs stay
+    # visible so windows can be presented, while the vendor vars make the
+    # process actually render on the dGPU. How CUDA/CLI work reaches the dGPU:
+    # `nvidia-offload python train.py`.
     (pkgs.writeShellScriptBin "nvidia-offload" ''
       ${dgpuExports}
       exec "$@"
@@ -203,17 +212,8 @@ in {
       exec ${pkgs.nvtopPackages.nvidia}/bin/nvtop "$@"
     ''))
 
-    # NOTE: there is deliberately no "Steam (dGPU)" launcher here. Forcing the
-    # Steam *client* onto the dGPU hides the iGPU from its whole process tree,
-    # and CEF under Xwayland then cannot build its GLX/EGL surface (logs:
-    # GLXBadPixmap / failed to create drawable, ANGLE eglInitialize
-    # EGL_NOT_INITIALIZED), so the GPU process crash-loops, GPU acceleration is
-    # disabled and the window is created but never painted — which looks like
-    # "Steam is not showing anywhere".
-    # Measured 2026-09-25: forced client = 6 crash-loop restarts then
-    # "Disabling GPU acceleration: Disabled/CrashCount"; plain client = clean
-    # "GPU Report: End [0]" with the dGPU left in D3cold.
-    # Launch plain Steam (client on the iGPU) and let the per-application
-    # Forced policy above route the games themselves.
+    # No Steam launcher and no per-game launch options: games are simply
+    # Allowed by policy (seeded above, or toggled in cardwire-gui) and pick the
+    # GPU themselves. The client stays Blocked/iGPU, so it never wakes the dGPU.
   ];
 }

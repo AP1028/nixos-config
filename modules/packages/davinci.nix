@@ -21,7 +21,8 @@
   # DaVinci Resolve needs the NVIDIA dGPU. With Cardwire in smart mode the
   # environment variables alone are not enough — the eBPF LSM hook blocks
   # /dev/nvidia* until a process is routed to the dGPU — so it also gets
-  # CARDWIRE_FORCE_DGPU (the same variables Cardwire's Switcheroo shim sets).
+  # CARDWIRE_ALLOW (both GPUs available). Not FORCE_DGPU: hiding the iGPU breaks
+  # window presentation on Wayland+Xwayland.
   davinci-resolve-wrapped = pkgs.symlinkJoin {
     name = "davinci-resolve-wrapped";
     paths = [pkgs.davinci-resolve];
@@ -29,7 +30,7 @@
 
     postBuild = ''
       wrapProgram $out/bin/davinci-resolve \
-        --set CARDWIRE_FORCE_DGPU 1 \
+        --set CARDWIRE_ALLOW 1 \
         --set __NV_PRIME_RENDER_OFFLOAD 1 \
         --set __GLX_VENDOR_LIBRARY_NAME nvidia \
         --set CUDA_VISIBLE_DEVICES 0 \
