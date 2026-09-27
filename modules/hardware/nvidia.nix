@@ -54,24 +54,39 @@
   # modules/hardware/cardwire.nix): its eBPF LSM hooks deny /dev/nvidia* to
   # every process that has not been explicitly allowed.
   #
-  # Both vendor pins below are "prefer the iGPU" defaults rather than a
-  # security boundary — the LSM is the boundary. They are here because a denied
-  # device must not be *attempted*: libglvnd walks the EGL vendor list starting
-  # with 10_nvidia.json, and when cardwire denies that device the eglInitialize
-  # failure is fatal to ANGLE/CEF instead of falling back to Mesa. Measured:
-  # Steam's GPU process crash-loops ("Disabling GPU acceleration:
-  # Disabled/CrashCount") and the window is painted ~13-20 s late; the first
-  # such event in the entire Steam log is 2026-09-25 20:46, hours after cardwire
-  # was installed and this pin was dropped. With the pin, CEF initialises Mesa
-  # immediately.
+  # There used to be two *global* "prefer the iGPU" pins here
+  # (__GLX_VENDOR_LIBRARY_NAME=mesa and a Mesa-only EGL vendor list). They were a
+  # workaround for a denied device still being *attempted*: libglvnd walked the
+  # EGL vendor list, tried 10_nvidia.json, and ANGLE/CEF treated the resulting
+  # eglInitialize failure as fatal, so Steam's GPU process crash-looped. Both are
+  # gone, for two reasons:
   #
-  # Per-process overrides still win: nvidia-offload (and DaVinci) set the NVIDIA
-  # GLX/EGL vendors for themselves, and Vulkan is a separate ICD list — a game
-  # that is Allowed can still enumerate and use the NVIDIA Vulkan device.
-  environment.variables = {
-    __GLX_VENDOR_LIBRARY_NAME = "mesa";
-    __EGL_VENDOR_LIBRARY_FILENAMES = "/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json";
-  };
+  #   1. cardwire now hides the NVIDIA user-space vendor from blocked processes
+  #      (manifests *and* driver libraries, per process —
+  #      packages/patches/cardwire-hide-nvidia-userspace.patch), so a blocked
+  #      process never sees the vendor to attempt it, and an *allowed* process
+  #      sees the real vendor list. The global pin is redundant; the LSM is the
+  #      boundary.
+  #   2. They break a MUX flip hard. With the display driven by the dGPU
+  #      ("discrete only"), `__GLX_VENDOR_LIBRARY_NAME=mesa` forces libglvnd to
+  #      load Mesa's GLX — which has no driver for the NVIDIA-only display — and
+  #      the Mesa-only EGL list cuts off NVIDIA EGL entirely: GLX/EGL clients fail
+  #      instead of using the GPU that is actually present.
+  #
+  # Per-process overrides are unaffected and remain the way to ask for the dGPU
+  # explicitly: nvidia-offload (and DaVinci) set the NVIDIA GLX/EGL vendors for
+  # themselves, and Vulkan has its own ICD list, so an allowed game still
+  # enumerates the NVIDIA Vulkan device.
+  #
+  # Note for MUX/"discrete only" use: when the iGPU stays enumerated it keeps
+  # gpu id 0 (cardwire numbers GPUs by PCI address), so cardwire's smart mode
+  # would still block the dGPU that is now driving the display. Put cardwire in
+  # Hybrid mode (no blocking) before relying on a dGPU-only MUX state — or, if the
+  # firmware hides the iGPU, the dGPU becomes id 0 and smart mode blocks nothing
+  # (the LSM always allows gpu id 0). The per-tool envs elsewhere
+  # (modules/env/{game,cadence,synopsys}-env.nix, flatpak-bottles.nix) still pin
+  # Mesa for their own processes and would need the same treatment if those tools
+  # are used while the display is on the dGPU.
 
   environment.systemPackages = with pkgs; [
     cudaPackages.cudatoolkit

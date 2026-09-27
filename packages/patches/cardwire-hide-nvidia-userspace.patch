@@ -1,8 +1,6 @@
-diff --git a/crates/cardwire-daemon/src/core/inode.rs b/crates/cardwire-daemon/src/core/inode.rs
-index 6a1d9f5..57336cb 100644
 --- a/crates/cardwire-daemon/src/core/inode.rs
 +++ b/crates/cardwire-daemon/src/core/inode.rs
-@@ -81,6 +81,15 @@ pub fn get_inodes(
+@@ -81,6 +81,24 @@
                  );
              }
          };
@@ -15,14 +13,27 @@ index 6a1d9f5..57336cb 100644
 +                error!("(ignoring) failed to get vendor metadata inodes: {}", err);
 +            }
 +        };
++        // And the vendor's user-space libraries themselves, so an environment
++        // variable that names the vendor explicitly (which bypasses the
++        // manifests above) cannot load a driver that is denied anyway.
++        match vendor_library_inodes() {
++            Ok(mut inodes) => total_inodes.append(&mut inodes),
++            Err(err) => {
++                error!("(ignoring) failed to get vendor library inodes: {}", err);
++            }
++        };
      }
  
      Ok(total_inodes)
-@@ -227,8 +236,104 @@ pub fn exp_nvidia_inodes() -> Result<Vec<InodeKey>> {
-     Ok(inodes)
- }
- 
--pub fn sys_drm_inodes(render: u32, card: u32) -> Result<Vec<InodeKey>> {
+@@ -222,6 +240,166 @@
+                 inodes.push(InodeKey::new(name, metadata.ino()));
+             }
+         }
++    }
++
++    Ok(inodes)
++}
++
 +/// Driver metadata files that advertise a vendor to user space: Vulkan ICD
 +/// manifests, libglvnd EGL/GLX vendor manifests, Vulkan implicit layers and
 +/// OpenCL vendor files.
@@ -90,7 +101,7 @@ index 6a1d9f5..57336cb 100644
 +        ("/etc/OpenCL/vendors", &["nvidia.icd"]),
 +    ];
 +
-     let mut inodes: Vec<InodeKey> = Vec::new();
++    let mut inodes: Vec<InodeKey> = Vec::new();
 +
 +    for (dir, names) in VENDOR_MANIFESTS {
 +        let Ok(entries) = fs::read_dir(dir) else {
@@ -120,7 +131,64 @@ index 6a1d9f5..57336cb 100644
 +    Ok(inodes)
 +}
 +
-+pub fn sys_drm_inodes(render: u32, card: u32) -> Result<Vec<InodeKey>> {    let mut inodes: Vec<InodeKey> = Vec::new();
-     let sys_path = Path::new("/sys/class/drm");
++/// The vendor's user-space driver libraries: libGLX_nvidia, libEGL_nvidia,
++/// libGLESv*_nvidia, libnvidia-*, libcuda, libnvcuvid, libnvoptix, ...
++///
++/// This closes the last hole in `vendor_meta_inodes`. A launcher — or a desktop
++/// environment with a stale Switcheroo cache — can put
++/// `__GLX_VENDOR_LIBRARY_NAME=nvidia` / `VK_LOADER_DRIVERS_SELECT=*nvidia*` into
++/// a process's environment, and libglvnd then dlopens the driver *directly*,
++/// never reading the manifests that are hidden from blocked processes. Measured
++/// 2026-09-26: a blocked Steam client launched with those variables mapped 34
++/// NVIDIA libraries, then died with "X Error of failed request: BadValue" and a
++/// segfault when the driver could not reach the denied device, while the same
++/// client launched without them was fine.
++///
++/// Hiding the library files makes an injected vendor variable inert: libglvnd
++/// finds no NVIDIA vendor at all and falls back to Mesa, which is exactly what
++/// "this process has no discrete GPU" should look like to the application.
++/// Allowed processes still see everything, so games, CUDA and nvidia-offload are
++/// unaffected.
++pub fn vendor_library_inodes() -> Result<Vec<InodeKey>> {
++    const VENDOR_LIB_DIRS: &[&str] = &["/run/opengl-driver/lib", "/run/opengl-driver-32/lib"];
++
++    fn is_vendor_library(name: &str) -> bool {
++        let name = name.to_ascii_lowercase();
++        name.contains("nvidia")
++            || name.starts_with("libcuda")
++            || name.starts_with("libnvcuvid")
++            || name.starts_with("libnvoptix")
++    }
++
++    let mut inodes: Vec<InodeKey> = Vec::new();
++
++    for lib_dir in VENDOR_LIB_DIRS {
++        let Ok(entries) = fs::read_dir(lib_dir) else {
++            continue;
++        };
++
++        for entry in entries.flatten() {
++            let path = entry.path();
++            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
++                continue;
++            };
++
++            if !is_vendor_library(name) {
++                continue;
++            }
++
++            // fs::metadata follows symlinks: the inode recorded is the real
++            // library in the driver store path, which is what an open() resolves
++            // to, while `name` keeps the alias the process asks for (libcuda.so,
++            // libcuda.so.1, ... are different names for the same inode).
++            let Ok(metadata) = fs::metadata(&path) else {
++                continue;
++            };
++
++            if metadata.is_file() {
++                inodes.push(InodeKey::new(name, metadata.ino()));
++            }
++        }
+     }
  
-     let card = format!("card{}", card);
+     Ok(inodes)

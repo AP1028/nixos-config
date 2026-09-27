@@ -65,8 +65,16 @@ in {
       #   approved process -> cuInit = 0, GPU wakes to D0 as intended
       #   idle             -> back to D3cold within ~15s either way
       experimental_nvidia_block = false;
-      battery_auto_switch = true;
-      battery_auto_switch_mode = "smart"; # mode to use while on AC power
+      # OFF deliberately. battery_auto_switch is the ONE path into apply_mode
+      # that does not check whether the target GPU drives the display: on a
+      # battery event it unconditionally requests Modes::Integrated, whose loop
+      # calls block_gpu() without the is_gpu_active() probe that the Manual-mode
+      # set_block D-Bus path has (battery_switch.rs -> apply_mode). The only
+      # thing standing between that and a black screen is the
+      # `system_type != SystemType::Laptop` rejection, which is a topology
+      # accident rather than a design guard. With the MUX flipped to
+      # dGPU/Discrete the dGPU is boot_vga and drives the panel, so this is off.
+      battery_auto_switch = false;
       # This chassis wires HDMI to the NVIDIA GPU (card0-HDMI-A-2); without
       # this, a blocked dGPU means no external output on that port. While a
       # dGPU-attached display is plugged in, Cardwire temporarily falls back to
@@ -80,8 +88,8 @@ in {
   # blocking mode (integrated/smart) and restarts it on the way back to hybrid
   # (crates/cardwire-daemon/src/interface/mode.rs) — the restart then races the
   # GPU wake-up and the daemon ends up failed. There is no cardwire config knob
-  # for this (its config struct has exactly the five keys above), but it only
-  # touches the service when `systemctl is-enabled nvidia-powerd.service`
+  # for this (the config struct is exactly the settings submodule's keys), but it
+  # only touches the service when `systemctl is-enabled nvidia-powerd.service`
   # contains "enabled" (core/gpu/nvidia.rs). So drop the [Install] symlink and
   # pull the unit in from a dependency instead:
   #   - powerd still starts at boot (via the oneshot below)
@@ -101,8 +109,12 @@ in {
     script = "${pkgs.coreutils}/bin/true";
   };
 
-  # Cardwire persists the active mode, but a fresh state starts in hybrid. Set
-  # smart explicitly at boot; battery_auto_switch takes over from there.
+  # Cardwire persists the active mode and re-applies it in pre_daemon_tasks, so
+  # this only has to cover the first boot (and any persisted Integrated/Smart).
+  # It is NOT sufficient on a dGPU/Discrete MUX: the dGPU is then the primary
+  # display, cardwire classifies the system as Manual or Desktop, and
+  # `set smart` returns fdo::Error::NotSupported — the unit exits 1 and the
+  # persisted mode stands. See "ROBUSTNESS NOTES" for what to replace this with.
   systemd.services.cardwire-set-smart = {
     description = "Set Cardwire GPU mode to smart";
     wantedBy = ["multi-user.target"];
@@ -127,8 +139,13 @@ in {
   # The four local patches (packages/patches/) are applied on top; the
   # measurements behind each one are in "ROBUSTNESS NOTES" at the end of this
   # file:
-  #   cardwire-hide-vendor-manifests      blocked processes cannot read the NVIDIA
-  #                                       manifests (device nodes alone crash CEF)
+  # ORDER MATTERS: three of them patch analyzer/models.rs, so they are applied in
+  # the order below (verified against pristine v0.12.1 in that order). Reordering
+  # or dropping one can make the next fail to apply.
+  #
+  #   cardwire-hide-nvidia-userspace      blocked processes cannot read the NVIDIA
+  #                                       manifests *or* load its driver libraries,
+  #                                       so an injected vendor variable is inert
   #   cardwire-never-hide-igpu            FORCE_* never hide the iGPU; launcher
   #                                       requests are advisory; Steam's runtime
   #                                       helpers are always allowed; the CEF host
@@ -141,8 +158,7 @@ in {
     cardwireNixpkgs = import inputs.nixpkgs-cardwire.outPath {
       inherit (pkgs.stdenv.hostPlatform) system;
       config = config.nixpkgs.config or { };
-    };
-    # Content-addressed, so editing anything else in this repository does not
+    };    # Content-addressed, so editing anything else in this repository does not
     # change the patch store paths — and therefore does not force a cardwire
     # recompile on the next rebuild.
     patch = name:
@@ -155,7 +171,7 @@ in {
       patches =
         (old.patches or [])
         ++ [
-          (patch "cardwire-hide-vendor-manifests")
+          (patch "cardwire-hide-nvidia-userspace")
           (patch "cardwire-never-hide-igpu")
           (patch "cardwire-rescan-running-processes")
           (patch "cardwire-steam-discovery")
@@ -250,24 +266,51 @@ in {
   #   * A launcher request (CARDWIRE_REQUEST_DGPU, emitted by cardwire's
   #     Switcheroo shim for KDE's "Launch using Discrete Graphics Card") is
   #     ADVISORY: it grants both GPUs unless the application has an explicit
-  #     Blocked row. It carries no vendor variables, because those make libglvnd
-  #     load the NVIDIA driver directly, bypassing the manifest hiding above.
-  #   * An explicit Block extends to what the blocked app spawns (a denied
-  #     parent denies its subtree), unless the child has a policy row of its own.
+  #     Blocked row, and it never grants Steam's CEF host (steamwebhelper), whose
+  #     inherited request would otherwise hand CEF a NVIDIA stack it cannot drive.
+  #     The shim itself emits no vendor variables.
+  #   * An injected vendor variable (__GLX_VENDOR_LIBRARY_NAME=nvidia,
+  #     VK_LOADER_DRIVERS_SELECT, DRI_PRIME — from a shell profile, a Lutris/
+  #     Heroic/Bottles toggle, or a desktop environment holding a stale Switcheroo
+  #     cache) is inert for a blocked process, because the hiding covers the
+  #     driver *libraries* as well as the manifests: libglvnd finds no NVIDIA
+  #     vendor and falls back to Mesa. Without this, the 32-bit Steam client
+  #     dlopened libGLX_nvidia and segfaulted inside _XLockDisplay.
+  #   * Steam's runtime/launch helpers (bwrap, flatpak, pressure-vessel, srt-bwrap,
+  #     pv-adverb, reaper, steam-runtime-l) are always allowed — by comm in the
+  #     analyzer *and* in the in-LSM comm whitelist, which is checked before any
+  #     other rule. They bind-mount the host's graphics libraries and manifests
+  #     into every Proton container, so a blocked one cannot stat a hidden
+  #     manifest and aborts the launch ("bwrap: Can't get type of source …"); the
+  #     LSM whitelist also removes the race with the analyzer.
   #   * CARDWIRE_ALLOW=1 (nvidia-offload, CUDA wrappers) is an explicit user
   #     grant and wins over everything.
   #
-  # Verified 2026-09-26 (daemon 3sz9c5sn…, system ad0gvqcb…):
-  #   * KDE desktop launch of Steam, whose own .desktop says
-  #     PrefersNonDefaultGPU=true (deliberately left untouched): client Blocked,
-  #     request in env, 0 vendor vars, 0 NVIDIA libs mapped, 13 webhelpers and
-  #     both X11 windows — i.e. the dGPU request no longer breaks it.
-  #   * That launch's helpers (srt-bwrap, pv-adverb, steamwebhelper) all denied,
-  #     so CEF kept using Mesa; the client itself never woke the dGPU.
-  #   * Games: steam_app_* rows Allowed, both GPUs + NVIDIA ICD readable.
-  #   * Unlisted app + launcher request -> Allowed (the action still works).
-  #   * Blocked process cannot read /run/opengl-driver{,-32} NVIDIA manifests.
-  #   * Discord (Electron) denied GPU access and running normally.
+  # Verified 2026-09-26 on system qqy1izkq… / daemon gfm1fk8a… (the build with
+  # library hiding re-applied and the sandbox-helper whitelist in place):
+  #   * The crash repro — `steam` launched with the stale FORCE+vendor blob that
+  #     produced the 19:43 coredump — now runs clean: client Blocked, 13
+  #     webhelpers, both windows, 0 NVIDIA libraries mapped, no coredump.
+  #   * KDE desktop-entry launch (kioclient exec steam.desktop, its own
+  #     PrefersNonDefaultGPU=true left untouched): Blocked, request in env, 13
+  #     webhelpers, both windows, 0 NVIDIA libraries.
+  #   * A game launched from the UI: DSPGAME.exe Allowed, holding renderD129 with
+  #     221-224 NVIDIA libraries, dGPU at D0, stable for 3.5 minutes — i.e. the
+  #     library hiding does not break Proton, because the sandbox helpers are
+  #     comm-whitelisted in the LSM.
+  #   * Gating sanity: a blocked process cannot read libGLX_nvidia or the Vulkan
+  #     ICD; an allowed one reads both.
+  #   * The in-situ CEF guard: the client's real steamwebhelper processes are all
+  #     Blocked with 0 NVIDIA libraries even though the client carries
+  #     CARDWIRE_REQUEST_DGPU=1.
+  #   * Coredumps: only the two pre-fix client crashes (19:32, 19:43). The one
+  #     later entry is a 15 KB wine64-preloader SIGSYS from bwrap's own seccomp
+  #     filter — not cardwire (LSM denials are EACCES/ENOENT, never SIGSYS).
+  #   * Restart resilience: the rescan re-evaluates ~500 processes at daemon start
+  #     (measured), so a nixos-rebuild switch no longer strands a running game.
+  #   * Steam games get their policy row on first run and are flippable in
+  #     cardwire-gui (verified with a synthetic app id: Blocked row created,
+  #     SetAppPolicy accepted, next run Allowed).
   #
   # Known gaps, roughly in order of how likely they are to bite (none of these
   # is fixed yet):
@@ -279,34 +322,35 @@ in {
   #      (plus the GL32 and user-install equivalents). Consequence: a Blocked
   #      Flatpak CEF/Electron app can fail exactly like Steam did. Fix: add those
   #      paths to vendor_meta_inodes() in
-  #      packages/patches/cardwire-hide-vendor-manifests.patch.
+  #      packages/patches/cardwire-hide-nvidia-userspace.patch.
   #      Note the nix FHS/steam-run copies are symlinks to the same store inode
   #      and are therefore already covered.
   #   2. Only Steam games are seeded (36 steam_app_* rows). Bottles, Lutris,
   #      Heroic, itch and Minecraft launcher games have no row, so they are
   #      Blocked by default and silently stay on the iGPU. Fix: seed them too, or
   #      toggle them in cardwire-gui (which is what the rows exist for).
-  #   3. Anything OUTSIDE cardwire that injects vendor-steering variables
-  #      (__GLX_VENDOR_LIBRARY_NAME=nvidia, VK_LOADER_DRIVERS_SELECT, DRI_PRIME)
-  #      still bypasses the gating: the driver loads, then cannot open the denied
-  #      nodes, and fragile CEF/ANGLE apps can crash. Measured 2026-09-26: 34
-  #      NVIDIA libraries mapped into a Blocked Steam client that way, then
-  #      "X Error: BadValue" + segfault.
-  #      Hiding the *libraries* from blocked processes would fix this and was
-  #      tried — it breaks every Proton launch instead, because pressure-vessel's
-  #      `bwrap` runs blocked and stats each host library it bind-mounts
-  #      ("Can't get type of source .../libnvidia-egl-wayland2.so.1.0.2: No such
-  #      file or directory"), and because that allow is granted asynchronously the
-  #      stat can also race it. So: cardwire hides manifests (pressure-vessel only
-  #      warns about unreadable ICDs) but never the libraries.
-  #      What keeps this from biting in practice: cardwire's own Switcheroo shim
-  #      emits no vendor variables at all (see cardwire-never-hide-igpu.patch), so
-  #      the desktop paths are clean — verified 2026-09-26: a KDE desktop-entry
-  #      launch carries only CARDWIRE_REQUEST_DGPU=1. The remaining exposure is a
-  #      hand-written injection (shell profile, Lutris/Heroic/Bottles "use
-  #      discrete GPU" toggle, Steam per-game launch option); use `nvidia-offload`
-  #      for those, which pairs the variables with CARDWIRE_ALLOW=1. Audited
-  #      2026-09-26: no live injector in ~/.config or ~/.local/share/applications.
+  #   3. FIXED: anything outside cardwire that injects vendor-steering variables
+  #      (__GLX_VENDOR_LIBRARY_NAME=nvidia, VK_LOADER_DRIVERS_SELECT, DRI_PRIME —
+  #      a shell profile, a Lutris/Heroic/Bottles "use discrete GPU" toggle, or a
+  #      desktop environment holding a stale Switcheroo cache) is now inert for a
+  #      blocked process, because cardwire-hide-nvidia-userspace.patch hides the
+  #      NVIDIA *driver libraries* as well as the manifests: libglvnd finds no
+  #      vendor and falls back to Mesa.
+  #      This is what the 19:43 crash demanded: the 32-bit Steam client, launched
+  #      with the stale FORCE+vendor blob, dlopened libGLX_nvidia from
+  #      /run/opengl-driver-32 and segfaulted inside _XLockDisplay/_XLockDisplay's
+  #      strchr (vgui2_s.so/steamui.so on the stack). After the patch the same
+  #      launch maps 0 NVIDIA libraries, keeps 13 webhelpers and both windows, and
+  #      produces no coredump.
+  #      A previous attempt at this broke every Proton launch: pressure-vessel's
+  #      `bwrap` runs as a blocked process and stats each host library it
+  #      bind-mounts ("bwrap: Can't get type of source …: No such file or
+  #      directory"). That is fixed the right way now — bwrap/flatpak/
+  #      pressure-vessel/srt-bwrap/pv-adverb/reaper/steam-runtime-l are in the
+  #      in-LSM comm whitelist (manager.rs), which the hook consults before any
+  #      other rule, so their stats always succeed (no race) while every *other*
+  #      blocked process still cannot load the driver. Verified after the change:
+  #      a game launched from the UI held renderD129 with 221-224 NVIDIA libraries.
   #   4. CARDWIRE_ALLOW=1 overrides an explicit Blocked row (deliberate). So
   #      `nvidia-offload steam` still reproduces the CEF crash. If Blocks should
   #      be absolute, check the DB Blocked row before CARDWIRE_ALLOW in
@@ -354,8 +398,8 @@ in {
   #      The Block-inheritance rule itself is gone: the CEF host (steamwebhelper) is
   #      instead excluded from launcher-request grants explicitly, which is what
   #      keeps the client's CEF off the NVIDIA stack when its desktop file asks for
-  #      the dGPU. Verified 2026-09-26: two different games launched from the UI
-  #      both ran on the dGPU (renderD129 + 50–138 NVIDIA libraries mapped, D0),
+  #      the dGPU. Verified 2026-09-26: games launched from the UI ran on the dGPU (renderD129
+  #      + 50–224 NVIDIA libraries mapped, D0),
   #      client Blocked with 11 webhelpers and both windows.
   #   6. Pinning scope. The package *and* its build environment (rustPlatform,
   #      bpf-linker, aya per the pinned Cargo.lock) come from the frozen
@@ -382,4 +426,84 @@ in {
   #     processes being Allowed, but no game has been inspected on the dGPU).
   #   * A cold reboot (service ordering: seeding before cardwired, powerd, mode).
   #   * cardwire-gui reflecting these rows / toggling them.
+  #
+  # ── 2026-09-27: MUX=dGPU/Discrete audit, and why battery_auto_switch is off ──
+  #
+  # Done against cardwire v0.12.1 source (the version in nixpkgs-cardwire) + the
+  # four local patches. Read this before re-enabling anything that changes mode
+  # on its own.
+  #
+  # battery_auto_switch was the ONE path into apply_mode that never checks
+  # whether the target GPU drives the display. watch_battery_status requests
+  # Modes::Integrated on every battery event, and apply_mode's Integrated branch
+  # calls gpu.block_gpu() with no is_gpu_active() probe — unlike the Manual-mode
+  # D-Bus set_block, which does probe and refuses an active GPU. What kept it
+  # safe was only `system_type != SystemType::Laptop` returning NotSupported,
+  # i.e. a topology accident, not a design guard. With the MUX flipped to
+  # Discrete the dGPU is boot_vga and owns the panel, so it is off.
+  #
+  # Every remaining route to block_gpu, and what guards it (D = design guard,
+  # A = accident of topology classification):
+  #   * pre_daemon_tasks -> apply_mode_at_startup(None): re-applies the PERSISTED
+  #     mode from /var/lib/cardwire/mode.json. If that fails it retries with
+  #     Hybrid and persists it, so a mode the topology rejects is not retried
+  #     every boot.                                    D (is_default/is_discrete)
+  #   * apply_mode(Integrated|Smart) loop: `is_discrete() && !is_default()` is
+  #     false for a primary dGPU -> block_gpu is never reached.    D + A
+  #   * apply_mode(Manual) + auto_apply_gpu_state: reads gpu_state.json, which
+  #     persists a block=true for a PCI address from a previous hybrid session.
+  #     A stale entry for the display GPU hits an explicit warn-and-unblock
+  #     safety net.                                                      D
+  #   * GpuInterface::set_block (D-Bus `cardwire gpu --block N`): refuses the
+  #     default GPU, refuses non-Manual mode, probes display state.      D
+  #   * SmartPolicyInterface::SetAppPolicy: Allow_dGPU/Force_dGPU/Force_GPU all
+  #     unblock, never block.                                    D (by shape)
+  #   * monitor_display (external_display_auto_switch): reconciles only
+  #     `is_discrete() && !is_default()` GPUs, and if a blocked one is active it
+  #     forces mode Hybrid; with a non-default iGPU it returns early on
+  #     !is_discrete(). It also re-checks every 5 s (RETRY_INTERVAL), so it can
+  #     undo an incorrectly blocked display GPU at startup.      D + recovery
+  #   * refresh_gpu (PCI udev bind/unbind): re-enumerates and re-applies the
+  #     persisted mode, falling back to Hybrid if that fails.         D
+  #   * In Smart mode the default GPU is pushed with block=false, so it is
+  #     tracked in the map but never denied; the non-default iGPU in a Desktop
+  #     topology is not blocked either (the Smart branch's second condition needs
+  #     is_default() && !is_discrete()).                          D
+  #
+  # Per-app policy (the `steam` Blocked row, Steam game rows) is enforced ONLY
+  # when the effective LSM mode is Integrated, Manual or Smart: every hook in
+  # crates/cardwire-ebpf/src/main.rs returns at the `is_hybrid()` check before
+  # consulting is_inode_blocked, and that check precedes the smart-policy map
+  # lookup in helpers.rs. So in Hybrid mode a Blocked row costs nothing.
+  #
+  # The single point of failure to know about: every guard above resolves
+  # is_default(), which comes from check_default_drm_class (a KWin-derived
+  # heuristic ranking GPUs by connected eDP/desktop displays, PCI address as
+  # tiebreak). If it labels the display GPU as non-default, several of those
+  # guards invert at once. On a dGPU-only boot the concrete way that happens is
+  # the iGPU's connectors still reading "connected" while muxed away and
+  # out-ranking NVIDIA's panel; the system then reports Laptop and Smart is
+  # accepted. external_display_auto_switch is what corrects it (within ~5 s).
+  #
+  # Still open, and NOT fixed by any of the above:
+  #   * `cardwire set smart` at boot is wrong on a Discrete MUX — it exits 1
+  #     (topology Manual/Desktop) and leaves whatever was persisted. Replace it
+  #     with a sysfs probe (boot_vga + driver binding) that picks Hybrid when the
+  #     dGPU is the primary display. Until then, set Hybrid by hand before a
+  #     dGPU-only boot (see the note in modules/hardware/nvidia.nix).
+  #   * FIXED 2026-09-26: modules/hardware/nvidia.nix no longer pins
+  #     `__GLX_VENDOR_LIBRARY_NAME=mesa` / a Mesa-only EGL vendor list globally.
+  #     That pin was only correct for the hybrid case, and only because CEF/ANGLE
+  #     used to crash on a denied device; cardwire now hides the NVIDIA vendor
+  #     from blocked processes (manifests *and* libraries), so it was redundant —
+  #     and it broke a dGPU-only MUX boot hard, forcing every GLX client through
+  #     Mesa (no driver for a dGPU-driven display) and cutting off NVIDIA EGL.
+  #     Per-process overrides (nvidia-offload, DaVinci) and Vulkan's ICD list are
+  #     unaffected. environment.variables only changes for new sessions, so a
+  #     re-login/reboot is needed to drop it from the live one.
+  #   * FIXED 2026-09-26: the default display GPU is granted explicitly when it is
+  #     discrete (compute_switcheroo_env returns CARDWIRE_ALLOW=1), so a launcher
+  #     cannot leave an application with no GPU at all on a Discrete MUX or on a
+  #     desktop with no iGPU. When the default is the iGPU it emits nothing and
+  #     cardwire's policy decides (that is what keeps the Steam client blocked).
 }

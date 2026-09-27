@@ -10,3 +10,6 @@ __pycache__/
 
 # ZCode session state (plans, etc.) — local only, never commit.
 .zcode/
+
+# DSH harness cache (contains VPN certificates / private keys — never commit)
+.dsh-cache/

@@ -1,5 +1,11 @@
 # Reims vGPU on asusg16
 
+> **Dropped.** This approach was abandoned: the custom QEMU fork is no longer
+> referenced by any host configuration (`packages/reims-vgpu` is kept
+> unreferenced as a record), the flake inputs are removed, and the macOS guest
+> disks plus the OSX-KVM tree have been deleted. What follows documents the
+> attempt and the measured findings, not a running setup.
+
 Reims vGPU (`github:steelbrain/reims-vgpu`) is an alpha research project that
 gives an **unmodified macOS guest** accelerated graphics under QEMU. macOS
 ships the driver itself (`AppleParavirtGPU.kext`); this project provides the

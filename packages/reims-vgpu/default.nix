@@ -1,6 +1,13 @@
 # Reims vGPU — experimental paravirtual GPU for macOS guests (alpha upstream:
 # the QEMU device ABI and boot scripts move without a compatibility promise).
 #
+# NOT USED. No host configuration references this package any more, and the
+# flake inputs it was built from (`reims-vgpu`, `qemu-reims-vgpu`,
+# `rust-overlay`) are gone from flake.nix; the macOS guest disks it booted have
+# been deleted. It is kept as the record of the attempt (docs/reims-vgpu.md and
+# docs/reims-vgpu-code-assessment.md), and calling it now needs those inputs
+# restored by hand.
+#
 # Upstream ships no packaging: `vm/boot-x86.sh` is meant to be run from a git
 # clone and rebuilds both the vendored QEMU fork and the UEFI option ROM on
 # every boot. This package turns those two *build* steps into pinned Nix

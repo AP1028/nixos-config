@@ -100,37 +100,45 @@ index d5ef56f..3eb9a19 100644
              let db = self.db_cache.read().await;
              if let Some(policy) = db.get(&lookup_name) {
 diff --git a/crates/cardwire-daemon/src/core/env.rs b/crates/cardwire-daemon/src/core/env.rs
-index 4194a8e..94da3d6 100644
+index 4194a8e..e375b1f 100644
 --- a/crates/cardwire-daemon/src/core/env.rs
 +++ b/crates/cardwire-daemon/src/core/env.rs
-@@ -8,70 +8,39 @@ pub fn is_gpu_launchable(is_available: bool, is_blocked: bool, mode: Modes) -> b
+@@ -8,70 +8,52 @@ pub fn is_gpu_launchable(is_available: bool, is_blocked: bool, mode: Modes) -> b
  }
  
  pub fn compute_switcheroo_env(
 -    gpu_count: usize,
 +    _gpu_count: usize,
      is_default: bool,
--    is_discrete: bool,
+     is_discrete: bool,
 -    gpu_id: u32,
 -    vendor: GpuVendor,
 -    pci_address: &str,
-+    _is_discrete: bool,
 +    _gpu_id: u32,
 +    _vendor: GpuVendor,
 +    _pci_address: &str,
  ) -> Vec<String> {
 -    // Return early for the default display GPU
-+    // The default display GPU needs no request: cardwire's own policy decides
-+    // what an application may use.
++    // The default display GPU.
++    //
++    // If it is *discrete* — a MUX switched to "discrete only", or a desktop with
++    // no iGPU — allow it: cardwire's smart mode would otherwise block the only
++    // GPU the display can use, and a launcher should not be able to leave an
++    // application with no usable GPU at all. Upstream behaved the same way.
++    //
++    // If the default is the iGPU (the normal hybrid laptop), emit nothing:
++    // cardwire's own policy decides, which is what keeps the Steam client blocked
++    // and lets games be Allowed by row. Deliberately NOT CARDWIRE_ALLOW=0, which
++    // would restrict every launcher's process to the iGPU.
      if is_default {
--        return if is_discrete {
+         return if is_discrete {
 -            // Primary dGPU (desktop): allow direct access to primary discrete GPU
--            vec!["CARDWIRE_ALLOW".to_string(), "1".to_string()]
--        } else {
+             vec!["CARDWIRE_ALLOW".to_string(), "1".to_string()]
+         } else {
 -            // Primary iGPU (laptop): restrict default rendering to integrated GPU
 -            vec!["CARDWIRE_ALLOW".to_string(), "0".to_string()]
--        };
-+        return Vec::new();
++            Vec::new()
+         };
      }
  
 -    let mut env = Vec::new();
@@ -202,7 +210,7 @@ index 4194a8e..94da3d6 100644
  }
  
  #[cfg(test)]
-@@ -109,92 +78,53 @@ mod tests {
+@@ -109,61 +91,34 @@ mod tests {
      fn test_compute_switcheroo_env_laptop_hybrid_nvidia() {
          // Laptop: iGPU default, Nvidia dGPU secondary
          let igpu_env = compute_switcheroo_env(2, true, false, 0, GpuVendor::Intel, "0000:00:02.0");
@@ -253,10 +261,12 @@ index 4194a8e..94da3d6 100644
  
      #[test]
      fn test_compute_switcheroo_env_desktop_dgpu_primary() {
-         // Desktop: dGPU default, iGPU secondary
+-        // Desktop: dGPU default, iGPU secondary
++        // Desktop: dGPU default, iGPU secondary. The default GPU is discrete,
++        // so it is granted explicitly (a MUX/discrete-only display must not end
++        // up with every launcher process blocked from the only GPU).
          let dgpu_env = compute_switcheroo_env(2, true, true, 0, GpuVendor::Nvidia, "0000:01:00.0");
--        assert_eq!(dgpu_env, vec!["CARDWIRE_ALLOW", "1"]);
-+        assert!(dgpu_env.is_empty());
+         assert_eq!(dgpu_env, vec!["CARDWIRE_ALLOW", "1"]);
  
          let igpu_env = compute_switcheroo_env(2, false, false, 1, GpuVendor::Amd, "0000:0d:00.0");
 -        assert_eq!(
@@ -274,11 +284,7 @@ index 4194a8e..94da3d6 100644
      }
  
      #[test]
-     fn test_compute_switcheroo_env_single_gpu() {
-         let single_env =
-             compute_switcheroo_env(1, true, true, 0, GpuVendor::Nvidia, "0000:01:00.0");
--        assert_eq!(single_env, vec!["CARDWIRE_ALLOW", "1"]);
-+        assert!(single_env.is_empty());
+@@ -174,7 +129,7 @@ mod tests {
  
          let single_igpu =
              compute_switcheroo_env(1, true, false, 0, GpuVendor::Intel, "0000:00:02.0");
@@ -287,11 +293,7 @@ index 4194a8e..94da3d6 100644
      }
  
      #[test]
-     fn test_compute_switcheroo_env_multi_gpu() {
-         let default_env =
-             compute_switcheroo_env(3, true, true, 0, GpuVendor::Nvidia, "0000:01:00.0");
--        assert_eq!(default_env, vec!["CARDWIRE_ALLOW", "1"]);
-+        assert!(default_env.is_empty());
+@@ -185,16 +140,6 @@ mod tests {
  
          let secondary_amd =
              compute_switcheroo_env(3, false, true, 2, GpuVendor::Amd, "0000:04:00.0");
