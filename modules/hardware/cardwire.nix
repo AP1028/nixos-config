@@ -1,5 +1,6 @@
 {
   config,
+  inputs,
   lib,
   pkgs,
   ...
@@ -34,10 +35,6 @@
   );
 
   dgpuExports = exportsOf dgpuEnv;
-
-  # Where the Steam libraries live (used by the policy seeding below).
-  mainUser = config.local.username;
-  home = config.users.users.${mainUser}.home;
 in {
   # Cardwire installs eBPF LSM hooks that make the blocked GPU's device nodes
   # (/dev/dri/renderD*, /dev/nvidia*, nvidia modeset/uvm, GPU sysfs attributes)
@@ -51,6 +48,10 @@ in {
   #   - KDE's "Launch using Discrete Graphics Card" (Switcheroo D-Bus shim)
   #   - `nvidia-offload` (CARDWIRE_ALLOW=1 + PRIME vendor vars)
   #   - the per-application list in cardwire-gui
+  #
+  # Known gaps, measurement evidence and what is still untested are documented
+  # in the "ROBUSTNESS NOTES" block at the end of this file — read that before
+  # adding another workaround for a GPU problem.
   services.cardwired = {
     enable = true;
     settings = {
@@ -114,39 +115,79 @@ in {
     script = "${lib.getExe' config.services.cardwired.package "cardwire"} set smart";
   };
 
-  # ── Hide the vendor manifests from blocked processes ─────────────────
-  # Upstream hides only the *device nodes* per process; the Vulkan ICD, EGL
-  # vendor, implicit-layer and OpenCL manifests stay readable, so a blocked app
-  # still enumerates a driver it cannot use — CEF/ANGLE calls that fatal and
-  # crash-loops (window appears ~13-20 s late, software rendered). The overlay
-  # extends the same per-process inode map to those manifests, so a blocked
-  # process sees no NVIDIA vendor at all while allowed ones (games, CUDA,
-  # nvidia-offload) keep full access.
-  nixpkgs.overlays = [
-    (import ../../packages/cardwire-hide-vendor-manifests.nix)
-  ];
+  # ── Cardwire itself is pinned ────────────────────────────────────────
+  # The package and its whole build environment (rustPlatform, bpf-linker, aya
+  # from the pinned Cargo.lock) come from the frozen nixpkgs snapshot in flake.nix
+  # — the `nixpkgs-cardwire` input, currently d6524aaca2ff07876657ae2b323f24be4874944b
+  # — and NOT from the moving `nixpkgs` input. `nix flake update` therefore cannot
+  # move cardwire, its dependencies or its upstream version under us. Bump that
+  # input deliberately, then re-test the Steam client, a desktop-entry launch and
+  # a game on the dGPU.
+  #
+  # The four local patches (packages/patches/) are applied on top; the
+  # measurements behind each one are in "ROBUSTNESS NOTES" at the end of this
+  # file:
+  #   cardwire-hide-vendor-manifests      blocked processes cannot read the NVIDIA
+  #                                       manifests (device nodes alone crash CEF)
+  #   cardwire-never-hide-igpu            FORCE_* never hide the iGPU; launcher
+  #                                       requests are advisory; Steam's runtime
+  #                                       helpers are always allowed; the CEF host
+  #                                       is excluded from request grants
+  #   cardwire-rescan-running-processes   re-evaluate /proc at daemon start, so a
+  #                                       restart cannot strand a running game
+  #   cardwire-steam-discovery            resolve steam_app_<id> before the XDG
+  #                                       heuristics, so a new game gets its row
+  services.cardwired.package = let
+    cardwireNixpkgs = import inputs.nixpkgs-cardwire.outPath {
+      inherit (pkgs.stdenv.hostPlatform) system;
+      config = config.nixpkgs.config or { };
+    };
+    # Content-addressed, so editing anything else in this repository does not
+    # change the patch store paths — and therefore does not force a cardwire
+    # recompile on the next rebuild.
+    patch = name:
+      builtins.path {
+        path = ../../packages/patches/${name}.patch;
+        name = "${name}.patch";
+      };
+  in
+    cardwireNixpkgs.cardwire.overrideAttrs (old: {
+      patches =
+        (old.patches or [])
+        ++ [
+          (patch "cardwire-hide-vendor-manifests")
+          (patch "cardwire-never-hide-igpu")
+          (patch "cardwire-rescan-running-processes")
+          (patch "cardwire-steam-discovery")
+        ];
+    });
 
-  # ── Per-application allow list for Steam games ───────────────────────
-  # Cardwire is only an allow/deny gate: "Allowed" means *both GPUs are
-  # available* and the application itself decides which one to use — no forcing
-  # and no environment variables (CARDWIRE_FORCE_DGPU hides the iGPU, which
-  # breaks window presentation for CEF and Proton games, and is never used).
-  # Seeding the policy for every installed game just pre-fills the same list
-  # cardwire-gui shows, so a game needs no per-game launch option; the client
-  # itself has no row, so it stays Blocked/iGPU and never wakes the dGPU.
-  # Existing rows are left untouched (ON CONFLICT DO NOTHING), so whatever you
-  # toggle in the GUI survives reboots.
-
-  # The daemon only reads app_policies at startup: seed before it starts.
-  systemd.services.cardwire-steam-policies = {
-    description = "Allow the dGPU for installed Steam games in cardwire";
+  # ── Policy for the Steam client itself ───────────────────────────────
+  # One row. No library scanning, no file watcher, no restart machinery: the
+  # watcher that re-seeded on every Steam write was restarted 13 times in an hour
+  # and silently demoted a running game to the iGPU (see "ROBUSTNESS NOTES" at
+  # the end of this file for the measurement).
+  #
+  # The client must be explicitly Blocked. Its CEF/ANGLE cannot drive the NVIDIA
+  # stack (measured: no window at all), and its own desktop file sets
+  # PrefersNonDefaultGPU=true, so KDE asks cardwire to launch it on the dGPU; the
+  # launcher request is advisory and this Block is what makes it lose. Without a
+  # row the client would be unclassified — and a launcher request *would* grant
+  # it — so this row is load-bearing, not a convenience. Existing choices are
+  # kept (ON CONFLICT DO NOTHING), so flipping it in cardwire-gui sticks.
+  #
+  # Games are not seeded any more. cardwire auto-discovers a Steam game on its
+  # first run and adds it as Blocked; flip it to Allowed once in cardwire-gui.
+  # Relaunch the game afterwards — a process keeps the decision it got at exec.
+  systemd.services.cardwire-steam-client-policy = {
+    description = "Keep the Steam client itself blocked in cardwire";
     wantedBy = ["multi-user.target"];
     before = ["cardwired.service"];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = false;
     };
-    path = [pkgs.sqlite pkgs.gnugrep pkgs.coreutils];
+    path = [pkgs.sqlite pkgs.coreutils];
     script = ''
       set -euo pipefail
       db=/var/lib/cardwire/cardwire.db
@@ -163,47 +204,10 @@ in {
       );
       SQL
 
-      dirs=()
-      for d in ${home}/.steam/steam/steamapps ${home}/.local/share/Steam/steamapps; do
-          [ -d "$d" ] && dirs+=("$d")
-      done
-      for vdf in "''${dirs[@]}"; do
-          [ -f "$vdf/libraryfolders.vdf" ] || continue
-          while IFS= read -r path; do
-              [ -d "$path/steamapps" ] && dirs+=("$path/steamapps")
-          done < <(grep -oP '"path"\s+"\K[^"]+' "$vdf/libraryfolders.vdf" || true)
-      done
-
-      count=0
-      while IFS= read -r id; do
-          [ -n "$id" ] || continue
-          # 1 = Allowed (both GPUs available, the app picks), 0 = Blocked.
-          # DO NOTHING keeps any choice already made in cardwire-gui.
-          sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
-                         VALUES ('steam_app_$id', 'Steam Game $id', NULL, 'steam_icon_$id', 1)
-                         ON CONFLICT(binary_name) DO NOTHING;"
-          count=$((count + 1))
-      done < <(for d in "''${dirs[@]}"; do grep -hoP '"appid"\s+"\K[0-9]+' "$d"/appmanifest_*.acf 2>/dev/null || true; done | sort -u)
-
-      echo "cardwire: $count installed Steam game(s) allowlisted (existing entries untouched)"
+      sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+                     VALUES ('steam', 'Steam', NULL, 'steam', 0)
+                     ON CONFLICT(binary_name) DO NOTHING;"
     '';
-  };
-
-  # A library change (game installed/removed) re-seeds and reloads the daemon,
-  # so new games are picked up without a reboot.
-  systemd.services.cardwire-steam-reload = {
-    description = "Re-seed cardwire Steam policies after a library change";
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = "${pkgs.systemd}/bin/systemctl restart cardwire-steam-policies.service cardwired.service";
-    };
-  };
-  systemd.paths.cardwire-steam-reload = {
-    wantedBy = ["multi-user.target"];
-    pathConfig.PathModified = [
-      "${home}/.steam/steam/steamapps"
-      "${home}/.local/share/Steam/steamapps"
-    ];
   };
 
   environment.systemPackages = [
@@ -224,8 +228,158 @@ in {
       exec ${pkgs.nvtopPackages.nvidia}/bin/nvtop "$@"
     ''))
 
-    # No Steam launcher and no per-game launch options: games are simply
-    # Allowed by policy (seeded above, or toggled in cardwire-gui) and pick the
-    # GPU themselves. The client stays Blocked/iGPU, so it never wakes the dGPU.
+    # No Steam launcher and no per-game launch options: cardwire auto-discovers a
+    # game on its first run and adds it Blocked, then it is flipped to Allowed once
+    # in cardwire-gui and picks the GPU itself. The client stays Blocked/iGPU, so
+    # it never wakes the dGPU.
   ];
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ROBUSTNESS NOTES — what is guaranteed, what is not, and what is untested.
+  #
+  # The model (enforced by packages/patches/*.patch on the pinned package):
+  #   * Only two states exist: Blocked (iGPU only) and Allowed (both GPUs).
+  #     The iGPU is never hidden — hiding it breaks Xwayland presentation and
+  #     kills CEF's GPU process and Proton's swapchain creation.
+  #   * Blocked hides the dGPU's device nodes *and* the NVIDIA user-space
+  #     manifests (Vulkan ICD, EGL/GLX vendor, implicit layers, OpenCL) from that
+  #     process only, so a denied app falls back to Mesa instead of enumerating a
+  #     driver it cannot open (that enumeration failure is what crash-looped
+  #     Steam's CEF and, before this, needed per-app GLX/EGL/ICD workarounds).
+  #   * Allowed exposes devices + manifests; the application picks the GPU.
+  #   * A launcher request (CARDWIRE_REQUEST_DGPU, emitted by cardwire's
+  #     Switcheroo shim for KDE's "Launch using Discrete Graphics Card") is
+  #     ADVISORY: it grants both GPUs unless the application has an explicit
+  #     Blocked row. It carries no vendor variables, because those make libglvnd
+  #     load the NVIDIA driver directly, bypassing the manifest hiding above.
+  #   * An explicit Block extends to what the blocked app spawns (a denied
+  #     parent denies its subtree), unless the child has a policy row of its own.
+  #   * CARDWIRE_ALLOW=1 (nvidia-offload, CUDA wrappers) is an explicit user
+  #     grant and wins over everything.
+  #
+  # Verified 2026-09-26 (daemon 3sz9c5sn…, system ad0gvqcb…):
+  #   * KDE desktop launch of Steam, whose own .desktop says
+  #     PrefersNonDefaultGPU=true (deliberately left untouched): client Blocked,
+  #     request in env, 0 vendor vars, 0 NVIDIA libs mapped, 13 webhelpers and
+  #     both X11 windows — i.e. the dGPU request no longer breaks it.
+  #   * That launch's helpers (srt-bwrap, pv-adverb, steamwebhelper) all denied,
+  #     so CEF kept using Mesa; the client itself never woke the dGPU.
+  #   * Games: steam_app_* rows Allowed, both GPUs + NVIDIA ICD readable.
+  #   * Unlisted app + launcher request -> Allowed (the action still works).
+  #   * Blocked process cannot read /run/opengl-driver{,-32} NVIDIA manifests.
+  #   * Discord (Electron) denied GPU access and running normally.
+  #
+  # Known gaps, roughly in order of how likely they are to bite (none of these
+  # is fixed yet):
+  #   1. Flatpak runtimes ship their OWN copies of the NVIDIA manifests, and
+  #      those inodes are not in the per-process block list — measured readable
+  #      by a Blocked process:
+  #        /var/lib/flatpak/runtime/org.freedesktop.Platform.GL.nvidia-*/
+  #        files/**/{vulkan/icd.d/nvidia_icd.json,glvnd/egl_vendor.d/10_nvidia.json}
+  #      (plus the GL32 and user-install equivalents). Consequence: a Blocked
+  #      Flatpak CEF/Electron app can fail exactly like Steam did. Fix: add those
+  #      paths to vendor_meta_inodes() in
+  #      packages/patches/cardwire-hide-vendor-manifests.patch.
+  #      Note the nix FHS/steam-run copies are symlinks to the same store inode
+  #      and are therefore already covered.
+  #   2. Only Steam games are seeded (36 steam_app_* rows). Bottles, Lutris,
+  #      Heroic, itch and Minecraft launcher games have no row, so they are
+  #      Blocked by default and silently stay on the iGPU. Fix: seed them too, or
+  #      toggle them in cardwire-gui (which is what the rows exist for).
+  #   3. Anything OUTSIDE cardwire that injects vendor-steering variables
+  #      (__GLX_VENDOR_LIBRARY_NAME=nvidia, VK_LOADER_DRIVERS_SELECT, DRI_PRIME)
+  #      still bypasses the gating: the driver loads, then cannot open the denied
+  #      nodes, and fragile CEF/ANGLE apps can crash. Measured 2026-09-26: 34
+  #      NVIDIA libraries mapped into a Blocked Steam client that way, then
+  #      "X Error: BadValue" + segfault.
+  #      Hiding the *libraries* from blocked processes would fix this and was
+  #      tried — it breaks every Proton launch instead, because pressure-vessel's
+  #      `bwrap` runs blocked and stats each host library it bind-mounts
+  #      ("Can't get type of source .../libnvidia-egl-wayland2.so.1.0.2: No such
+  #      file or directory"), and because that allow is granted asynchronously the
+  #      stat can also race it. So: cardwire hides manifests (pressure-vessel only
+  #      warns about unreadable ICDs) but never the libraries.
+  #      What keeps this from biting in practice: cardwire's own Switcheroo shim
+  #      emits no vendor variables at all (see cardwire-never-hide-igpu.patch), so
+  #      the desktop paths are clean — verified 2026-09-26: a KDE desktop-entry
+  #      launch carries only CARDWIRE_REQUEST_DGPU=1. The remaining exposure is a
+  #      hand-written injection (shell profile, Lutris/Heroic/Bottles "use
+  #      discrete GPU" toggle, Steam per-game launch option); use `nvidia-offload`
+  #      for those, which pairs the variables with CARDWIRE_ALLOW=1. Audited
+  #      2026-09-26: no live injector in ~/.config or ~/.local/share/applications.
+  #   4. CARDWIRE_ALLOW=1 overrides an explicit Blocked row (deliberate). So
+  #      `nvidia-offload steam` still reproduces the CEF crash. If Blocks should
+  #      be absolute, check the DB Blocked row before CARDWIRE_ALLOW in
+  #      analyzer::evaluate_app.
+  #   5. The request rule only inspects the immediate parent. What makes the
+  #      Steam subtree safe today is that a denied parent denies its whole
+  #      subtree; walking ancestors would be belt-and-braces.
+  #   5b. FIXED, and the duct tape removed (this was the cause of "games run on
+  #      the iGPU"): the analyzer is exec-event driven, so restarting cardwired
+  #      leaves every already-running process denied. This module used to react to
+  #      Steam library writes by re-seeding the whole policy table and restarting
+  #      the daemon (PathModified on the steamapps directories) — measured 13
+  #      reloads and 16 daemon starts in one hour, three of them inside a game
+  #      launch. Dyson Sphere Program was allowed at 16:35:04, the daemon restarted
+  #      at 16:35:19, and its Vulkan initialisation then saw only the iGPU: that
+  #      session rendered on Intel with zero NVIDIA libraries loaded.
+  #      What replaced it:
+  #        * packages/patches/cardwire-rescan-running-processes.patch re-evaluates
+  #          /proc at daemon start, so any restart — a nixos-rebuild switch, an
+  #          upgrade, a crash — no longer strands running applications;
+  #        * no file watcher, no library scan, no bulk seeding: cardwire
+  #          auto-discovers a Steam game on its first run (as Blocked) and it is
+  #          flipped to Allowed once in cardwire-gui. A process keeps the decision
+  #          it got at exec time, so a game toggled mid-session must be relaunched;
+  #        * the only policy this module still writes is the single `steam` row
+  #          (cardwire-steam-client-policy) that keeps the client itself Blocked —
+  #          without it a launcher request would grant the client the dGPU and its
+  #          CEF would die again.
+  #   5c. FIXED: "games stop instantly / all games" (2026-09-26). Cause: the first
+  #      version of 5b denied everything a Blocked app spawns, which included
+  #      Steam's runtime and launch helpers (reaper, srt-bwrap, pv-adverb, bwrap,
+  #      pressure-vessel-wrap). Those helpers bind-mount the host's graphics
+  #      libraries and manifests into every Proton container, so a *blocked* bwrap
+  #      cannot stat a hidden ICD/implicit-layer manifest and aborts the launch:
+  #        bwrap: Can't get type of source …/nvidia_layers.json: No such file
+  #      (Games only worked earlier by accident: the stale FORCE+vendor blob made
+  #      those helpers Allowed.) Fixes, both in cardwire:
+  #        * the analyzer always allows those helpers by name/prefix, independent of
+  #          any launcher request, so a game launch works from a terminal or a
+  #          desktop entry alike;
+  #        * they are also in the in-LSM comm whitelist (manager.rs), which is
+  #          checked before any other rule — that removes the race where bwrap's
+  #          first stat happens before the daemon has classified its parent, and it
+  #          also covers helpers whose /proc/<pid>/environ cannot be read at all.
+  #      The Block-inheritance rule itself is gone: the CEF host (steamwebhelper) is
+  #      instead excluded from launcher-request grants explicitly, which is what
+  #      keeps the client's CEF off the NVIDIA stack when its desktop file asks for
+  #      the dGPU. Verified 2026-09-26: two different games launched from the UI
+  #      both ran on the dGPU (renderD129 + 50–138 NVIDIA libraries mapped, D0),
+  #      client Blocked with 11 webhelpers and both windows.
+  #   6. Pinning scope. The package *and* its build environment (rustPlatform,
+  #      bpf-linker, aya per the pinned Cargo.lock) come from the frozen
+  #      `nixpkgs-cardwire` input in flake.nix, with the four patches applied on
+  #      top — `nix flake update` cannot move cardwire at all.
+  #      What is still coupled to the moving `nixpkgs` is the *module interface*,
+  #      `services.cardwired.*`. It cannot be pinned separately: nixpkgs already
+  #      imports its own copy of that module through nixpkgs' module list, and
+  #      importing a second copy would be a duplicate option declaration. The
+  #      failure mode is a loud eval error naming the option (every option this
+  #      module sets is explicit, so changed defaults cannot bite silently), or at
+  #      worst a service-wiring change — which the re-test checklist in flake.nix
+  #      (client, desktop entry, game on the dGPU) is there to catch.
+  #   7. A launcher request is a trust boundary only in the sense that any
+  #      process in the session can set CARDWIRE_REQUEST_DGPU=1. It merely asks;
+  #      an explicit Block still wins and the LSM still enforces per-process
+  #      access, so this grants nothing a user could not already do.
+  #   8. Battery: an Allowed app keeps the dGPU at D0 by design, and `nvtop` is
+  #      allowed (it opens /dev/nvidiactl unconditionally) so it holds the GPU
+  #      awake while open — close it to get back to D3cold.
+  #
+  # Not yet verified end to end:
+  #   * A real Steam game holding /dev/dri/renderD129 (the journal shows wine
+  #     processes being Allowed, but no game has been inspected on the dGPU).
+  #   * A cold reboot (service ordering: seeding before cardwired, powerd, mode).
+  #   * cardwire-gui reflecting these rows / toggling them.
 }

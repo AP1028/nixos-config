@@ -1,0 +1,52 @@
+--- a/crates/cardwire-daemon/src/analyzer/models.rs
++++ b/crates/cardwire-daemon/src/analyzer/models.rs
+@@ -469,6 +469,30 @@
+             }
+         }
+ 
++        // Steam games first: they have no desktop entry of their own. Steam names
++        // them steam_app_<id> (from SteamAppId in the environment) and this is the
++        // only metadata available.
++        //
++        // This has to run *before* the XDG heuristics below, because the Steam
++        // launcher's own entry (key "steam") is a prefix of "steam_app_<id>", so
++        // the prefix match below would hand the game the launcher's metadata —
++        // desktop_file_id included — and the persistence worker rejects that as a
++        // duplicate of the launcher's row. Measured 2026-09-26: no row was created,
++        // so a newly installed game never appeared in cardwire-gui and
++        // SetAppPolicy answered "Query returned no rows", i.e. it could not be
++        // flipped to Allowed at all.
++        if let Some(app_id) = lookup_name.strip_prefix("steam_app_") {
++            let meta = AppMetadata {
++                display_name: format!("Steam Game {}", app_id),
++                desktop_file_id: None,
++                icon_name: Some(format!("steam_icon_{}", app_id)),
++            };
++
++            self.discover_app(&lookup_name, meta).await;
++            info!("Discovered Steam Game {}, blocked by default.", app_id);
++            return Some((false, PidType::Allowed, 0));
++        }
++
+         {
+             let xdg_list = self.xdg_list.read().await;
+             for candidate in normalized_candidates(&lookup_name) {
+@@ -489,18 +513,6 @@
+                 return Some((false, PidType::Allowed, 0));
+             }
+         }
+-        // Fallback for steam games
+-        if let Some(app_id) = lookup_name.strip_prefix("steam_app_") {
+-            let meta = AppMetadata {
+-                display_name: format!("Steam Game {}", app_id),
+-                desktop_file_id: None,
+-                icon_name: Some(format!("steam_icon_{}", app_id)),
+-            };
+-
+-            self.discover_app(&lookup_name, meta).await;
+-            info!("Discovered Steam Game {}, blocked by default.", app_id);
+-            return Some((false, PidType::Allowed, 0));
+-        }
+         None
+     }
+ 

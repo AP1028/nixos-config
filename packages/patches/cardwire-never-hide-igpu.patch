@@ -1,0 +1,413 @@
+diff --git a/crates/cardwire-daemon/src/analyzer/models.rs b/crates/cardwire-daemon/src/analyzer/models.rs
+index d5ef56f..3eb9a19 100644
+--- a/crates/cardwire-daemon/src/analyzer/models.rs
++++ b/crates/cardwire-daemon/src/analyzer/models.rs
+@@ -343,24 +343,20 @@ impl CardwireAnalyzer {
+             Ok(content) => content,
+             Err(_) => return None,
+         };
+-        // First check CARDWIRE_ALLOW, if None continue
++        // An explicit grant always wins: CARDWIRE_ALLOW is what our own wrappers
++        // (nvidia-offload, CUDA tools) set, and it is a deliberate user action.
+         if let Some(allow) = check_env("CARDWIRE_ALLOW", &environ) {
+             return Some((allow == 1, PidType::Allowed, 0));
+         }
+-        if let Some(value) = check_env("CARDWIRE_FORCE_DGPU", &environ) {
+-            return Some((value == 1, PidType::Forced, value));
+-        }
+-        if let Some(value) = check_env("CARDWIRE_FORCE_GPU", &environ) {
+-            return Some((true, PidType::Forced, value));
+-        }
+ 
+         // If manual mode, do not process app discovery or database policies
+         if mode == 2 {
+             return None;
+         }
+ 
+-        // Check the database now, we can take our time since if we reached it, the app would've
+-        // been blocked
++        // Resolve the policy row this process belongs to *before* honouring a
++        // launch request, because such a request has to defer to an explicit
++        // Block in cardwire's own policy.
+         let mut lookup_name = comm.to_lowercase();
+         if lookup_name.contains("xdg-desktop-portal") {
+             return None;
+@@ -368,6 +364,66 @@ impl CardwireAnalyzer {
+         if let Some(steam_app) = get_steam_app_id(&environ) {
+             lookup_name = steam_app;
+         }
++
++        // Steam's runtime and launch helpers build the container every Proton game
++        // runs in: they bind-mount the host's graphics libraries and manifests into
++        // it, so they must be able to stat those paths. A *blocked* bwrap cannot,
++        // and aborts the entire launch with
++        //   bwrap: Can't get type of source …/nvidia_layers.json: No such file
++        // because those manifest inodes are hidden from blocked processes. They
++        // render nothing themselves, so they are allowed unconditionally: the game
++        // inside the container is still judged by its own SteamAppId row, and the
++        // Steam client (comm "steam") and its CEF host ("steamwebhelper") match none
++        // of these patterns and stay blocked.
++        //
++        // Deliberately independent of any launcher request — a game launch has to
++        // work whether the client came from a terminal or from a desktop entry that
++        // adds CARDWIRE_REQUEST_DGPU.
++        let runtime_helper = matches!(lookup_name.as_str(), "bwrap" | "flatpak" | "reaper")
++            || lookup_name.starts_with("steam-runtime")
++            || lookup_name.starts_with("steam-launch")
++            || lookup_name.starts_with("srt-")
++            || lookup_name.starts_with("pv-")
++            || lookup_name.starts_with("pressure-vessel")
++            || lookup_name.starts_with("capsule-");
++        if runtime_helper {
++            return Some((true, PidType::Allowed, 0));
++        }
++
++        // "Run this on the discrete GPU" requests: the Switcheroo / GUI launch
++        // environment (CARDWIRE_REQUEST_DGPU) and the legacy CARDWIRE_FORCE_*
++        // variables. They grant both GPUs — they never hide the iGPU, because
++        // hiding it breaks Xwayland presentation for CEF and Proton — but they are
++        // advisory: an application that is explicitly Blocked in cardwire's policy
++        // keeps its block, and a CEF host is not granted at all.
++        //
++        // The request travels in the environment, so it is inherited: the Steam
++        // client's own desktop file sets PrefersNonDefaultGPU=true, KDE turns that
++        // into a dGPU request, and every child of the client — including
++        // steamwebhelper — inherits it. Handing CEF the NVIDIA stack it cannot drive
++        // is what made the client's UI disappear, so the CEF host is excluded here
++        // and falls through to the policy path below (no row → discovered →
++        // Blocked). It is a name test because CEF leaves no other signal in the
++        // environment; the client itself is covered by its own Blocked row.
++        let requested = check_env("CARDWIRE_REQUEST_DGPU", &environ)
++            .map(|v| v == 1)
++            .unwrap_or(false)
++            || check_env("CARDWIRE_FORCE_DGPU", &environ)
++                .map(|v| v == 1)
++                .unwrap_or(false)
++            || check_env("CARDWIRE_FORCE_GPU", &environ).is_some();
++        if requested && !lookup_name.starts_with("steamwebhelper") {
++            let blocked = {
++                let db = self.db_cache.read().await;
++                matches!(db.get(&lookup_name), Some(GpuPolicy::Blocked))
++            };
++            if !blocked {
++                return Some((true, PidType::Allowed, 0));
++            }
++        }
++
++        // Check the database now, we can take our time since if we reached it, the app would've
++        // been blocked
+         {
+             let db = self.db_cache.read().await;
+             if let Some(policy) = db.get(&lookup_name) {
+diff --git a/crates/cardwire-daemon/src/core/env.rs b/crates/cardwire-daemon/src/core/env.rs
+index 4194a8e..94da3d6 100644
+--- a/crates/cardwire-daemon/src/core/env.rs
++++ b/crates/cardwire-daemon/src/core/env.rs
+@@ -8,70 +8,39 @@ pub fn is_gpu_launchable(is_available: bool, is_blocked: bool, mode: Modes) -> b
+ }
+ 
+ pub fn compute_switcheroo_env(
+-    gpu_count: usize,
++    _gpu_count: usize,
+     is_default: bool,
+-    is_discrete: bool,
+-    gpu_id: u32,
+-    vendor: GpuVendor,
+-    pci_address: &str,
++    _is_discrete: bool,
++    _gpu_id: u32,
++    _vendor: GpuVendor,
++    _pci_address: &str,
+ ) -> Vec<String> {
+-    // Return early for the default display GPU
++    // The default display GPU needs no request: cardwire's own policy decides
++    // what an application may use.
+     if is_default {
+-        return if is_discrete {
+-            // Primary dGPU (desktop): allow direct access to primary discrete GPU
+-            vec!["CARDWIRE_ALLOW".to_string(), "1".to_string()]
+-        } else {
+-            // Primary iGPU (laptop): restrict default rendering to integrated GPU
+-            vec!["CARDWIRE_ALLOW".to_string(), "0".to_string()]
+-        };
++        return Vec::new();
+     }
+ 
+-    let mut env = Vec::new();
+-
+-    // Cardwire-specific routing variable
+-    if gpu_count == 2 && is_discrete {
+-        // Dual-GPU hybrid setup: force offloaded process onto dGPU
+-        env.push("CARDWIRE_FORCE_DGPU".to_string());
+-        env.push("1".to_string());
+-    } else {
+-        // Multi-GPU (3+) or secondary iGPU: route using explicit GPU ID
+-        env.push("CARDWIRE_FORCE_GPU".to_string());
+-        env.push(gpu_id.to_string());
+-    }
+-
+-    // Standard switcheroo-control / Mesa / NVIDIA offload variables
+-    // DRI_PRIME=pci-<addr> selects the render node by PCI address
+-    let dri_prime_val = format!("pci-{}", pci_address.replace([':', '.'], "_"));
+-    match vendor {
+-        GpuVendor::Nvidia => {
+-            env.push("__NV_PRIME_RENDER_OFFLOAD".to_string());
+-            env.push("1".to_string());
+-            env.push("__GLX_VENDOR_LIBRARY_NAME".to_string());
+-            env.push("nvidia".to_string());
+-            env.push("__VK_LAYER_NV_optimus".to_string());
+-            env.push("NVIDIA_only".to_string());
+-            env.push("VK_LOADER_DRIVERS_SELECT".to_string());
+-            env.push("*nvidia*,*nouveau*".to_string());
+-        }
+-        GpuVendor::Amd => {
+-            env.push("DRI_PRIME".to_string());
+-            env.push(dri_prime_val);
+-            env.push("VK_LOADER_DRIVERS_SELECT".to_string());
+-            env.push("*radeon*".to_string());
+-        }
+-        GpuVendor::Intel => {
+-            env.push("DRI_PRIME".to_string());
+-            env.push(dri_prime_val);
+-            env.push("VK_LOADER_DRIVERS_SELECT".to_string());
+-            env.push("*intel*".to_string());
+-        }
+-        GpuVendor::Other => {
+-            env.push("DRI_PRIME".to_string());
+-            env.push(dri_prime_val);
+-        }
+-    }
+-
+-    env
++    // *Only* ask cardwire to let this launch reach the dGPU — one request
++    // variable, and deliberately no __NV_PRIME_RENDER_OFFLOAD /
++    // __GLX_VENDOR_LIBRARY_NAME=nvidia / VK_LOADER_DRIVERS_SELECT / DRI_PRIME.
++    //
++    // Two reasons:
++    //
++    //  * The request is advisory. The daemon honours it unless the application
++    //    is explicitly Blocked in cardwire's policy. A vendor-steering variable,
++    //    however, is not gated by cardwire at all: `__GLX_VENDOR_LIBRARY_NAME=
++    //    nvidia` makes libglvnd load the NVIDIA driver directly, without going
++    //    through the vendor manifests cardwire can hide. Measured on a Blocked
++    //    Steam client launched this way: 34 NVIDIA libraries mapped, the driver
++    //    then cannot reach the denied /dev/nvidia* nodes, and CEF's GPU process
++    //    dies (2 webhelpers, no window) — even though cardwire kept it Blocked.
++    //
++    //  * Selection is the application's job. Both GPUs stay visible, so a game
++    //    enumerates and picks the dGPU itself; explicit steering remains
++    //    available to the user through the nvidia-offload wrapper, which is an
++    //    explicit CARDWIRE_ALLOW=1 grant and sets those variables itself.
++    vec!["CARDWIRE_REQUEST_DGPU".to_string(), "1".to_string()]
+ }
+ 
+ #[cfg(test)]
+@@ -109,92 +78,53 @@ mod tests {
+     fn test_compute_switcheroo_env_laptop_hybrid_nvidia() {
+         // Laptop: iGPU default, Nvidia dGPU secondary
+         let igpu_env = compute_switcheroo_env(2, true, false, 0, GpuVendor::Intel, "0000:00:02.0");
+-        assert_eq!(igpu_env, vec!["CARDWIRE_ALLOW", "0"]);
++        // Default GPU: no request at all, cardwire's policy decides
++        assert!(igpu_env.is_empty());
+ 
+         let dgpu_env = compute_switcheroo_env(2, false, true, 1, GpuVendor::Nvidia, "0000:01:00.0");
+-        assert_eq!(
+-            dgpu_env,
+-            vec![
+-                "CARDWIRE_FORCE_DGPU",
+-                "1",
+-                "__NV_PRIME_RENDER_OFFLOAD",
+-                "1",
+-                "__GLX_VENDOR_LIBRARY_NAME",
+-                "nvidia",
+-                "__VK_LAYER_NV_optimus",
+-                "NVIDIA_only",
+-                "VK_LOADER_DRIVERS_SELECT",
+-                "*nvidia*,*nouveau*"
+-            ]
+-        );
++        // A request, and nothing else: no vendor-steering variables (they bypass
++        // cardwire's per-process control) and never a hidden iGPU.
++        assert_eq!(dgpu_env, vec!["CARDWIRE_REQUEST_DGPU", "1"]);
++        assert!(!dgpu_env.iter().any(|v| v.starts_with("CARDWIRE_FORCE")));
++        assert!(!dgpu_env.iter().any(|v| v.starts_with("__")));
+     }
+ 
+     #[test]
+     fn test_compute_switcheroo_env_laptop_hybrid_amd() {
+         // Laptop: iGPU default, AMD dGPU secondary
+         let dgpu_env = compute_switcheroo_env(2, false, true, 1, GpuVendor::Amd, "0000:03:00.0");
+-        assert_eq!(
+-            dgpu_env,
+-            vec![
+-                "CARDWIRE_FORCE_DGPU",
+-                "1",
+-                "DRI_PRIME",
+-                "pci-0000_03_00_0",
+-                "VK_LOADER_DRIVERS_SELECT",
+-                "*radeon*"
+-            ]
+-        );
++        assert_eq!(dgpu_env, vec!["CARDWIRE_REQUEST_DGPU", "1"]);
+     }
+ 
+     #[test]
+     fn test_compute_switcheroo_env_desktop_dgpu_primary() {
+         // Desktop: dGPU default, iGPU secondary
+         let dgpu_env = compute_switcheroo_env(2, true, true, 0, GpuVendor::Nvidia, "0000:01:00.0");
+-        assert_eq!(dgpu_env, vec!["CARDWIRE_ALLOW", "1"]);
++        assert!(dgpu_env.is_empty());
+ 
+         let igpu_env = compute_switcheroo_env(2, false, false, 1, GpuVendor::Amd, "0000:0d:00.0");
+-        assert_eq!(
+-            igpu_env,
+-            vec![
+-                "CARDWIRE_FORCE_GPU",
+-                "1",
+-                "DRI_PRIME",
+-                "pci-0000_0d_00_0",
+-                "VK_LOADER_DRIVERS_SELECT",
+-                "*radeon*"
+-            ]
+-        );
++        assert_eq!(igpu_env, vec!["CARDWIRE_REQUEST_DGPU", "1"]);
+     }
+ 
+     #[test]
+     fn test_compute_switcheroo_env_single_gpu() {
+         let single_env =
+             compute_switcheroo_env(1, true, true, 0, GpuVendor::Nvidia, "0000:01:00.0");
+-        assert_eq!(single_env, vec!["CARDWIRE_ALLOW", "1"]);
++        assert!(single_env.is_empty());
+ 
+         let single_igpu =
+             compute_switcheroo_env(1, true, false, 0, GpuVendor::Intel, "0000:00:02.0");
+-        assert_eq!(single_igpu, vec!["CARDWIRE_ALLOW", "0"]);
++        assert!(single_igpu.is_empty());
+     }
+ 
+     #[test]
+     fn test_compute_switcheroo_env_multi_gpu() {
+         let default_env =
+             compute_switcheroo_env(3, true, true, 0, GpuVendor::Nvidia, "0000:01:00.0");
+-        assert_eq!(default_env, vec!["CARDWIRE_ALLOW", "1"]);
++        assert!(default_env.is_empty());
+ 
+         let secondary_amd =
+             compute_switcheroo_env(3, false, true, 2, GpuVendor::Amd, "0000:04:00.0");
+-        assert_eq!(
+-            secondary_amd,
+-            vec![
+-                "CARDWIRE_FORCE_GPU",
+-                "2",
+-                "DRI_PRIME",
+-                "pci-0000_04_00_0",
+-                "VK_LOADER_DRIVERS_SELECT",
+-                "*radeon*"
+-            ]
+-        );
++        assert_eq!(secondary_amd, vec!["CARDWIRE_REQUEST_DGPU", "1"]);
+     }
+ }
+diff --git a/crates/cardwire-daemon/src/interface/smart.rs b/crates/cardwire-daemon/src/interface/smart.rs
+index d97bc51..5e3f6aa 100644
+--- a/crates/cardwire-daemon/src/interface/smart.rs
++++ b/crates/cardwire-daemon/src/interface/smart.rs
+@@ -42,7 +42,7 @@ impl SmartPolicyInterface {
+         &self,
+         pid: u32,
+         policy: String,
+-        value: u32,
++        _value: u32,
+     ) -> Result<(), fdo::Error> {
+         // Check if the process exists, leave if it doesnt
+         if !Path::new(&format!("/proc/{}", pid)).exists() {
+@@ -52,48 +52,25 @@ impl SmartPolicyInterface {
+         match policy.as_str() {
+             // Default, do nothing
+             "Default" => Ok(()),
+-            // Equivalent to CARDWIRE_ALLOW=1, show both iGPU and dGPU
+-            "Allow_dGPU" => {
++            // Every "use the dGPU" policy only ever *allows* the dGPU: both GPUs
++            // stay visible so windowed clients can still be presented, and the
++            // vendor variables that accompany these requests (CARDWIRE_FORCE_*,
++            // switcheroo's Environment) do the actual selection. Hiding the iGPU
++            // is never done — it breaks Xwayland presentation for CEF and
++            // Proton games.
++            "Allow_dGPU" | "Force_dGPU" | "Force_GPU" => {
+                 {
+-                    // First remove the PID from the other map if present
++                    // Remove the PID from the forced map if present. A pid that
++                    // is not tracked there is not an error: this is also the
++                    // entry point for processes cardwire has not classified yet.
+                     let mut forced_map = self.forced_map.write().await;
+-                    forced_map
+-                        .remove(&pid)
+-                        .map_err(|err| fdo::Error::Failed(err.to_string()))?;
++                    let _ = forced_map.remove(&pid);
+                 }
+                 let mut pid_map = self.pid_map.write().await;
+                 pid_map
+                     .insert(pid, 0, 0)
+                     .map_err(|err| fdo::Error::Failed(err.to_string()))
+             }
+-            // Equivalent to CARDWIRE_FORCE_DGPU=value
+-            "Force_dGPU" => {
+-                {
+-                    // First remove the PID from the other map if present
+-                    let mut pid_map = self.pid_map.write().await;
+-                    pid_map
+-                        .remove(&pid)
+-                        .map_err(|err| fdo::Error::Failed(err.to_string()))?;
+-                }
+-                let mut force_map = self.forced_map.write().await;
+-                force_map
+-                    .insert(pid, value, 0)
+-                    .map_err(|err| Failed(err.to_string()))
+-            }
+-            // Equivalent to CARDWIRE_FORCE_GPU=value
+-            "Force_GPU" => {
+-                {
+-                    // First remove the PID from the other map if present
+-                    let mut pid_map = self.pid_map.write().await;
+-                    pid_map
+-                        .remove(&pid)
+-                        .map_err(|err| fdo::Error::Failed(err.to_string()))?;
+-                }
+-                let mut force_map = self.forced_map.write().await;
+-                force_map
+-                    .insert(pid, value, 0)
+-                    .map_err(|err| Failed(err.to_string()))
+-            }
+             _ => Err(fdo::Error::InvalidArgs(format!("invalid arg: {}", policy))),
+         }
+     }
+diff --git a/crates/cardwire-daemon/src/manager.rs b/crates/cardwire-daemon/src/manager.rs
+index 68b0100..76eabb2 100644
+--- a/crates/cardwire-daemon/src/manager.rs
++++ b/crates/cardwire-daemon/src/manager.rs
+@@ -180,6 +180,24 @@ impl DaemonManager {
+             "apt",
+             "nix",
+             "nix-daemon",
++            // Steam's runtime/launch helpers build the container every Proton game
++            // runs in: they bind-mount the host's graphics libraries and manifests
++            // into it, so they must be able to stat those paths even though the
++            // Steam client itself stays blocked — a blocked bwrap aborts every
++            // launch with
++            //   bwrap: Can't get type of source …/nvidia_layers.json: No such file
++            // They render nothing themselves, so whitelisting them is safe, and
++            // unlike the analyzer path there is no race: the hook consults this map
++            // before anything else, so the first stat after exec already succeeds.
++            // (The kernel truncates comm to 15 bytes, hence pressure-vessel and
++            // steam-runtime-l.)
++            "bwrap",
++            "flatpak",
++            "pressure-vessel",
++            "srt-bwrap",
++            "pv-adverb",
++            "reaper",
++            "steam-runtime-l",
+         ];
+ 
+         let mut blocker = self.inner.blocker.write().await;

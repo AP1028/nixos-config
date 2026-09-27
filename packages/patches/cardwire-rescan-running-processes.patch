@@ -1,0 +1,65 @@
+--- a/crates/cardwire-daemon/src/analyzer/models.rs
++++ b/crates/cardwire-daemon/src/analyzer/models.rs
+@@ -15,7 +15,7 @@
+         dynamic_analysis::{check_env, get_app_id_wayland_with_retry, get_steam_app_id}, helpers::{
+             comm_to_string, get_real_process_name, is_proc_still_alive, normalized_candidates
+         }, static_analysis::{self, AppMetadata, watch_fdo_folders}
+-    }, file::{DbusAppMetadata, GpuPolicy}, interface::{LogEntry, LoggerInterfaceSignals, SmartPolicyInterface}
++    }, file::{CardwireModeState, DbusAppMetadata, GpuPolicy}, interface::{LogEntry, LoggerInterfaceSignals, SmartPolicyInterface}, types::Modes
+ };
+ #[repr(C)]
+ #[derive(Debug, Copy, Clone)]
+@@ -182,6 +182,53 @@
+         let shared_self_report = Arc::clone(&shared_self);
+         task::spawn(async move { shared_self_report.report_logger().await });
+ 
++        // Re-evaluate everything that is already running.
++        //
++        // The analyzer only reacts to exec events, so a restart wipes the allow
++        // map (CW_ALLOWED_PID) and leaves every already-running process denied
++        // until it happens to be exec'd again. Measured 2026-09-26: Dyson Sphere
++        // Program's tree was allowed at 16:35:04, the daemon restarted at
++        // 16:35:19 (the Steam library watcher fires while Steam rewrites
++        // appmanifests and shader caches), and the game's Vulkan initialisation
++        // then saw only the iGPU — that whole session rendered on Intel with zero
++        // NVIDIA libraries loaded, while cardwire's own logs still showed the game
++        // as allowed when it started. The same thing happens on every
++        // `nixos-rebuild switch`, because activating a new system restarts
++        // cardwired underneath whatever is running.
++        {
++            let rescan_self = Arc::clone(&shared_self);
++            task::spawn(async move {
++                let mode = CardwireModeState::build()
++                    .map(|state| state.mode() as u8)
++                    .unwrap_or(Modes::Smart as u8);
++                let Ok(entries) = fs::read_dir("/proc") else {
++                    warn!("could not list /proc to re-evaluate running processes");
++                    return;
++                };
++                let mut count = 0u32;
++                for entry in entries.flatten() {
++                    let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
++                        continue;
++                    };
++                    if pid <= 1 {
++                        continue;
++                    }
++                    count += 1;
++                    let this = Arc::clone(&rescan_self);
++                    let event = ExecEvent {
++                        pid,
++                        mode,
++                        _padding: [0; 3],
++                    };
++                    task::spawn(async move { this.spawn_exec_analyzer(event).await });
++                }
++                info!(
++                    "re-evaluated {} running processes after daemon start",
++                    count
++                );
++            });
++        }
++
+         loop {
+             if let Ok(mut guard) = exec_ring.ready_mut(Interest::READABLE).await
+                 && guard.ready().is_readable()

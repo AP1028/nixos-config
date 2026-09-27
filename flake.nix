@@ -9,6 +9,14 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    # Frozen snapshot of nixpkgs for cardwire only — the package and its whole
+    # build environment (rustPlatform, bpf-linker, aya from the pinned
+    # Cargo.lock) come from this revision, so `nix flake update` cannot move
+    # cardwire underneath a working GPU setup. Bump it deliberately, then
+    # re-test: Steam client (blocked, UI up), a desktop-entry launch, and a game
+    # on the dGPU. See modules/hardware/cardwire.nix "ROBUSTNESS NOTES".
+    nixpkgs-cardwire.url = "github:NixOS/nixpkgs/d6524aaca2ff07876657ae2b323f24be4874944b";
+
     # Stable track for the VM fleet: infrastructure wants stability, not
     # rolling churn. Eval-verified against all VM configs (2026-08).
     nixpkgs-stable.url = "github:NixOS/nixpkgs/nixos-26.05";
