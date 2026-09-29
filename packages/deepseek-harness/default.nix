@@ -1,5 +1,5 @@
-# DeepSeek Harness (dsh) — built from the upstream monorepo at dsh-v0.1.7-rc.2
-# (commit 477b4f420553e8a52c2fbccc464d7561b239c443).
+# DeepSeek Harness (dsh) — built from the upstream monorepo at dsh-v0.2.0-rc.2
+# (commit 639ed015397290b3745d163aafe02ffee4aa3f84).
 #
 # Uses the upstream pnpm-lock.yaml via fetchPnpmDeps and builds the TS/web
 # workspace with pnpmBuildHook. The whole tree is shipped because dsh resolves
@@ -129,13 +129,13 @@ stdenv.mkDerivation (finalAttrs: let
 in
 {
   pname = "deepseek-harness";
-  version = "0.1.7-rc.2";
+  version = "0.2.0-rc.2";
 
   src = fetchFromGitHub {
     owner = "deepseek-ai";
     repo = "deepseek-harness";
-    rev = "477b4f420553e8a52c2fbccc464d7561b239c443";
-    hash = "sha256-bWeyipPsY5KclNGJPIttZ9CKRXCqkNIoKmK8VKN7FnI=";
+    rev = "639ed015397290b3745d163aafe02ffee4aa3f84";
+    hash = "sha256-ZtO+bdoYbIkIgLTge5Eh7KYwTVh8FpFAAvx58dSY1PI=";
   };
 
   # fetchPnpmDeps downloads the entire dependency tree (several GB of
@@ -155,7 +155,7 @@ in
     inherit (finalAttrs) pname version src;
     pnpm = pnpm_11;
     fetcherVersion = 4;
-    hash = "sha256-rDV6HxYwnPROBOP7/JY/cZ7kqmxv0zxOncjJghIvvM4=";
+    hash = "sha256-+7jFaROKpN8XHFpulloK2lb0GsYXbEdMs/V7ZO9leKE=";
   }).overrideAttrs (old: {
     installPhase = ''
       runHook preInstall
@@ -286,7 +286,7 @@ in
   preBuild = ''
     # Source tarballs do not include .git; supply the pinned commit hash that
     # scripts/client-build-environment.ts embeds into client artifacts.
-    export DSH_CLIENT_COMMIT_HASH=477b4f4
+    export DSH_CLIENT_COMMIT_HASH=639ed01
   '';
 
   postBuild = ''
