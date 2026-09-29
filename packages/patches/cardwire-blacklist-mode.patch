@@ -1,0 +1,145 @@
+diff --git a/crates/cardwire-daemon/src/analyzer/models.rs b/crates/cardwire-daemon/src/analyzer/models.rs
+index 3eb9a19..bb3a399 100644
+--- a/crates/cardwire-daemon/src/analyzer/models.rs
++++ b/crates/cardwire-daemon/src/analyzer/models.rs
+@@ -335,14 +335,20 @@ impl CardwireAnalyzer {
+         }
+     }
+ 
+-    /// Default app are blocked, try to find if it's a game or a gpu intensive app, the u8 is the
+-    /// gpu id
++    /// Blacklist policy: every application is allowed the dGPU unless it has an
++    /// explicit Blocked row, which denies it. Unclassified applications are
++    /// allowed and only discovered so they show up in the GUI's app list.
++    ///
++    /// Returning None denies the process (no entry is inserted into the eBPF
++    /// allow map, which is what makes the LSM answer ENOENT); returning
++    /// Some((true, ..)) allows it. The u8 is the gpu id.
+     async fn evaluate_app(&self, pid: u32, comm: &str, mode: u8) -> Option<(bool, PidType, u32)> {
+         let path = format!("/proc/{}/environ", pid);
+-        let environ = match fs::read(path) {
+-            Ok(content) => content,
+-            Err(_) => return None,
+-        };
++        // A process whose environment cannot be read is treated as unclassified
++        // (allowed unless its Blocked row says otherwise) instead of denied: the
++        // environment is only needed for the optional CARDWIRE_ALLOW grant and
++        // the SteamAppId lookup, and the policy lookup below runs on comm alone.
++        let environ = fs::read(path).unwrap_or_default();
+         // An explicit grant always wins: CARDWIRE_ALLOW is what our own wrappers
+         // (nvidia-offload, CUDA tools) set, and it is a deliberate user action.
+         if let Some(allow) = check_env("CARDWIRE_ALLOW", &environ) {
+@@ -358,7 +364,18 @@ impl CardwireAnalyzer {
+         // launch request, because such a request has to defer to an explicit
+         // Block in cardwire's own policy.
+         let mut lookup_name = comm.to_lowercase();
++        // Portals are infrastructure: allowed like every other unclassified
++        // process (a Blocked row can still deny one explicitly).
+         if lookup_name.contains("xdg-desktop-portal") {
++            return Some((true, PidType::Allowed, 0));
++        }
++        // The Steam client's CEF host is denied unconditionally, and before the
++        // SteamAppId substitution below: the webhelper inherits the client's app
++        // id, which would rename it to a row that may be Allowed. Handing CEF the
++        // NVIDIA stack makes the client window disappear (measured), so this must
++        // not depend on the seeded `steamwebhelper` row surviving edits in the
++        // GUI either.
++        if lookup_name.starts_with("steamwebhelper") {
+             return None;
+         }
+         if let Some(steam_app) = get_steam_app_id(&environ) {
+@@ -402,9 +419,9 @@ impl CardwireAnalyzer {
+         // into a dGPU request, and every child of the client — including
+         // steamwebhelper — inherits it. Handing CEF the NVIDIA stack it cannot drive
+         // is what made the client's UI disappear, so the CEF host is excluded here
+-        // and falls through to the policy path below (no row → discovered →
+-        // Blocked). It is a name test because CEF leaves no other signal in the
+-        // environment; the client itself is covered by its own Blocked row.
++        // and denied by name above. It is a name test because CEF leaves no other
++        // signal in the environment; the client itself is covered by its own
++        // Blocked row.
+         let requested = check_env("CARDWIRE_REQUEST_DGPU", &environ)
+             .map(|v| v == 1)
+             .unwrap_or(false)
+@@ -422,8 +439,8 @@ impl CardwireAnalyzer {
+             }
+         }
+ 
+-        // Check the database now, we can take our time since if we reached it, the app would've
+-        // been blocked
++        // The explicit rows are the whole blacklist: a Blocked row denies, an
++        // Allowed row means the same as the default.
+         {
+             let db = self.db_cache.read().await;
+             if let Some(policy) = db.get(&lookup_name) {
+@@ -456,8 +473,8 @@ impl CardwireAnalyzer {
+             };
+ 
+             self.discover_app(&lookup_name, meta).await;
+-            info!("Discovered Steam Game {}, blocked by default.", app_id);
+-            return Some((false, PidType::Allowed, 0));
++            info!("Discovered Steam Game {}, allowed by default.", app_id);
++            return Some((true, PidType::Allowed, 0));
+         }
+ 
+         {
+@@ -467,7 +484,7 @@ impl CardwireAnalyzer {
+                     let meta = meta.clone();
+                     drop(xdg_list);
+                     self.discover_app(&lookup_name, meta).await;
+-                    return Some((false, PidType::Allowed, 0));
++                    return Some((true, PidType::Allowed, 0));
+                 }
+             }
+             if let Some((_key, meta)) = xdg_list
+@@ -477,10 +494,12 @@ impl CardwireAnalyzer {
+                 let meta = meta.clone();
+                 drop(xdg_list);
+                 self.discover_app(&lookup_name, meta).await;
+-                return Some((false, PidType::Allowed, 0));
++                return Some((true, PidType::Allowed, 0));
+             }
+         }
+-        None
++        // Unclassified and unknown to the XDG list: allowed by default. This is
++        // the blacklist contract — only an explicit Blocked row denies.
++        Some((true, PidType::Allowed, 0))
+     }
+ 
+     /// Persist a newly discovered app in the database and mirror it in the cache
+@@ -494,13 +513,13 @@ impl CardwireAnalyzer {
+             }
+         }
+ 
+-        let dbus_meta = DbusAppMetadata::from_app_metadata(&meta, GpuPolicy::Blocked as u32);
+-        // Mirror in the cache regardless of the outcome, the app is blocked by default
+-        // and this prevents re-discovering it on every new process spawn
++        let dbus_meta = DbusAppMetadata::from_app_metadata(&meta, GpuPolicy::Allowed as u32);
++        // Mirror in the cache regardless of the outcome, the app is allowed by
++        // default and this prevents re-discovering it on every new process spawn
+         self.db_cache
+             .write()
+             .await
+-            .insert(lookup_name.to_string(), GpuPolicy::Blocked);
++            .insert(lookup_name.to_string(), GpuPolicy::Allowed);
+         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+         let res = self
+             .db_tx
+diff --git a/crates/cardwire-daemon/src/file/sql.rs b/crates/cardwire-daemon/src/file/sql.rs
+index 96b8ff4..518dc29 100644
+--- a/crates/cardwire-daemon/src/file/sql.rs
++++ b/crates/cardwire-daemon/src/file/sql.rs
+@@ -113,9 +113,12 @@ impl CardwireDatabase {
+                     let _ = reply.send(false);
+                     continue;
+                 }
++                // Discovered apps are Allowed rows: the policy default is allow,
++                // and a row only exists so the app shows up in cardwire-gui where
++                // it can be flipped to Blocked.
+                 let res = conn.execute(
+                     "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+-                     VALUES (?1, ?2, ?3, ?4, 0)
++                     VALUES (?1, ?2, ?3, ?4, 1)
+                      ON CONFLICT(binary_name) DO NOTHING",
+                     rusqlite::params![
+                         binary_name,

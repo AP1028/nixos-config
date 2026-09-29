@@ -43,11 +43,14 @@ in {
   # workarounds: a blocked GPU cannot be woken by Vulkan ICD enumeration, an
   # Electron renderer, a GTK app or nvtop, no matter how it is packaged.
   #
-  # Smart mode blocks the dGPU by default and allows it per application. Only
-  # two states exist here — "iGPU only" and "both GPUs" — never "iGPU hidden":
+  # Smart mode is inverted by cardwire-blacklist-mode.patch (2026-09-28): the
+  # dGPU is ALLOWED by default and only applications with an explicit Blocked
+  # row are denied. Only two states exist here — "iGPU only" and "both GPUs" —
+  # never "iGPU hidden":
   #   - KDE's "Launch using Discrete Graphics Card" (Switcheroo D-Bus shim)
   #   - `nvidia-offload` (CARDWIRE_ALLOW=1 + PRIME vendor vars)
-  #   - the per-application list in cardwire-gui
+  #   - the per-application list in cardwire-gui (only rows flipped to Blocked
+  #     deny; Allowed rows are just the default)
   #
   # Known gaps, measurement evidence and what is still untested are documented
   # in the "ROBUSTNESS NOTES" block at the end of this file — read that before
@@ -136,10 +139,10 @@ in {
   # input deliberately, then re-test the Steam client, a desktop-entry launch and
   # a game on the dGPU.
   #
-  # The four local patches (packages/patches/) are applied on top; the
+  # The five local patches (packages/patches/) are applied on top; the
   # measurements behind each one are in "ROBUSTNESS NOTES" at the end of this
   # file:
-  # ORDER MATTERS: three of them patch analyzer/models.rs, so they are applied in
+  # ORDER MATTERS: four of them patch analyzer/models.rs, so they are applied in
   # the order below (verified against pristine v0.12.1 in that order). Reordering
   # or dropping one can make the next fail to apply.
   #
@@ -154,6 +157,10 @@ in {
   #                                       restart cannot strand a running game
   #   cardwire-steam-discovery            resolve steam_app_<id> before the XDG
   #                                       heuristics, so a new game gets its row
+  #   cardwire-blacklist-mode             invert Smart mode: allow the dGPU by
+  #                                       default, deny only explicit Blocked rows
+  #                                       (steamwebhelper is denied by name), and
+  #                                       discover apps as Allowed rows
   services.cardwired.package = let
     cardwireNixpkgs = import inputs.nixpkgs-cardwire.outPath {
       inherit (pkgs.stdenv.hostPlatform) system;
@@ -175,28 +182,36 @@ in {
           (patch "cardwire-never-hide-igpu")
           (patch "cardwire-rescan-running-processes")
           (patch "cardwire-steam-discovery")
+          (patch "cardwire-blacklist-mode")
         ];
     });
 
-  # ── Policy for the Steam client itself ───────────────────────────────
-  # One row. No library scanning, no file watcher, no restart machinery: the
-  # watcher that re-seeded on every Steam write was restarted 13 times in an hour
-  # and silently demoted a running game to the iGPU (see "ROBUSTNESS NOTES" at
-  # the end of this file for the measurement).
+  # ── The blacklist: what must not touch the dGPU ──────────────────────
+  # With Smart mode inverted (cardwire-blacklist-mode.patch) these rows are the
+  # entire policy: every application without a Blocked row — including every
+  # Steam game — is allowed by default and needs no flipping in cardwire-gui.
+  # No library scanning, no file watcher, no restart machinery: the watcher that
+  # re-seeded on every Steam write was restarted 13 times in an hour and
+  # silently demoted a running game to the iGPU (see "ROBUSTNESS NOTES" at the
+  # end of this file for the measurement).
   #
-  # The client must be explicitly Blocked. Its CEF/ANGLE cannot drive the NVIDIA
-  # stack (measured: no window at all), and its own desktop file sets
-  # PrefersNonDefaultGPU=true, so KDE asks cardwire to launch it on the dGPU; the
-  # launcher request is advisory and this Block is what makes it lose. Without a
-  # row the client would be unclassified — and a launcher request *would* grant
-  # it — so this row is load-bearing, not a convenience. Existing choices are
-  # kept (ON CONFLICT DO NOTHING), so flipping it in cardwire-gui sticks.
+  # The Steam client and its CEF host must be Blocked. CEF/ANGLE cannot drive
+  # the NVIDIA stack (measured: no window at all), and steam.desktop sets
+  # PrefersNonDefaultGPU=true, so KDE asks cardwire to launch the client on the
+  # dGPU; the launcher request is advisory and these Blocks are what make it
+  # lose. steamwebhelper is *also* denied by name in the analyzer
+  # (cardwire-blacklist-mode.patch), so it stays on the iGPU even if its row is
+  # flipped in the GUI — the row is seeded so the app is visible there. Existing
+  # choices are kept (ON CONFLICT DO NOTHING), so flipping a row in
+  # cardwire-gui sticks. Relaunch an app after flipping it — a process keeps the
+  # decision it got at exec.
   #
-  # Games are not seeded any more. cardwire auto-discovers a Steam game on its
-  # first run and adds it as Blocked; flip it to Allowed once in cardwire-gui.
-  # Relaunch the game afterwards — a process keeps the decision it got at exec.
+  # Games need no rows: a game is discovered as Allowed on first launch and runs
+  # on the dGPU immediately. Add anything else that must stay on the iGPU here
+  # (`binary_name` is the process comm, e.g. `ps -o comm= -p <pid>`), or flip
+  # its discovered row to Blocked in cardwire-gui.
   systemd.services.cardwire-steam-client-policy = {
-    description = "Keep the Steam client itself blocked in cardwire";
+    description = "Keep the Steam client and its CEF host blocked in cardwire";
     wantedBy = ["multi-user.target"];
     before = ["cardwired.service"];
     serviceConfig = {
@@ -223,6 +238,9 @@ in {
       sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
                      VALUES ('steam', 'Steam', NULL, 'steam', 0)
                      ON CONFLICT(binary_name) DO NOTHING;"
+      sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+                     VALUES ('steamwebhelper', 'Steam CEF Host', NULL, 'steam', 0)
+                     ON CONFLICT(binary_name) DO NOTHING;"
     '';
   };
 
@@ -238,22 +256,35 @@ in {
       exec "$@"
     '')
 
-    # nvtop opens /dev/nvidiactl unconditionally, so it needs an explicit allow.
+    # nvtop opens /dev/nvidiactl unconditionally. In blacklist mode it would be
+    # allowed anyway, but the explicit grant keeps it working if the mode is ever
+    # flipped back to a whitelist build.
     (lib.hiPrio (pkgs.writeShellScriptBin "nvtop" ''
       export CARDWIRE_ALLOW=1
       exec ${pkgs.nvtopPackages.nvidia}/bin/nvtop "$@"
     ''))
 
-    # No Steam launcher and no per-game launch options: cardwire auto-discovers a
-    # game on its first run and adds it Blocked, then it is flipped to Allowed once
-    # in cardwire-gui and picks the GPU itself. The client stays Blocked/iGPU, so
-    # it never wakes the dGPU.
+    # No Steam launcher and no per-game launch options: under the blacklist every
+    # game is Allowed by default and picks the GPU itself on first launch. Only
+    # the Steam client and its CEF host stay Blocked/iGPU, so the client never
+    # hands CEF a NVIDIA stack it cannot drive.
   ];
 
   # ─────────────────────────────────────────────────────────────────────────
   # ROBUSTNESS NOTES — what is guaranteed, what is not, and what is untested.
   #
   # The model (enforced by packages/patches/*.patch on the pinned package):
+  #   * BLACKLIST (2026-09-28, cardwire-blacklist-mode.patch). The default is
+  #     ALLOW: an application is denied the dGPU only when it has an explicit
+  #     Blocked row. `steam` and `steamwebhelper` are seeded Blocked; everything
+  #     else — games, nvtop, nvidia-smi, Bottles/Lutris/Heroic titles — reaches
+  #     the dGPU with no per-app flipping. The LSM machinery is unchanged: the
+  #     analyzer inserts every non-blocked process into the eBPF allow map (so
+  #     Blacklist is still per-process, and the iGPU-only state still exists for
+  #     blacklisted apps), and steamwebhelper is denied by name *before* its
+  #     inherited SteamAppId could resolve to an Allowed row. Discovery now
+  #     creates Allowed rows, purely so cardwire-gui has something to flip to
+  #     Blocked.
   #   * Only two states exist: Blocked (iGPU only) and Allowed (both GPUs).
   #     The iGPU is never hidden — hiding it breaks Xwayland presentation and
   #     kills CEF's GPU process and Proton's swapchain creation.
@@ -325,10 +356,12 @@ in {
   #      packages/patches/cardwire-hide-nvidia-userspace.patch.
   #      Note the nix FHS/steam-run copies are symlinks to the same store inode
   #      and are therefore already covered.
-  #   2. Only Steam games are seeded (36 steam_app_* rows). Bottles, Lutris,
-  #      Heroic, itch and Minecraft launcher games have no row, so they are
-  #      Blocked by default and silently stay on the iGPU. Fix: seed them too, or
-  #      toggle them in cardwire-gui (which is what the rows exist for).
+  #   2. FIXED 2026-09-28 by the blacklist inversion. Under the old whitelist,
+  #      Bottles, Lutris, Heroic, itch and Minecraft launcher games had no row and
+  #      silently stayed on the iGPU. Now they are Allowed by default; the old
+  #      36 steam_app_* Allowed rows were deleted in the clean-slate migration.
+  #      A blacklist entry is the only row that matters — add it here or flip the
+  #      app's discovered row to Blocked in cardwire-gui.
   #   3. FIXED: anything outside cardwire that injects vendor-steering variables
   #      (__GLX_VENDOR_LIBRARY_NAME=nvidia, VK_LOADER_DRIVERS_SELECT, DRI_PRIME —
   #      a shell profile, a Lutris/Heroic/Bottles "use discrete GPU" toggle, or a
@@ -372,13 +405,13 @@ in {
   #          /proc at daemon start, so any restart — a nixos-rebuild switch, an
   #          upgrade, a crash — no longer strands running applications;
   #        * no file watcher, no library scan, no bulk seeding: cardwire
-  #          auto-discovers a Steam game on its first run (as Blocked) and it is
-  #          flipped to Allowed once in cardwire-gui. A process keeps the decision
-  #          it got at exec time, so a game toggled mid-session must be relaunched;
-  #        * the only policy this module still writes is the single `steam` row
-  #          (cardwire-steam-client-policy) that keeps the client itself Blocked —
-  #          without it a launcher request would grant the client the dGPU and its
-  #          CEF would die again.
+  #          auto-discovers an app on its first run (now as Allowed, see the
+  #          blacklist entry above). A process keeps the decision it got at exec
+  #          time, so a row flipped mid-session needs an app relaunch;
+  #        * the only policy rows this module still writes are the `steam` and
+  #          `steamwebhelper` Blocks (cardwire-steam-client-policy) — without them
+  #          a launcher request would grant the client the dGPU and its CEF would
+  #          die again.
   #   5c. FIXED: "games stop instantly / all games" (2026-09-26). Cause: the first
   #      version of 5b denied everything a Blocked app spawns, which included
   #      Steam's runtime and launch helpers (reaper, srt-bwrap, pv-adverb, bwrap,
@@ -403,7 +436,7 @@ in {
   #      client Blocked with 11 webhelpers and both windows.
   #   6. Pinning scope. The package *and* its build environment (rustPlatform,
   #      bpf-linker, aya per the pinned Cargo.lock) come from the frozen
-  #      `nixpkgs-cardwire` input in flake.nix, with the four patches applied on
+  #      `nixpkgs-cardwire` input in flake.nix, with the five patches applied on
   #      top — `nix flake update` cannot move cardwire at all.
   #      What is still coupled to the moving `nixpkgs` is the *module interface*,
   #      `services.cardwired.*`. It cannot be pinned separately: nixpkgs already
@@ -430,7 +463,7 @@ in {
   # ── 2026-09-27: MUX=dGPU/Discrete audit, and why battery_auto_switch is off ──
   #
   # Done against cardwire v0.12.1 source (the version in nixpkgs-cardwire) + the
-  # four local patches. Read this before re-enabling anything that changes mode
+  # local patches. Read this before re-enabling anything that changes mode
   # on its own.
   #
   # battery_auto_switch was the ONE path into apply_mode that never checks
@@ -506,4 +539,51 @@ in {
   #     cannot leave an application with no GPU at all on a Discrete MUX or on a
   #     desktop with no iGPU. When the default is the iGPU it emits nothing and
   #     cardwire's policy decides (that is what keeps the Steam client blocked).
+  #
+  # ── 2026-09-28: Smart mode inverted to a blacklist ─────────────────────────
+  #
+  # Why: the whitelist required flipping every game/app to Allowed, and anything
+  # unclassified was silently denied. Measured with nvidia-smi: plain
+  # `nvidia-smi` got ENOENT on /dev/nvidia0 (checked by hand: os.open returns
+  # "No such file or directory", CARDWIRE_ALLOW=1 opens it), and because the
+  # report path drops entries whose process has already exited, the short-lived
+  # nvidia-smi never even appeared in cardwire-gui's blocked log. The blacklist
+  # keeps exactly the same enforcement machinery; only explicit Blocked rows
+  # deny.
+  #
+  # What cardwire-blacklist-mode.patch changes (userspace only, no eBPF change):
+  #   * analyzer/models.rs evaluate_app: unclassified → Allowed (the final
+  #     fallthrough), unreadable /proc/<pid>/environ → treated as unclassified
+  #     instead of denied, xdg-desktop-portal's early deny → allow,
+  #     steamwebhelper → deny by name (before its inherited SteamAppId could
+  #     rewrite it to an Allowed row), Steam/XDG discovery paths → Allowed.
+  #   * file/sql.rs: discovered rows are inserted with policy 1 (Allowed), so
+  #     cardwire-gui still lists new apps and can flip them to Blocked.
+  #   * Nothing else moves: mode stays Smart, apply_mode still pushes the dGPU
+  #     into the block map and tracks the iGPU, so the LSM's smart branch and the
+  #     CARDWIRE_ALLOW/Blocked precedence (known gap 4) are untouched.
+  #
+  # One-time DB migration (done live, clean slate): all whitelist-era rows were
+  # deleted — 38 Allowed rows were no-ops, and `konsole`, `virtuoso` and
+  # `com.usebottles.bottles` were auto-discovered Blocks that would otherwise
+  # have denied those apps by surprise. cardwire-steam-client-policy now reseeds
+  # `steam` and `steamwebhelper` as Blocked on every boot (ON CONFLICT DO
+  # NOTHING, so GUI flips stick). Re-add a blacklist entry either in that
+  # service's SQL or by flipping the app's discovered row in cardwire-gui.
+  #
+  # Consequences to remember:
+  #   * The dGPU is now wakeable by any application. The whitelist was also what
+  #     kept it idle; `nvidia-smi`, `nvtop`, a browser enumerating Vulkan, etc.
+  #     can wake it. Idle return to D3cold is unchanged once no fd is open.
+  #   * Flatpak's private NVIDIA manifests (known gap 1) now only matter for a
+  #     blacklisted Flatpak app — none is blacklisted today.
+  #   * `nvidia-offload steam` still overrides the Block (known gap 4) and will
+  #     still kill the client's CEF. The wrapper stays for CUDA/forced-NVIDIA
+  #     work, not for GPU selection: the blacklist needs no help picking the
+  #     dGPU.
+  #
+  # Re-test after this change: plain `nvidia-smi` (must work), the Steam client
+  # from KDE/terminal (Blocked, both windows, 0 NVIDIA libraries), a game from
+  # the Steam UI (Allowed on first run, dGPU), cardwire-gui app list (steam +
+  # steamwebhelper Blocked, a game's row flippable).
 }
