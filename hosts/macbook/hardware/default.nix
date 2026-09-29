@@ -13,6 +13,7 @@
 
   hardware.asahi.enable = true;
   hardware.asahi.peripheralFirmwareDirectory = /. + "${config.local.configDir}/hosts/macbook/firmware";
+  hardware.asahi.avd.vaapi-support = true;
 
   hardware.bluetooth.enable = true;
   hardware.bluetooth.powerOnBoot = true;
