@@ -33,7 +33,6 @@ in {
     (pkgs.callPackage ../../../packages/claw-code { })
     (pkgs.callPackage ../../../packages/deepseek-harness { })
     (pkgs.callPackage ../../../packages/amulet-map-editor { })
-    (pkgs.callPackage ../../../packages/zcode { })
     (pkgs.callPackage ../../../packages/virtuoso-cli { })
     # The Reims vGPU QEMU fork and its macOS guest were dropped (see
     # docs/reims-vgpu.md); packages/reims-vgpu is left in the tree unreferenced
