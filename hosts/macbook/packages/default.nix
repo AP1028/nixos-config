@@ -64,6 +64,7 @@ in {
     krita
     zotero
     moonlight-qt
+    bilibili
 
     htop
     killall

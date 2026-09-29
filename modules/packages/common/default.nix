@@ -12,6 +12,7 @@
     wget
     fastfetch
     htop
+    btop
     pciutils
     unzip
     nmap
