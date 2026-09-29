@@ -753,7 +753,7 @@
 
   # Standalone VM stop command (also what `cadence-env --kill` runs). The VMM
   # is matched by its -f rootfs argument in ANY generation, never by the muvm
-  # path (which is steam-arm64's binary too): a VM booted from an older system
+  # path (which is steam-asahi's binary too): a VM booted from an older system
   # generation carries that generation's rootfs path, so matching only the
   # current one would silently miss it. Steam's VMM has no -f
   # fex-cadence-rootfs argument, so this pattern cannot hit it.
@@ -792,7 +792,7 @@
         # sessions. `cadence-env --kill` stops the VM explicitly.
         #
         # muvm keys its lock + server socket on $XDG_RUNTIME_DIR, and other
-        # tools run their own muvm VMs (steam-arm64 uses
+        # tools run their own muvm VMs (steam-asahi uses
         # <runtime>/steam-muvm) — so run ours in a private runtime dir. The
         # VMM is also identifiable by its unique -f rootfs argument: NEVER
         # pkill by the muvm path, that is steam's binary too.

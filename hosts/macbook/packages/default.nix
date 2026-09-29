@@ -12,11 +12,11 @@
 in {
   imports = [
     ../../../modules/packages/opencode.nix
-    ../../../modules/packages/steam-arm64.nix
+    ../../../modules/packages/steam-asahi.nix
   ];
 
   programs.nix-ld.enable = true;
-  programs.steam-arm64.enable = true;
+  programs.steam-asahi.enable = true;
 
   environment.systemPackages = with pkgs; [
     wget

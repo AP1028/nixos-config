@@ -49,7 +49,9 @@
       options = [ "fmask=0077" "dmask=0077" ];
     };
 
-  swapDevices = [ ];
+  swapDevices = [
+    { device = "/swap/swapfile"; size = 16384; }
+  ];
 
   nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
 }
