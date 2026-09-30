@@ -980,7 +980,7 @@ in {
       "d /home/ee577@vlab.usc.edu 0755 root root -"
       "L+ /home/ee577@vlab.usc.edu/CDS_GPDK45 - - - - ${cdsBase}/IC251/CDS_GPDK45"
     ]
-    ++ lib.mkIf isAarch64 [
+    ++ lib.optionals isAarch64 [
       "d /lib64 0755 root root -"
       "d /usr/lib64 0755 root root -"
     ];
