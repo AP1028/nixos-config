@@ -122,6 +122,27 @@ Applied 2026-09-30 — what was repointed to the viterbi path:
 - **Not touched**: generated run dirs (`LVS/`, `DRC/`, `quantus_run_dir/`,
   `pvs/`, logs) — per-run outputs regenerated on each run.
 
+## Record: macbook brought onto the same PDK path + library synced (2026-09-30)
+
+- `nixos-switch` on the macbook pulled the cadence commits and activated the
+  tmpfiles rules — `/home/ee577@vlab.usc.edu/CDS_GPDK45 ->
+  /tools/cadence/IC251/CDS_GPDK45` now exists there too. First switch failed:
+  the rules were written as `rules ++ lib.mkIf cond [...]`, but `mkIf`
+  returns a set, not a list — use `lib.optionals`.
+- `~/work_gpdk045` (`ee477_tianyixia` + `cds.lib`) rsynced from asusg16;
+  lock files excluded.
+- Verified through the FEX/muvm path over SSH (boot needs `DISPLAY`, taken
+  from `systemctl --user show-environment` when launching from a headless
+  session): `CDS_GPDK45` resolves to the viterbi path, `spectre -W` →
+  `25.1.0.054`, `virtuoso -W` → `IC25.1-64b.38` — identical to the x86_64
+  FHS host. A harmless `ld.so: libSimAllocTC_sh.so ... ignored` preload
+  warning appears under FEX; Spectre runs anyway.
+- Version skew vs asusg16: the macbook lacks `SPECTRE181`, `IC618`, and
+  `PEGASUS251` (it has `PEGASUSDFM232` instead), so `$PEGASUS_HOME`
+  (`/tools/cadence/PEGASUS251`) dangles there; PATH setup skips missing
+  dirs, but Pegasus LVS/DRC runs need the tree installed (or a symlink to
+  `PEGASUSDFM232`) before they work on the macbook.
+
 
 
 ## Record: INV ported macbook -> asusg16 (2026-09-15)
