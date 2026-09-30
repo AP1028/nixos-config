@@ -86,6 +86,44 @@ File -> Import -> Library on the target.)
 - Vendor libs (e.g. `GSCLIB045`) are writable here; new cells can simply be
   dropped in as directories.
 
+## PDK path parity with viterbi (2026-09-19)
+
+On the viterbi lab servers the PDK lives in the ee577 class account:
+`setenv CDS_GPDK45 /home/ee577@vlab.usc.edu/CDS_GPDK45`, and `cds.lib`
+includes `$CDS_GPDK45/gpdk045_v_5_0/cds.lib`. The local hosts now provide
+the exact same path: `systemd.tmpfiles` in `modules/env/cadence-env.nix`
+creates `/home/ee577@vlab.usc.edu` and symlinks `CDS_GPDK45` to
+`/tools/cadence/IC251/CDS_GPDK45`, and the env exports
+`CDS_GPDK45=/home/ee577@vlab.usc.edu/CDS_GPDK45`. Libraries and ADE states
+that reference `$CDS_GPDK45/...` therefore work unmodified on both sides.
+
+Applied 2026-09-30 — what was repointed to the viterbi path:
+
+- **Nix** (`modules/env/cadence-env.nix`): `viterbiPdkRoot` definition,
+  tmpfiles `d` + `L+` rules (all hosts), both `CDS_GPDK45` exports (FEX
+  guest script and FHS profile) switched from `$CDSBASE/IC251/CDS_GPDK45`.
+  The symlink was also created live via `sudo-env -c`.
+- **Text state files** in `~/work_gpdk045` (sed, backups as
+  `*.pre-viterbi-path`): 8 × `ee477_tianyixia/**/maestro/active.state`
+  (maestro `modelFiles`), `.cadence/pegasus/tianyixia/.ipvs.virtuoso6.{drc,lvs}`
+  (layermap), `.qrc.Last.state` (QRC rule set dir). `cds.lib` needed no edit
+  (already uses `$CDS_GPDK45`).
+- **Binary files** in `ee477_tianyixia` (all backed up first under
+  `~/work_gpdk045/.pre-viterbi-path-backup-20260930/`):
+  - 8 × `ExplorerRun.0.rdb` — these are SQLite databases; edited with
+    `UPDATE ... replace()` (python sqlite3). All pass
+    `PRAGMA integrity_check`. Do NOT byte-edit these: the path string is
+    longer after the change and in-place splicing corrupts SQLite pages.
+  - 6 × `*/av_extracted/layout.oa` — OpenAccess binary; single
+    null-terminated string-table value per file (`extractionTechDir` →
+    `qrc/typical`), replaced with a byte-level substitute (+4 bytes/file).
+    Residual risk: if Virtuoso complains opening an extracted view,
+    re-extract to regenerate.
+- **Not touched**: generated run dirs (`LVS/`, `DRC/`, `quantus_run_dir/`,
+  `pvs/`, logs) — per-run outputs regenerated on each run.
+
+
+
 ## Record: INV ported macbook -> asusg16 (2026-09-15)
 
 Ported `GSCLIB045/INV` (schematic + maestro) and `work_gpdk045/ee447`

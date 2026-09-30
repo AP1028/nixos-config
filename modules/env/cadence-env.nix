@@ -36,6 +36,14 @@
   # lab servers and any shared cds.lib / setup files.
   cdsBase = "/tools/cadence";
 
+  # The viterbi lab servers keep the PDK / std-cell libs in the ee577 class
+  # account; every viterbi cds.lib / script references it through
+  # $CDS_GPDK45. Provide the exact same path locally (systemd tmpfiles below
+  # create the dir and symlink it into the install tree) and point
+  # CDS_GPDK45 at it, so ported projects and school setup files resolve
+  # identically on both machines.
+  viterbiPdkRoot = "/home/ee577@vlab.usc.edu/CDS_GPDK45";
+
   x86 = pkgs.pkgsCross.gnu64;
 
   # x86_64 counterparts of the libraries the Cadence tools need (subset;
@@ -285,7 +293,7 @@
     done
     # EE477 extras previously duplicated in ~/.cshrc (removed from there);
     # same set as the FHS profile above.
-    export CDS_GPDK45="$CDSBASE/IC251/CDS_GPDK45"
+    export CDS_GPDK45="${viterbiPdkRoot}"
     export CADHOME="$CDSBASE"
     export CDS="$CDS_INST_DIR" CDSDIR="$CDS_INST_DIR" CADENCE_DIR="$CDS_INST_DIR"
     export CDS_ROOT="$CDS_INST_DIR" CDSROOT="$CDS_INST_DIR"
@@ -723,7 +731,7 @@
         # the PDK root ($CDS_GPDK45 — cds.lib and maestro modelFiles reference
         # it so the same files work on the lab machines, which use ~ee577),
         # school-layout compat aliases, and the Incisive/Quantus/Pegasus tools.
-        export CDS_GPDK45="$CDSBASE/IC251/CDS_GPDK45"
+        export CDS_GPDK45="${viterbiPdkRoot}"
         export CADHOME="$CDSBASE"
         export CDS="$CDS_INST_DIR" CDSDIR="$CDS_INST_DIR" CADENCE_DIR="$CDS_INST_DIR"
         export CDS_ROOT="$CDS_INST_DIR" CDSROOT="$CDS_INST_DIR"
@@ -963,10 +971,19 @@ in {
   # exists; the muvm guest mirrors the host / via virtiofs (read-only for the
   # mapped user), so these must be created on the host. The empty dirs make the
   # "64-bit host" check pass (the real x86_64 libs come from the FEX rootfs).
-  systemd.tmpfiles.rules = lib.mkIf isAarch64 [
-    "d /lib64 0755 root root -"
-    "d /usr/lib64 0755 root root -"
-  ];
+  #
+  # The ee577-style PDK path (viterbiPdkRoot) exists locally as a symlink into
+  # the install tree, so $CDS_GPDK45 resolves identically here and on the
+  # viterbi lab servers.
+  systemd.tmpfiles.rules =
+    [
+      "d /home/ee577@vlab.usc.edu 0755 root root -"
+      "L+ /home/ee577@vlab.usc.edu/CDS_GPDK45 - - - - ${cdsBase}/IC251/CDS_GPDK45"
+    ]
+    ++ lib.mkIf isAarch64 [
+      "d /lib64 0755 root root -"
+      "d /usr/lib64 0755 root root -"
+    ];
 
   # Allow passwordless sudo for the cadence-env wrapper (needed for the
   # no-internet group switch). On aarch64 it runs muvm, on x86_64 the FHS env.
