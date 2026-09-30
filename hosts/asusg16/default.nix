@@ -40,6 +40,7 @@
     ../../modules/system/substituters.nix
 
     ../../modules/services/audio.nix
+    ../../modules/services/pwsp.nix
     ../../modules/services/clash-verge.nix
     ../../modules/services/sunshine.nix
     ../../modules/services/upnp-port-forward.nix

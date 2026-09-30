@@ -86,6 +86,14 @@
     # two revs, re-running `nix flake lock`, and re-applying the comfyui
     # test-skip overrides from modules/services/comfyui.nix git history
     # (2026-08-25/26: astropy IERS/hugemem skips, xformers MAX_JOBS).
+    # PipeWire Soundpad (pwsp): open-source Linux-native Soundpad alternative.
+    # Flake with a NixOS module (per-user daemon + GUI + CLI); follows our
+    # nixpkgs so the Rust build stays on our toolchain.
+    pwsp = {
+      url = "git+https://codeberg.org/melvi/pipewire-soundpad-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     comfyui-nix = {
       url = "github:utensils/comfyui-nix/60cf396864c09e954f23b31c4637c2bb65ebe085";
       inputs.nixpkgs.url = "github:NixOS/nixpkgs/f13ff45afd1bb73e640eaa08a7066dbed07e3238";
@@ -126,6 +134,7 @@
 
           home-manager.nixosModules.home-manager
           nixvirt.nixosModules.default
+          inputs.pwsp.nixosModules.default
         ];
       };
 

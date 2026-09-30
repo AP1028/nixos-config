@@ -456,6 +456,26 @@
         "type": "github"
       }
     },
+    "pwsp": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787609338,
+        "narHash": "sha256-JULrnX9YgmBLh7pSrdEFGeTvNY96zgh4Aebl58FUIPI=",
+        "ref": "refs/heads/main",
+        "rev": "21705181cc045229412d00e64ddb3096481de2fe",
+        "revCount": 496,
+        "type": "git",
+        "url": "https://codeberg.org/melvi/pipewire-soundpad-nix"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://codeberg.org/melvi/pipewire-soundpad-nix"
+      }
+    },
     "root": {
       "inputs": {
         "apple-silicon": "apple-silicon",
@@ -471,6 +491,7 @@
         "nixpkgs-cardwire": "nixpkgs-cardwire",
         "nixpkgs-stable": "nixpkgs-stable",
         "nixvirt": "nixvirt",
+        "pwsp": "pwsp",
         "vscode-server": "vscode-server",
         "winapps": "winapps"
       }
