@@ -54,6 +54,19 @@ in {
       (pkgs.callPackage ../../packages/steam-asahi.nix {
         fex = stock.fex;
         muvm = stock.muvm;
+        # The Steam UI (CEF) runs in a pressure-vessel container that only
+        # sees /usr/share/fonts of the guest; the Fedora rootfs has Latin
+        # fonts only, so carry the host's CJK-capable set.
+        fonts = with pkgs; [
+          corefonts
+          vista-fonts
+          noto-fonts
+          noto-fonts-cjk-sans
+          noto-fonts-cjk-serif
+          sarasa-gothic
+          wqy_zenhei
+          (pkgs.callPackage ../../packages/harmonyos-sans-font.nix {})
+        ];
       })
     ];
 

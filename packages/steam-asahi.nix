@@ -37,6 +37,7 @@
   dbus,
   fex,
   muvm,
+  fonts ? [],
 }: let
   # Valve's arch-independent bootstrap launcher (scripts + the ubuntu12_32
   # bootstrap tarball).  Steam itself updates from here on first run.
@@ -65,6 +66,17 @@
       fsck.erofs --extract=$out --no-preserve-owner $src
       test -x $out/usr/bin/bash
       test -f $out/etc/host.conf
+
+      # Steam's UI runs inside a pressure-vessel container that only gets
+      # fonts from the guest's /usr/share/fonts (bound as /run/host/fonts),
+      # so CJK fonts must physically live there.  The Fedora rootfs ships
+      # Latin fonts only.
+      mkdir -p $out/usr/share/fonts
+      ${lib.concatMapStrings (font: ''
+        if [ -d ${font}/share/fonts ]; then
+          cp -r --no-preserve=mode ${font}/share/fonts/. $out/usr/share/fonts/
+        fi
+      '') fonts}
     '';
     meta = {
       description = "Fedora x86_64 root filesystem used by FEX-Emu (Asahi/Fedora)";

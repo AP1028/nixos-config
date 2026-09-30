@@ -42,12 +42,15 @@ FEX, exactly as on Fedora.
   exhausts the libkrun guest's default of 128.
 * A **system + session D-Bus** runs in the guest (Fedora has both on the host;
   the Steam runtime and CEF expect them).
-* **Fonts**: the Fedora rootfs only ships Latin fonts, so the guest setup
-  copies `/etc/fonts/conf.d/00-nixos-cache.conf` from the host into the
-  guest's Fedora fontconfig. That conf lists the host's font store paths
-  (Noto CJK, Sarasa, HarmonyOS, ...) and NixOS's prebuilt font cache; since
-  the Nix store is shared with the guest, this makes all host fonts available
-  to Steam without copying any font files.
+* **Fonts**: the Fedora rootfs ships Latin fonts only, so the CJK-capable
+  font set from the host (Noto CJK, Sarasa, WQY, HarmonyOS, corefonts,
+  vista-fonts) is copied into the unpacked rootfs's `/usr/share/fonts` at
+  build time. This matters because Steam's UI runs in a pressure-vessel
+  container whose fontconfig only receives **the guest's `/usr/share/fonts`**
+  (bound as `/run/host/fonts` with a `--remap-dir` snippet); adding fonts
+  only to the host fontconfig is not enough. The guest setup additionally
+  copies `/etc/fonts/conf.d/00-nixos-cache.conf` from the host so non-container
+  guest tools also see the host fonts.
 
 ## Status (2026-09)
 
