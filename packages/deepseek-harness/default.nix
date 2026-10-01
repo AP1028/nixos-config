@@ -60,13 +60,25 @@ let
   # The Nixpkgs Node still drives the pnpm build.
   nodeRuntimeVersion = "24.19.0";
 
+  # Upstream ships linux-x64 and linux-arm64 assets for everything natively:
+  # the official Node builds, the primary-runtime lock.json targets, and the
+  # native/system prebuild manifests. Select the host's target so aarch64
+  # builds need no emulation.
+  runtimeTarget = if stdenv.hostPlatform.isAarch64 then "linux-arm64" else "linux-x64";
+  # Node's process.arch value for runtimeTarget, recorded in desktop-runtime.json.
+  runtimeArch = if stdenv.hostPlatform.isAarch64 then "arm64" else "x64";
+
   runtimeNode = stdenv.mkDerivation {
     pname = "dsh-runtime-node";
     version = nodeRuntimeVersion;
 
     src = fetchurl {
-      url = "https://nodejs.org/dist/v${nodeRuntimeVersion}/node-v${nodeRuntimeVersion}-linux-x64.tar.xz";
-      hash = "sha256-FLNC5xIE+BG95hU76OBLYq72PCNv75K1X5yDFUtAlkc=";
+      url = "https://nodejs.org/dist/v${nodeRuntimeVersion}/node-v${nodeRuntimeVersion}-${runtimeTarget}.tar.xz";
+      hash =
+        if stdenv.hostPlatform.isAarch64 then
+          "sha256-AUQ8Hhop5THMrVpG/vpt9JDSGJxJ95VZBK7Nuw/ob9w="
+        else
+          "sha256-FLNC5xIE+BG95hU76OBLYq72PCNv75K1X5yDFUtAlkc=";
     };
 
     nativeBuildInputs = [ patchelf ];
@@ -94,7 +106,10 @@ let
       homepage = "https://nodejs.org";
       license = lib.licenses.mit;
       mainProgram = "node";
-      platforms = [ "x86_64-linux" ];
+      platforms = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       sourceProvenance = with lib.sourceTypes; [ binaryNativeCode ];
     };
   };
@@ -109,7 +124,7 @@ stdenv.mkDerivation (finalAttrs: let
   # on the fixed-output source path makes the lock available at evaluation
   # time, so wheel and interpreter URLs never need to be copied here.
   lock = builtins.fromJSON (builtins.readFile "${finalAttrs.src}/scripts/primary-runtime/lock.json");
-  primaryTarget = "linux-x64";
+  primaryTarget = runtimeTarget;
   primaryLock = lock.targets.${primaryTarget};
   primaryPythonArchive = "cpython-${lock.pythonVersion}+${lock.pythonRelease}-${primaryLock.pythonTarget}-install_only_stripped.tar.gz";
   primaryNodeAsset = fetchurl {
@@ -309,13 +324,13 @@ in
     import { preparePrimaryRuntime } from './scripts/primary-runtime/prepare.ts'
 
     await preparePrimaryRuntime({
-      target: 'linux-x64',
+      target: process.argv[5],
       output: process.argv[2],
       cache: process.argv[3],
       version: process.argv[4],
     })
     EOF
-    ${lib.getExe nodejs_24} --import tsx/esm prepare-primary-runtime.mjs "$primaryOut" "$primaryCache" ${finalAttrs.version}
+    ${lib.getExe nodejs_24} --import tsx/esm prepare-primary-runtime.mjs "$primaryOut" "$primaryCache" ${finalAttrs.version} ${runtimeTarget}
     rm -f prepare-primary-runtime.mjs prepare-primary-runtime.mjs.tsbuildinfo
   '';
 
@@ -402,7 +417,7 @@ in
       path: 'node_modules/' + name,
     }))
     writeFileSync(out + '/libexec/dsh/desktop-runtime.json',
-      JSON.stringify({ schemaVersion: 1, release, platform: 'linux', arch: 'x64', sharedPackages, files: [] }, null, 2) + '\n')
+      JSON.stringify({ schemaVersion: 1, release, platform: 'linux', arch: '${runtimeArch}', sharedPackages, files: [] }, null, 2) + '\n')
     NODE
 
     makeWrapper ${lib.getExe' electron_44 "electron"} $out/bin/dsh-desktop \
@@ -509,12 +524,12 @@ in
     });
     NODE
 
-    landlock="$app/native/system/packages/linux-x64/bin/landlock-run"
+    landlock="$app/native/system/packages/${primaryTarget}/bin/landlock-run"
     test -x "$landlock"
     "$landlock" --probe | grep -Eq '^landlock: (fully|partially) enforced$'
 
-    flockGlibc="$app/native/system/packages/linux-x64/bin/glibc/system.node"
-    flockMusl="$app/native/system/packages/linux-x64/bin/musl/system.node"
+    flockGlibc="$app/native/system/packages/${primaryTarget}/bin/glibc/system.node"
+    flockMusl="$app/native/system/packages/${primaryTarget}/bin/musl/system.node"
     test -f "$flockGlibc" -a -f "$flockMusl"
     (cd "$app" && ${lib.getExe runtimeNode} --input-type=module <<'NODE'
     import { closeSync, mkdtempSync, openSync } from "node:fs";
@@ -562,7 +577,10 @@ in
     downloadPage = "https://www.npmjs.com/package/@deepseek-ai/dsh";
     license = lib.licenses.mit;
     mainProgram = "dsh";
-    platforms = [ "x86_64-linux" ];
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
     sourceProvenance = with lib.sourceTypes; [
       fromSource
       binaryNativeCode

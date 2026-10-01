@@ -21,6 +21,15 @@
     # rolling churn. Eval-verified against all VM configs (2026-08).
     nixpkgs-stable.url = "github:NixOS/nixpkgs/nixos-26.05";
 
+    # Frozen snapshot for the Cadence x86_64 (FEX/box64) library tree only
+    # (modules/env/cadence-env.nix). The emulated x86 packages only build with
+    # this rev's toolchain: cross gcc 16.2.0 fails building libgomp
+    # (-Werror=format-truncation), and the cross gtk+3 gtkdoc scanner
+    # segfaults under qemu-user. The rev is the last one whose whole x86 tree
+    # is already in the store / was proven working. Bump deliberately, then
+    # re-test a cadence-env session (virtuoso start + a Spectre run).
+    nixpkgs-cadence.url = "github:NixOS/nixpkgs/8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe";
+
     lanzaboote = {
       url = "github:nix-community/lanzaboote";
       inputs.nixpkgs.follows = "nixpkgs";

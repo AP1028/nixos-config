@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  inputs,
   ...
 }: let
   # ── Helper derivations ──────────────────────────────────────────
@@ -44,7 +45,13 @@
   # identically on both machines.
   viterbiPdkRoot = "/home/ee577@vlab.usc.edu/CDS_GPDK45";
 
-  x86 = pkgs.pkgsCross.gnu64;
+  # Frozen at the last nixpkgs rev whose emulated x86_64 toolchain builds
+  # (gcc 15.3.0 + meson 1.10). Newer nixpkgs breaks it two ways: cross
+  # gcc 16.2.0 fails building libgomp (-Werror=format-truncation), and the
+  # cross gtk+3 gtkdoc scanner segfaults under qemu-user. All outputs of
+  # this rev are already in the store (the running generation uses them);
+  # see flake.nix input nixpkgs-cadence. Bump deliberately and re-test.
+  x86 = inputs.nixpkgs-cadence.legacyPackages.${pkgs.stdenv.hostPlatform.system}.pkgsCross.gnu64;
 
   # x86_64 counterparts of the libraries the Cadence tools need (subset;
   # extend after checking `readelf -d` / ldd of the actual install).

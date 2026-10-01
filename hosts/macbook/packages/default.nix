@@ -75,6 +75,10 @@ in {
     killall
     mpv
 
+    # DeepSeek Harness (dsh CLI + Electron desktop). Native aarch64 build:
+    # upstream ships linux-arm64 runtime and native-addon assets.
+    (pkgs.callPackage ../../../packages/deepseek-harness { })
+
     openvpn
     tigervnc
     box64

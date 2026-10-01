@@ -2,6 +2,7 @@
   config,
   lib,
   pkgs,
+  inputs,
   ...
 }: let
   # ────────────────────────────────────────────────────────────────────────────
@@ -23,7 +24,10 @@
   #   dependency list, check with `readelf -d` / ldd-style analysis).
   # ────────────────────────────────────────────────────────────────────────────
 
-  x86 = pkgs.pkgsCross.gnu64;
+  # Same frozen x86_64 tree as cadence-env (modules/env/cadence-env.nix and the
+  # nixpkgs-cadence input in flake.nix): newer nixpkgs' emulated cross
+  # toolchain no longer builds (gcc 16.2 libgomp -Werror=format-truncation).
+  x86 = inputs.nixpkgs-cadence.legacyPackages.${pkgs.stdenv.hostPlatform.system}.pkgsCross.gnu64;
 
   x86LibPkgs = [
     x86.glibc
