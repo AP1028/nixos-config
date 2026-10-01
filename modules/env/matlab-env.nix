@@ -86,8 +86,8 @@
         qt5.qtgamepad
         gtkmm3
         atkmm
-        glibmm
-        libsigcxx
+        glibmm_2_4
+        libsigcxx_2_0
         iproute2
         net-tools
         glibcLocales
