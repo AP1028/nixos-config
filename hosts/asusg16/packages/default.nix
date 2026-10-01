@@ -118,7 +118,10 @@ in {
     spike
     dtc
     yosys
-    verilator
+    # verilator 5.052's SystemC smoke test fails against this nixpkgs'
+    # systemc 3.0.2 (C++ ABI mismatch, undefined sc_api_version C++20
+    # symbols); commented out until upstream fixes it.
+    # verilator
 
     # Python deps for the ZCode document skills (pdf/docx/pptx/xlsx):
     # reportlab/pypdf/pymupdf/pikepdf/pdfplumber = pdf core, python-docx/
