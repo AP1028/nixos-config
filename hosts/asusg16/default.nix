@@ -55,6 +55,7 @@
 
     ../../modules/packages/plasma-nm-sso-fix.nix
     ../../modules/packages/inline-snapshot-fix.nix
+    ../../modules/packages/riscv-pk-fix.nix
 
     ./users
 
