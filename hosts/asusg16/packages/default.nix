@@ -53,7 +53,12 @@ in {
     marktext
     motrix-next
     qbittorrent
-    zotero
+    # nixpkgs dropped firefox-esr-140; take it from the stable track (see the
+    # package file for why zotero cannot build against firefox-esr-153).
+    (pkgs.callPackage ../../../packages/zotero-fx140.nix {
+      firefox-esr-140-unwrapped =
+        inputs.nixpkgs-stable.legacyPackages.${pkgs.stdenv.hostPlatform.system}.firefox-esr-140-unwrapped;
+    })
     qalculate-qt
     pinta
     peazip
