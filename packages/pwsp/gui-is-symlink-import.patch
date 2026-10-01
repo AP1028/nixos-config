@@ -1,0 +1,8 @@
+--- a/pwsp-gui/src/gui/views/body.rs	2026-09-30 04:10:57.490040741 -0700
++++ b/pwsp-gui/src/gui/views/body.rs	2026-09-30 04:10:57.493517304 -0700
+@@ -1,4 +1,4 @@
+-use crate::gui::{SoundpadGui, is_real_dir};
++use crate::gui::{SoundpadGui, is_real_dir, is_symlink};
+ use egui::{
+     Align, AtomExt, Button, CollapsingHeader, Color32, CursorIcon, Layout, RichText, ScrollArea,
+     Sense, TextEdit, Ui, Vec2,

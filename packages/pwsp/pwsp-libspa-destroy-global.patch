@@ -1,0 +1,20 @@
+--- a/pwsp-lib/src/utils/pipewire.rs	2026-09-30 04:07:38.790688206 -0700
++++ b/pwsp-lib/src/utils/pipewire.rs	2026-09-30 04:07:38.817140352 -0700
+@@ -400,10 +400,13 @@
+                     }
+                     PwCommand::DestroyLinks { ids, resp } => {
+                         let result = ids.into_iter().try_for_each(|id| {
+-                            registry
+-                                .destroy_global(id)
+-                                .map(|_| ())
+-                                .map_err(|error| error.to_string())
++                            {
++                                // libspa >= 0.10: destroy_global returns a SpaResult
++                                // newtype instead of a Result, so we cannot map/map_err.
++                                // Best-effort destroy: ignore the result code.
++                                let _ = registry.destroy_global(id);
++                                Ok::<(), String>(())
++                            }
+                         });
+                         let _ = resp.send(result);
+                     }
