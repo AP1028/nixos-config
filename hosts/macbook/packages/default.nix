@@ -1,4 +1,4 @@
-{pkgs, ...}: let
+{pkgs, inputs, ...}: let
   wechat-uos-wrapped = pkgs.symlinkJoin {
     name = "wechat-uos-desktop-fix";
     paths = [pkgs.wechat-uos];
@@ -62,7 +62,12 @@ in {
     kdePackages.okular
     gimp3-with-plugins
     krita
-    zotero
+    # nixpkgs dropped firefox-esr-140; take it from the stable track (see the
+    # package file for why zotero cannot build against firefox-esr-153).
+    (pkgs.callPackage ../../../packages/zotero-fx140.nix {
+      firefox-esr-140-unwrapped =
+        inputs.nixpkgs-stable.legacyPackages.${pkgs.stdenv.hostPlatform.system}.firefox-esr-140-unwrapped;
+    })
     moonlight-qt
     bilibili
 
