@@ -15,6 +15,9 @@
     ./packages
     ./system
 
+    # Android (LineageOS 23.0) in an LXC container, on 16 KiB-page images.
+    ./waydroid.nix
+
     ../../modules/system/local.nix
     (import ../../modules/system/rebuild-scripts.nix {host = "macbook";})
 
