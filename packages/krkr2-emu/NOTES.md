@@ -43,6 +43,26 @@ Note: in the test sandbox the game directories are read-only, so titles that
 save (`savedata/savecheck`) abort with `File Writing Error`. On a normal
 machine the directories are writable and those runs continue.
 
+## Backed out: save loading (frame flashing)
+
+Three changes made while fixing save loading were reverted on request:
+
+* `psbfile-mdf-signature.patch` — accepting lowercase `mdf\0` scenario
+  containers. It made save loading succeed, but from the moment the save
+  picker opened the window flashed continuously (also after the scene had
+  loaded), on both the software-GL session and the user's GPU run.
+* `transition-missing-handler-log.patch` — logging the unknown `wave`
+  transition instead of showing the modal warning box.
+* The PSB resource registration rework that went with them
+  (`PSBMedia::removeByPrefix` + `registerPsbResources`, matching KrKr2-Next).
+
+State after the revert: rendering is stable again, and loading a save fails
+with `Not a valid PSB file` (kagenvplayer.tjs → initStorage → `PSBFile` on a
+`scn/*.ks.scn`), exactly as before. The current best explanation is that the
+engine's rendering of the transition into the save picker is what breaks, and
+it only became visible once the scene data could actually be loaded; that needs
+investigating before the MDF fix can come back.
+
 ## The `Storages.tjs` failure (fixed)
 
 The four titles above ship **Kirikiri-scrambled** scripts: the file starts with

@@ -91,14 +91,10 @@ stdenv.mkDerivation {
     # `krkr2 data.xp3` failed with "Error opening archive": a bare relative
     # path is treated as a storage name, so resolve it against the cwd first.
     ./patches/launcher-relative-path.patch
-    # Yuzusoft scenario containers are "mdf\0" (lowercase) + zlib; the MDF
-    # signature check was case-sensitive, so loading a save failed with
-    # "Not a valid PSB file" when it parsed the scene file.
-    ./patches/psbfile-mdf-signature.patch
-    # A transition handler from a Windows-only plugin (yuzuex.dll provides
-    # "wave") falls back to crossfade, but the engine popped a modal warning
-    # that blocked the transition and left the frame blank. Log it instead.
-    ./patches/transition-missing-handler-log.patch
+    # NOTE: the lowercase-"mdf" signature fix (which let save loading succeed)
+    # and the transition-warning-dialog change were backed out: together they
+    # made the frame flash continuously after opening the save picker. See
+    # NOTES.md. Save loading therefore still fails with "Not a valid PSB file".
   ];
 
   nativeBuildInputs = [
