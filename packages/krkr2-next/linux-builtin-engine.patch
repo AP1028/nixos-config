@@ -1,0 +1,20 @@
+--- a/lib/pages/home_page.dart
++++ b/lib/pages/home_page.dart
+@@ -57,9 +57,17 @@
+     try {
+       final executablePath = Platform.resolvedExecutable;
+       final execDir = File(executablePath).parent.path;
++      if (Platform.isLinux) {
++        // The Nix package bundles libengine_api.so in the app bundle's
++        // lib/ directory, next to the executable. Upstream only resolves
++        // the macOS Frameworks layout here, so on Linux the built-in
++        // engine mode was never detected.
++        final libPath = '$execDir/lib/libengine_api.so';
++        if (File(libPath).existsSync()) return libPath;
++      }
+       final frameworksPath = '$execDir/../Frameworks/libengine_api.dylib';
+       final resolved = File(frameworksPath);
+       if (resolved.existsSync()) return resolved.path;
+     } catch (_) {}
+     return null;
+   }

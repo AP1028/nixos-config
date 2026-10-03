@@ -24,6 +24,10 @@ flutter347.buildFlutterApplication {
   # stay inside the unpacked source tree.
   sourceRoot = "source/apps/flutter_app";
 
+  # Detect the bundled libengine_api.so on Linux: upstream only resolves the
+  # macOS Frameworks layout, so built-in engine mode was never found there.
+  patches = [ ./linux-builtin-engine.patch ];
+
   dontUseCmakeConfigure = true;
 
   pubspecLock = builtins.fromJSON (builtins.readFile ./pubspec.lock.json);
