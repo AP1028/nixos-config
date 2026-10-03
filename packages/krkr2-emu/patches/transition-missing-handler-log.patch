@@ -1,0 +1,37 @@
+diff --git a/cpp/core/visual/TransIntf.cpp b/cpp/core/visual/TransIntf.cpp
+index 08e41a6..cc27c26 100644
+--- a/cpp/core/visual/TransIntf.cpp
++++ b/cpp/core/visual/TransIntf.cpp
+@@ -8,6 +8,7 @@
+ //---------------------------------------------------------------------------
+ // Transition handler mamagement & default transition handlers
+ //---------------------------------------------------------------------------
++#include <spdlog/spdlog.h>
+ #include "tjsCommHead.h"
+ 
+ #include "TransIntf.h"
+@@ -330,12 +331,18 @@ iTVPTransHandlerProvider *TVPFindTransHandlerProvider(const ttstr &name) {
+     tTVPTransHandlerProviderHolder *holder =
+         TVPTransHandlerProviders.Find(name);
+     if(!holder) {
+-        static bool showed = false;
+-        if(!showed) {
+-            TVPShowSimpleMessageBox(
+-                TVPFormatMessage(TVPCannotFindTransHander, name),
+-                TJS_W("Warning"));
+-            showed = true;
++        // Unknown transition. This normally means the game relies on a
++        // Windows-only plugin (e.g. yuzuex.dll provides "wave"): fall back to
++        // crossfade. Report it in the log rather than a modal message box,
++        // which blocks the transition and can leave the frame blank until it
++        // is dismissed.
++        static bool warned = false;
++        if(!warned) {
++            if(auto logger = spdlog::get("core")) {
++                logger->warn("{}", TVPFormatMessage(TVPCannotFindTransHander, name)
++                                       .AsStdString());
++            }
++            warned = true;
+         }
+         holder = TVPTransHandlerProviders.Find(TJS_W("crossfade"));
+     }

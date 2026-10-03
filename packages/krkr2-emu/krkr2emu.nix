@@ -95,6 +95,10 @@ stdenv.mkDerivation {
     # signature check was case-sensitive, so loading a save failed with
     # "Not a valid PSB file" when it parsed the scene file.
     ./patches/psbfile-mdf-signature.patch
+    # A transition handler from a Windows-only plugin (yuzuex.dll provides
+    # "wave") falls back to crossfade, but the engine popped a modal warning
+    # that blocked the transition and left the frame blank. Log it instead.
+    ./patches/transition-missing-handler-log.patch
   ];
 
   nativeBuildInputs = [
