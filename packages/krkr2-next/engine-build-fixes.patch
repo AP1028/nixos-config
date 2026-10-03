@@ -467,6 +467,111 @@ index 7312423..97a24f7 100644
  target_link_libraries(${PROJECT_NAME} PUBLIC
      lz4::lz4
  )
+diff --git a/cpp/core/visual/FontImpl.cpp b/cpp/core/visual/FontImpl.cpp
+index b5a1e85..0acb95e 100644
+--- a/cpp/core/visual/FontImpl.cpp
++++ b/cpp/core/visual/FontImpl.cpp
+@@ -20,6 +20,12 @@
+ #include "StorageImpl.h"
+ #include "BinaryStream.h"
+ #include <spdlog/spdlog.h>
++#if defined(__linux__)
++#include <filesystem>
++#include <algorithm>
++#include <cctype>
++#include <cstdlib>
++#endif
+ #ifdef __APPLE__
+ #include <TargetConditionals.h>
+ #if TARGET_OS_IOS
+@@ -243,6 +249,87 @@ void TVPInitFontNames() {
+                TJS_W("file://./System/Library/Fonts/Supplemental/Arial Unicode.ttf")))
+             break;
+ #endif
++#else
++        // Linux and other desktop platforms: unlike Android/iOS/macOS there is
++        // no platform font fallback, so look for a default font next to the
++        // executable, in the bundle's fonts/ directory, and in the usual
++        // system font directories.
++        {
++            // Defined in the per-platform environ sources, no public header.
++            std::string TVPGetDefaultFileDir();
++
++            auto tryFontFile = [](const std::string &path) -> bool {
++                std::error_code ec;
++                if(!std::filesystem::is_regular_file(path, ec))
++                    return false;
++                auto ext = std::filesystem::path(path).extension().string();
++                std::transform(ext.begin(), ext.end(), ext.begin(),
++                               [](unsigned char c) {
++                                   return static_cast<char>(std::tolower(c));
++                               });
++                if(ext != ".ttf" && ext != ".ttc" && ext != ".otf" &&
++                   ext != ".otc")
++                    return false;
++                return TVPEnumFontsProc(ttstr("file://" + path)) > 0;
++            };
++
++            auto tryFontDir = [&tryFontFile](const std::string &dir) -> bool {
++                std::error_code ec;
++                if(!std::filesystem::is_directory(dir, ec))
++                    return false;
++                for(const auto &entry :
++                    std::filesystem::recursive_directory_iterator(
++                        dir,
++                        std::filesystem::directory_options::skip_permission_denied,
++                        ec)) {
++                    if(entry.is_regular_file(ec) &&
++                       tryFontFile(entry.path().string()))
++                        return true;
++                }
++                return false;
++            };
++
++            std::string exePath = TVPGetDefaultFileDir();
++            std::string exeDir;
++            auto slash = exePath.find_last_of('/');
++            if(slash != std::string::npos)
++                exeDir = exePath.substr(0, slash);
++
++            // Default font shipped inside the app bundle.
++            if(!exeDir.empty()) {
++                bool found = false;
++                for(const char *ext : { ".ttf", ".ttc", ".otf", ".otc" }) {
++                    if(tryFontFile(exeDir + "/default" + ext)) {
++                        found = true;
++                        break;
++                    }
++                }
++                if(!found)
++                    found = tryFontDir(exeDir + "/fonts");
++                if(found)
++                    break;
++            }
++
++            std::vector<std::string> systemFontDirs = {
++                "/run/current-system/sw/share/fonts",
++                "/usr/share/fonts",
++                "/usr/local/share/fonts",
++            };
++            if(const char *home = getenv("HOME")) {
++                systemFontDirs.emplace_back(std::string(home) +
++                                            "/.local/share/fonts");
++                systemFontDirs.emplace_back(std::string(home) + "/.fonts");
++            }
++            bool systemFound = false;
++            for(const auto &dir : systemFontDirs) {
++                if(tryFontDir(dir)) {
++                    systemFound = true;
++                    break;
++                }
++            }
++            if(systemFound)
++                break;
++        }
+ #endif
+ 
+         { // from internal storage (or system fonts on iOS)
 diff --git a/cpp/external/libbpg/CMakeLists.txt b/cpp/external/libbpg/CMakeLists.txt
 index 2134d5a..dc11ead 100644
 --- a/cpp/external/libbpg/CMakeLists.txt

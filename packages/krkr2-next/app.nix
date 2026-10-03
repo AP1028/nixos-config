@@ -6,6 +6,7 @@
   cmake,
   ninja,
   gtk3,
+  noto-fonts-cjk-sans,
 }:
 
 flutter347.buildFlutterApplication {
@@ -47,6 +48,14 @@ flutter347.buildFlutterApplication {
     # looks for libengine_api.so.
     mkdir -p $out/app/krkr2-next/lib
     cp ${engine}/lib/libengine_api.so $out/app/krkr2-next/lib/
+
+    # The engine has no system-font fallback on Linux (only Android/iOS/macOS
+    # have one), so ship a CJK-capable default font inside the bundle. The
+    # engine scans <exe dir>/default.{ttf,ttc,otf,otc} and <exe dir>/fonts/.
+    mkdir -p $out/app/krkr2-next/fonts
+    cp ${noto-fonts-cjk-sans}/share/fonts/opentype/noto-cjk/NotoSansCJK-VF.otf.ttc \
+      $out/app/krkr2-next/fonts/
+    ln -s fonts/NotoSansCJK-VF.otf.ttc $out/app/krkr2-next/default.ttc
 
     # Upstream ships no Linux desktop entry or icon (only macOS assets), so
     # add both here from the bundled macOS app icon set.
