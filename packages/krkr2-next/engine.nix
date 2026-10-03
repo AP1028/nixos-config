@@ -62,7 +62,18 @@ stdenv.mkDerivation {
     hash = "sha256-y5BFtHoTmlJh8qV1Jj87/WPiFadfKmkIIreeFlC9aiI=";
   };
 
-  patches = [ ./engine-build-fixes.patch ];
+  patches = [
+    ./engine-build-fixes.patch
+    # The engine reported a fixed 2048-wide virtual screen while the EGL
+    # surface stayed 1280x720, so games laid out for the wrong size and the
+    # viewport/readback covered only part of it (missing backgrounds, mirrored
+    # UI). Derive the screen size from the actual surface instead.
+    ./screen-size-fix.patch
+    # The frame grab used the current GL viewport and whatever framebuffer was
+    # bound, so once the game created its (power-of-two) layer textures the
+    # readback returned a layer texture instead of the composed screen.
+    ./frame-readback-fix.patch
+  ];
 
   nativeBuildInputs = [
     cmake

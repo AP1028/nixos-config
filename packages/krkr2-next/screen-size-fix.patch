@@ -1,0 +1,42 @@
+diff --git a/cpp/core/visual/impl/TVPScreen.cpp b/cpp/core/visual/impl/TVPScreen.cpp
+index e0196dc..bfa1ecf 100644
+--- a/cpp/core/visual/impl/TVPScreen.cpp
++++ b/cpp/core/visual/impl/TVPScreen.cpp
+@@ -4,19 +4,29 @@
+ #include "Application.h"
+ #include "krkr_egl_context.h"
+ 
+-int tTVPScreen::GetWidth() { return 2048; }
+-int tTVPScreen::GetHeight() {
+-    // Use EGL surface dimensions if available, otherwise fallback to width
++// The virtual screen must match the render surface. It used to report a fixed
++// width of 2048 while the EGL surface (and therefore the readback) stayed at
++// the bridge's 1280x720: games then laid their layers out for a 2048-wide
++// screen, and the viewport/readback only covered part of it, so backgrounds
++// were missing and the UI appeared shifted and mirrored.
++int tTVPScreen::GetWidth() {
+     auto& egl = krkr::GetEngineEGLContext();
+     if (egl.IsValid()) {
+         uint32_t w = egl.GetWidth();
++        if (w > 0)
++            return static_cast<int>(w);
++    }
++    return 1280;
++}
++
++int tTVPScreen::GetHeight() {
++    auto& egl = krkr::GetEngineEGLContext();
++    if (egl.IsValid()) {
+         uint32_t h = egl.GetHeight();
+-        if (w > 0 && h > 0) {
+-            int baseW = GetWidth();
+-            return baseW * static_cast<int>(h) / static_cast<int>(w);
+-        }
++        if (h > 0)
++            return static_cast<int>(h);
+     }
+-    return GetWidth();
++    return 720;
+ }
+ 
+ int tTVPScreen::GetDesktopLeft() { return 0; }

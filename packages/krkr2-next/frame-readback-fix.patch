@@ -1,0 +1,70 @@
+diff --git a/bridge/engine_api/src/engine_api.cpp b/bridge/engine_api/src/engine_api.cpp
+index fc96613..ccda9df 100644
+--- a/bridge/engine_api/src/engine_api.cpp
++++ b/bridge/engine_api/src/engine_api.cpp
+@@ -381,26 +381,21 @@ struct FrameReadbackLayout {
+ 
+ FrameReadbackLayout GetFrameReadbackLayoutLocked(engine_handle_s* impl) {
+   FrameReadbackLayout layout;
++  // The readback must describe the *surface*. It used to adopt whatever GL
++  // viewport happened to be current, which after the layer tree is drawn is
++  // usually an internal layer texture (power-of-two sized, e.g. 2048x2048):
++  // frames then carried that texture's size, and its contents, instead of the
++  // composed screen.
++  layout.read_x = 0;
++  layout.read_y = 0;
+   layout.width = impl->frame.surface_width;
+   layout.height = impl->frame.surface_height;
+ 
+-  GLint viewport[4] = {0, 0, 0, 0};
+-  glGetIntegerv(GL_VIEWPORT, viewport);
+-  if (glGetError() == GL_NO_ERROR && viewport[2] > 0 && viewport[3] > 0) {
+-    layout.read_x = viewport[0];
+-    layout.read_y = viewport[1];
+-    layout.width = static_cast<uint32_t>(viewport[2]);
+-    layout.height = static_cast<uint32_t>(viewport[3]);
+-  } else {
+-    // Fallback: use the EGL surface dimensions
++  if (layout.width == 0 || layout.height == 0) {
+     auto& egl = krkr::GetEngineEGLContext();
+     if (egl.IsValid()) {
+-      const uint32_t egl_w = egl.GetWidth();
+-      const uint32_t egl_h = egl.GetHeight();
+-      if (egl_w > 0 && egl_h > 0) {
+-        layout.width = egl_w;
+-        layout.height = egl_h;
+-      }
++      layout.width = egl.GetWidth();
++      layout.height = egl.GetHeight();
+     }
+   }
+ 
+@@ -419,6 +414,17 @@ bool ReadCurrentFrameRgba(const FrameReadbackLayout& layout, void* out_pixels) {
+     return false;
+   }
+ 
++  // Read the composed screen: bind the default framebuffer and set a viewport
++  // that matches the surface, so the grab cannot pick up a layer texture or a
++  // stale viewport left behind by the renderer.
++  GLint previous_fbo = 0;
++  GLint previous_viewport[4] = {0, 0, 0, 0};
++  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_fbo);
++  glGetIntegerv(GL_VIEWPORT, previous_viewport);
++  glBindFramebuffer(GL_FRAMEBUFFER, 0);
++  glViewport(0, 0, static_cast<GLsizei>(layout.width),
++             static_cast<GLsizei>(layout.height));
++
+   glFinish();
+   glPixelStorei(GL_PACK_ALIGNMENT, 4);
+   glReadPixels(static_cast<GLint>(layout.read_x),
+@@ -428,6 +434,10 @@ bool ReadCurrentFrameRgba(const FrameReadbackLayout& layout, void* out_pixels) {
+                GL_UNSIGNED_BYTE, out_pixels);
+   const GLenum read_pixels_error = glGetError();
+ 
++  glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_fbo));
++  glViewport(previous_viewport[0], previous_viewport[1], previous_viewport[2],
++             previous_viewport[3]);
++
+   if (read_pixels_error != GL_NO_ERROR) {
+     return false;
+   }
