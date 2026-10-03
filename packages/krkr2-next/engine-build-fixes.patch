@@ -132,6 +132,29 @@ index fd6d0ec..0335d1c 100644
  
  HRESULT STDMETHODCALLTYPE tTVPIStreamAdapter::QueryInterface(REFIID riid,
                                                               void **ppvObject) {
+diff --git a/cpp/core/environ/Application.cpp b/cpp/core/environ/Application.cpp
+index c911908..eb4823e 100644
+--- a/cpp/core/environ/Application.cpp
++++ b/cpp/core/environ/Application.cpp
+@@ -9,6 +9,7 @@
+ #include "tjsDebug.h"
+ 
+ #include "Application.h"
++#include <spdlog/spdlog.h>
+ #include "SysInitIntf.h"
+ #include "SysInitImpl.h"
+ #include "DebugIntf.h"
+@@ -506,6 +507,10 @@ void tTVPApplication::BringToFront() {
+ }
+ #endif
+ void tTVPApplication::ShowException(const ttstr &e) {
++    // Log before the dialog: on headless/embedded runs the message box may
++    // not be visible (or may fail), which would hide the error entirely.
++    spdlog::error("{}", e.AsStdString());
++    spdlog::default_logger()->flush();
+     TVPShowSimpleMessageBox(e, TVPGetErrorDialogTitle());
+     TVPSystemUninit();
+     TVPExitApplication(0);
 diff --git a/cpp/core/environ/CMakeLists.txt b/cpp/core/environ/CMakeLists.txt
 index fb1e057..b6ca018 100644
 --- a/cpp/core/environ/CMakeLists.txt
@@ -770,6 +793,389 @@ index 0000000..4acea3c
 +// engine_api.cpp anchors the internal plugins by calling this registration
 +// hook; krkrlive2d.cpp provides it when the Cubism SDK is available.
 +extern "C" void TVPRegisterKrkrLive2DPluginAnchor() {}
+diff --git a/cpp/plugins/motionplayer/main.cpp b/cpp/plugins/motionplayer/main.cpp
+index caedec0..2fed813 100644
+--- a/cpp/plugins/motionplayer/main.cpp
++++ b/cpp/plugins/motionplayer/main.cpp
+@@ -2,6 +2,9 @@
+ // Created by LiDon on 2025/9/13.
+ // TODO: implement emoteplayer.dll plugin
+ //
++#include <map>
++#include <mutex>
++#include <string>
+ #include <spdlog/spdlog.h>
+ #include "tjs.h"
+ #include "tjsDictionary.h"
+@@ -19,6 +22,169 @@ using namespace TJS;
+ #define NCB_MODULE_NAME TJS_W("motionplayer.dll")
+ #define LOGGER spdlog::get("plugin")
+ 
++
++// ---------------------------------------------------------------------------
++// Motion.D3DAdaptor compatibility object
++// ---------------------------------------------------------------------------
++// The original motionplayer.dll exposes Motion.D3DAdaptor for games that
++// composite emote motions through Direct3D. This runtime renders through its
++// own GL path and has no Direct3D adapter, but Yuzusoft KAG scripts construct
++// this class while drawing affine (motion) layers, so provide a no-op object.
++namespace motion {
++    class D3DAdaptor {
++    public:
++        D3DAdaptor() = default;
++
++        ~D3DAdaptor() {
++            if(_canvas) { _canvas->Release(); _canvas = nullptr; }
++        }
++
++        static tjs_error create(D3DAdaptor **result, tjs_int numparams,
++                                tTJSVariant **param,
++                                iTJSDispatch2 * /*objthis*/) {
++            std::string info;
++            for(tjs_int i = 0; i < numparams; ++i) {
++                info += " [";
++                info += std::to_string(i);
++                info += "]=";
++                if((*param[i]).Type() == tvtObject) {
++                    info += "object";
++                } else {
++                    info += ttstr(*param[i]).AsStdString();
++                }
++            }
++            LOGGER->debug("D3DAdaptor: constructed with {} arg(s):{}", numparams, info);
++            *result = new D3DAdaptor();
++            return TJS_S_OK;
++        }
++
++        // Members used by Yuzusoft's KAG scripts while drawing affine motion
++        // layers. This runtime renders motions through its own GL path, so the
++        // adapter only needs to accept the calls and hold the state.
++        static tjs_error captureCanvas(tTJSVariant * /*result*/, tjs_int numparams,
++                                       tTJSVariant **param,
++                                       iTJSDispatch2 *objthis) {
++            auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
++            if(!self) return TJS_E_FAIL;
++            LOGGER->debug("D3DAdaptor::captureCanvas({} arg(s))", numparams);
++            if(numparams >= 1 && (*param[0]).Type() == tvtObject) {
++                iTJSDispatch2 *canvas = (*param[0]).AsObject();
++                if(canvas) canvas->AddRef();
++                if(self->_canvas) self->_canvas->Release();
++                self->_canvas = canvas;
++            }
++            return TJS_S_OK;
++        }
++
++        static tjs_error getClearEnabled(tTJSVariant *result, tjs_int,
++                                         tTJSVariant **, iTJSDispatch2 *objthis) {
++            auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
++            if(result)
++                *result = tTJSVariant(static_cast<tjs_int>(self && self->_clearEnabled ? 1 : 0));
++            return TJS_S_OK;
++        }
++
++        static tjs_error setClearEnabled(tTJSVariant *, tjs_int numparams,
++                                         tTJSVariant **param, iTJSDispatch2 *objthis) {
++            auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
++            if(self && numparams >= 1)
++                self->_clearEnabled = (static_cast<tjs_int>(*param[0]) != 0);
++            return TJS_S_OK;
++        }
++
++    private:
++        iTJSDispatch2 *_canvas = nullptr;
++        bool _clearEnabled = false;
++    };
++} // namespace motion
++
++
++// Generic logging stubs used to discover which Motion/D3DAdaptor members a game
++// touches. Calls are logged and answered with a harmless value.
++static tjs_error StubFunc(tTJSVariant *result, tjs_int numparams,
++                          tTJSVariant **param, iTJSDispatch2 *) {
++    std::string args;
++    for(tjs_int i = 0; i < numparams; ++i) {
++        if((*param[i]).Type() == tvtObject) args += " [obj]";
++        else args += " [" + ttstr(*param[i]).AsStdString() + "]";
++    }
++    LOGGER->debug("stub method ({} args):{}", numparams, args);
++    if(result) *result = tTJSVariant(static_cast<tjs_int>(0));
++    return TJS_S_OK;
++}
++static tjs_error StubGet(tTJSVariant *result, tjs_int, tTJSVariant **, iTJSDispatch2 *) {
++    LOGGER->debug("stub property get");
++    if(result) *result = tTJSVariant(static_cast<tjs_int>(0));
++    return TJS_S_OK;
++}
++static tjs_error StubSet(tTJSVariant *, tjs_int numparams, tTJSVariant **param,
++                         iTJSDispatch2 *) {
++    std::string v;
++    if(numparams >= 1) {
++        if((*param[0]).Type() == tvtObject) v = "object";
++        else v = ttstr(*param[0]).AsStdString();
++    }
++    LOGGER->debug("stub property set = {}", v);
++    return TJS_S_OK;
++}
++
++
++// ---------------------------------------------------------------------------
++// Tolerant property stubs for the M2 motion-player API
++// ---------------------------------------------------------------------------
++// Yuzusoft titles drive the motion player through more members than this
++// reimplementation implements. Unknown-but-harmless members are accepted and
++// their values kept, so scripts can read back what they assigned.
++static std::mutex g_stubValuesMutex;
++static std::map<std::pair<iTJSDispatch2 *, std::string>, tTJSVariant> g_stubValues;
++
++static tjs_error StubNamedGet(const char *name, tTJSVariant *result,
++                              iTJSDispatch2 *objthis) {
++    std::lock_guard<std::mutex> lock(g_stubValuesMutex);
++    auto it = g_stubValues.find({objthis, name});
++    if(result) {
++        if(it != g_stubValues.end()) *result = it->second;
++        else *result = tTJSVariant(static_cast<tjs_int>(0));
++    }
++    return TJS_S_OK;
++}
++
++static tjs_error StubNamedSet(const char *name, tjs_int numparams,
++                              tTJSVariant **param, iTJSDispatch2 *objthis) {
++    if(numparams < 1) return TJS_S_OK;
++    std::lock_guard<std::mutex> lock(g_stubValuesMutex);
++    g_stubValues[{objthis, name}] = *param[0];
++    return TJS_S_OK;
++}
++
++#define KRKR_STUB_PROPERTY(NAME)                                               \
++    static tjs_error stub_get_##NAME(tTJSVariant *r, tjs_int, tTJSVariant **,   \
++                                     iTJSDispatch2 *objthis) {                  \
++        return StubNamedGet(#NAME, r, objthis);                                 \
++    }                                                                          \
++    static tjs_error stub_set_##NAME(tTJSVariant *, tjs_int numparams,          \
++                                     tTJSVariant **param,                       \
++                                     iTJSDispatch2 *objthis) {                  \
++        return StubNamedSet(#NAME, numparams, param, objthis);                  \
++    }
++
++
++// The motion variable API: names this reimplementation does not track are
++// reported as empty lists so scripts that enumerate them keep working.
++static tjs_error StubGetEmptyArray(tTJSVariant *result, tjs_int, tTJSVariant **,
++                                   iTJSDispatch2 *) {
++    if(result) {
++        iTJSDispatch2 *array = TJSCreateArrayObject();
++        if(array) {
++            *result = tTJSVariant(array);
++            array->Release();
++        } else {
++            *result = tTJSVariant();
++        }
++    }
++    return TJS_S_OK;
++}
++
+ static motion::SeparateLayerAdaptor *GetSeparateLayerAdaptorInstance(iTJSDispatch2 *objthis) {
+     return ncbInstanceAdaptor<motion::SeparateLayerAdaptor>::GetNativeInstance(objthis);
+ }
+@@ -202,6 +368,33 @@ static tjs_error SeparateLayerAdaptor_getImageHeight(tTJSVariant *r, tjs_int, tT
+     return TJS_S_OK;
+ }
+ 
++NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
++    Factory(&motion::D3DAdaptor::create);
++    NCB_METHOD_RAW_CALLBACK(captureCanvas, &motion::D3DAdaptor::captureCanvas, 0);
++    NCB_PROPERTY_RAW_CALLBACK(clearEnabled, &motion::D3DAdaptor::getClearEnabled,
++                              &motion::D3DAdaptor::setClearEnabled, 0);
++    NCB_METHOD_RAW_CALLBACK(unloadUnusedTextures, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(removeAllTextures, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(removeAllBg, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(registerBg, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(registerCaption, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(removeAllCaption, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(alphaOpAdd, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setClearColor, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setResizable, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(getSubImageLayers, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(drawLayer, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(copyRect, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setSize, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(clear, &StubFunc, 0);
++    NCB_PROPERTY_RAW_CALLBACK(canvasCaptureEnabled, &StubGet, &StubSet, 0);
++    NCB_PROPERTY_RAW_CALLBACK(mainImageBuffer, &StubGet, &StubSet, 0);
++    NCB_PROPERTY_RAW_CALLBACK(mainImageBufferPitch, &StubGet, &StubSet, 0);
++    NCB_PROPERTY_RAW_CALLBACK(width, &StubGet, &StubSet, 0);
++    NCB_PROPERTY_RAW_CALLBACK(height, &StubGet, &StubSet, 0);
++    NCB_PROPERTY_RAW_CALLBACK(neutralColor, &StubGet, &StubSet, 0);
++}
++
+ NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
+     NCB_CONSTRUCTOR((iTJSDispatch2 *));
+     NCB_PROPERTY_RAW_CALLBACK_RO(width, SeparateLayerAdaptor_getWidth, 0);
+@@ -218,6 +411,7 @@ NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {
+ // 但 then 分支实际赋的是比较结果 (int)1 而非对象，导致 (int)1 to Object。故让 useD3D 返回整数，
+ // 使 typeof === "Integer" 走 else，赋 Motion.enableD3D（stub 对象），避免两处 int→Object 报错。
+ static tjs_error Player_getUseD3D(tTJSVariant *r, tjs_int, tTJSVariant **, iTJSDispatch2 *) {
++
+     *r = tTJSVariant(static_cast<tjs_int>(0));
+     return TJS_S_OK;
+ }
+@@ -227,6 +421,7 @@ static tjs_error Player_setUseD3D(tTJSVariant *, tjs_int count, tTJSVariant **p,
+     return TJS_S_OK;
+ }
+ static tjs_error Player_getEnableD3D(tTJSVariant *r, tjs_int, tTJSVariant **, iTJSDispatch2 *) {
++
+     iTJSDispatch2 *obj = TJSCreateDictionaryObject();
+     if (obj) {
+         *r = tTJSVariant(obj);
+@@ -322,6 +517,20 @@ static tjs_error Player_setTickCount(tTJSVariant *, tjs_int count, tTJSVariant *
+     return TJS_S_OK;
+ }
+ 
++static tjs_error Player_getAnimating(tTJSVariant *r, tjs_int, tTJSVariant **,
++                                     iTJSDispatch2 *objthis) {
++    auto *player = GetPlayerInstance(objthis);
++    if(r) *r = tTJSVariant(player ? player->getPlaying() : false);
++    return TJS_S_OK;
++}
++
++static tjs_error Player_getLoopTime(tTJSVariant *r, tjs_int, tTJSVariant **,
++                                    iTJSDispatch2 *objthis) {
++    auto *player = GetPlayerInstance(objthis);
++    if(r) *r = tTJSVariant(static_cast<tjs_int>(player ? player->getLastTime() : 0));
++    return TJS_S_OK;
++}
++
+ static tjs_error Player_getLastTime(tTJSVariant *r, tjs_int, tTJSVariant **,
+                                     iTJSDispatch2 *objthis) {
+     auto *player = GetPlayerInstance(objthis);
+@@ -502,12 +711,67 @@ static tjs_error Player_draw(tTJSVariant *, tjs_int count, tTJSVariant **p,
+     return TJS_S_OK;
+ }
+ 
++KRKR_STUB_PROPERTY(tag)
++KRKR_STUB_PROPERTY(priority)
++KRKR_STUB_PROPERTY(parameter)
++KRKR_STUB_PROPERTY(flipLR)
++KRKR_STUB_PROPERTY(flipUD)
++KRKR_STUB_PROPERTY(branchVisible)
++KRKR_STUB_PROPERTY(layerVisible)
++KRKR_STUB_PROPERTY(preview)
++KRKR_STUB_PROPERTY(stealthChara)
++KRKR_STUB_PROPERTY(stealthMotion)
++KRKR_STUB_PROPERTY(motionKey)
++KRKR_STUB_PROPERTY(project)
++KRKR_STUB_PROPERTY(cameraActive)
++KRKR_STUB_PROPERTY(outline)
++KRKR_STUB_PROPERTY(meshline)
++KRKR_STUB_PROPERTY(maskMode)
++KRKR_STUB_PROPERTY(colorWeight)
++KRKR_STUB_PROPERTY(syncActive)
++KRKR_STUB_PROPERTY(independentLayerInherit)
++KRKR_STUB_PROPERTY(defaultTransformOrder)
++KRKR_STUB_PROPERTY(defaultSyncActive)
++KRKR_STUB_PROPERTY(zFactor)
++KRKR_STUB_PROPERTY(stereovisionActive)
++KRKR_STUB_PROPERTY(resourceManager)
++KRKR_STUB_PROPERTY(cameraTarget)
++KRKR_STUB_PROPERTY(frameTickCount)
++KRKR_STUB_PROPERTY(meshDivision)
++KRKR_STUB_PROPERTY(onFindMotion)
++
+ NCB_REGISTER_SUBCLASS_DELAY(Player) {
+     NCB_CONSTRUCTOR(());
+     NCB_PROPERTY_RAW_CALLBACK(useD3D, Player_getUseD3D, Player_setUseD3D, TJS_STATICMEMBER);
+     NCB_PROPERTY_RAW_CALLBACK(enableD3D, Player_getEnableD3D, Player_setEnableD3D, TJS_STATICMEMBER);
+     NCB_PROPERTY_RAW_CALLBACK_RO(playing, Player_getPlaying, 0);
+     NCB_PROPERTY_RAW_CALLBACK_RO(allplaying, Player_getAllplaying, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(animating, Player_getAnimating, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(loopTime, Player_getLoopTime, 0);
++    NCB_METHOD_RAW_CALLBACK(setImageSize, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setFlip, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setZoom, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setSlant, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(isExistMotion, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(findMotion, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(motionList, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setAutomaticCulling, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setMaterialFlag, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setMaterialType, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setCoordinate, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(getMaterial, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setMaterialTexture, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setLayerMatrix, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setColor, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setClipRect, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(resetClipRect, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setBezierPatch, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(clearMesh, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(remove, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(compositeMesh, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(stencilChain, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(newTexture, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(newMotionLayer, &StubFunc, 0);
+     NCB_PROPERTY_RAW_CALLBACK(motion, Player_getMotion, Player_setMotion, 0);
+     NCB_PROPERTY_RAW_CALLBACK(chara, Player_getChara, Player_setChara, 0);
+     NCB_PROPERTY_RAW_CALLBACK(tickCount, Player_getTickCount, Player_setTickCount, 0);
+@@ -528,6 +792,42 @@ NCB_REGISTER_SUBCLASS_DELAY(Player) {
+     NCB_METHOD_RAW_CALLBACK(draw, Player_draw, 0);
+     NCB_METHOD_RAW_CALLBACK(setVariable, Player_setVariable, 0);
+     NCB_METHOD_RAW_CALLBACK(getVariable, Player_getVariable, 0);
++    NCB_METHOD_RAW_CALLBACK(getVariableRange, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(getVariableFrameList, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(setVariableBuffer, &StubFunc, 0);
++    NCB_METHOD_RAW_CALLBACK(getVariableBuffer, &StubFunc, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(variableKeys, &StubGetEmptyArray, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(variableList, &StubGetEmptyArray, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(instantVariableList, &StubGetEmptyArray, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(variableMatchList, &StubGetEmptyArray, 0);
++    NCB_PROPERTY_RAW_CALLBACK(tag, stub_get_tag, stub_set_tag, 0);
++    NCB_PROPERTY_RAW_CALLBACK(priority, stub_get_priority, stub_set_priority, 0);
++    NCB_PROPERTY_RAW_CALLBACK(parameter, stub_get_parameter, stub_set_parameter, 0);
++    NCB_PROPERTY_RAW_CALLBACK(flipLR, stub_get_flipLR, stub_set_flipLR, 0);
++    NCB_PROPERTY_RAW_CALLBACK(flipUD, stub_get_flipUD, stub_set_flipUD, 0);
++    NCB_PROPERTY_RAW_CALLBACK(branchVisible, stub_get_branchVisible, stub_set_branchVisible, 0);
++    NCB_PROPERTY_RAW_CALLBACK(layerVisible, stub_get_layerVisible, stub_set_layerVisible, 0);
++    NCB_PROPERTY_RAW_CALLBACK(preview, stub_get_preview, stub_set_preview, 0);
++    NCB_PROPERTY_RAW_CALLBACK(stealthChara, stub_get_stealthChara, stub_set_stealthChara, 0);
++    NCB_PROPERTY_RAW_CALLBACK(stealthMotion, stub_get_stealthMotion, stub_set_stealthMotion, 0);
++    NCB_PROPERTY_RAW_CALLBACK(motionKey, stub_get_motionKey, stub_set_motionKey, 0);
++    NCB_PROPERTY_RAW_CALLBACK(project, stub_get_project, stub_set_project, 0);
++    NCB_PROPERTY_RAW_CALLBACK(cameraActive, stub_get_cameraActive, stub_set_cameraActive, 0);
++    NCB_PROPERTY_RAW_CALLBACK(outline, stub_get_outline, stub_set_outline, 0);
++    NCB_PROPERTY_RAW_CALLBACK(meshline, stub_get_meshline, stub_set_meshline, 0);
++    NCB_PROPERTY_RAW_CALLBACK(maskMode, stub_get_maskMode, stub_set_maskMode, 0);
++    NCB_PROPERTY_RAW_CALLBACK(colorWeight, stub_get_colorWeight, stub_set_colorWeight, 0);
++    NCB_PROPERTY_RAW_CALLBACK(syncActive, stub_get_syncActive, stub_set_syncActive, 0);
++    NCB_PROPERTY_RAW_CALLBACK(independentLayerInherit, stub_get_independentLayerInherit, stub_set_independentLayerInherit, 0);
++    NCB_PROPERTY_RAW_CALLBACK(defaultTransformOrder, stub_get_defaultTransformOrder, stub_set_defaultTransformOrder, 0);
++    NCB_PROPERTY_RAW_CALLBACK(defaultSyncActive, stub_get_defaultSyncActive, stub_set_defaultSyncActive, 0);
++    NCB_PROPERTY_RAW_CALLBACK(zFactor, stub_get_zFactor, stub_set_zFactor, 0);
++    NCB_PROPERTY_RAW_CALLBACK(stereovisionActive, stub_get_stereovisionActive, stub_set_stereovisionActive, 0);
++    NCB_PROPERTY_RAW_CALLBACK(resourceManager, stub_get_resourceManager, stub_set_resourceManager, 0);
++    NCB_PROPERTY_RAW_CALLBACK(cameraTarget, stub_get_cameraTarget, stub_set_cameraTarget, 0);
++    NCB_PROPERTY_RAW_CALLBACK(frameTickCount, stub_get_frameTickCount, stub_set_frameTickCount, 0);
++    NCB_PROPERTY_RAW_CALLBACK(meshDivision, stub_get_meshDivision, stub_set_meshDivision, 0);
++    NCB_PROPERTY_RAW_CALLBACK(onFindMotion, stub_get_onFindMotion, stub_set_onFindMotion, 0);
+ }
+ 
+ NCB_REGISTER_SUBCLASS_DELAY(EmotePlayer) {
+@@ -633,6 +933,16 @@ NCB_REGISTER_CLASS(Motion) {
+     NCB_SUBCLASS(Player, Player);
+     NCB_SUBCLASS(EmotePlayer, EmotePlayer);
+     NCB_SUBCLASS(SeparateLayerAdaptor, SeparateLayerAdaptor);
++    NCB_SUBCLASS(D3DAdaptor, D3DAdaptor);
++    NCB_METHOD_RAW_CALLBACK(unloadUnusedTextures, &StubFunc, TJS_STATICMEMBER);
++    NCB_METHOD_RAW_CALLBACK(removeAllTextures, &StubFunc, TJS_STATICMEMBER);
++    NCB_METHOD_RAW_CALLBACK(removeAllBg, &StubFunc, TJS_STATICMEMBER);
++    NCB_METHOD_RAW_CALLBACK(registerBg, &StubFunc, TJS_STATICMEMBER);
++    NCB_METHOD_RAW_CALLBACK(registerCaption, &StubFunc, TJS_STATICMEMBER);
++    NCB_METHOD_RAW_CALLBACK(removeAllCaption, &StubFunc, TJS_STATICMEMBER);
++    NCB_METHOD_RAW_CALLBACK(alphaOpAdd, &StubFunc, TJS_STATICMEMBER);
++    NCB_METHOD_RAW_CALLBACK(getD3DAvailable, &StubFunc, TJS_STATICMEMBER);
++    NCB_METHOD_RAW_CALLBACK(doAlphaMaskOperation, &StubFunc, TJS_STATICMEMBER);
+ }
+ 
+ static void PreRegistCallback() {}
 diff --git a/cpp/plugins/psdfile/psdparse/CMakeLists.txt b/cpp/plugins/psdfile/psdparse/CMakeLists.txt
 index 7c92501..2ac6321 100644
 --- a/cpp/plugins/psdfile/psdparse/CMakeLists.txt
