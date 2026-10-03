@@ -91,6 +91,10 @@ stdenv.mkDerivation {
     # `krkr2 data.xp3` failed with "Error opening archive": a bare relative
     # path is treated as a storage name, so resolve it against the cwd first.
     ./patches/launcher-relative-path.patch
+    # Yuzusoft scenario containers are "mdf\0" (lowercase) + zlib; the MDF
+    # signature check was case-sensitive, so loading a save failed with
+    # "Not a valid PSB file" when it parsed the scene file.
+    ./patches/psbfile-mdf-signature.patch
   ];
 
   nativeBuildInputs = [
