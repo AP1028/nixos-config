@@ -187,9 +187,22 @@ stdenv.mkDerivation (finalAttrs: {
   ];
 
   postInstall = ''
-    # make find_package(cocos2dx CONFIG) work from the standard location
-    mkdir -p $out/lib/cmake
-    cp -r $out/share/cocos2dx $out/lib/cmake/cocos2dx
+    # find_package(cocos2dx CONFIG) should also work from lib/cmake, but the
+    # port's config computes its import prefix relative to its own location,
+    # so forward to the real config in share/cocos2dx instead of copying it.
+    mkdir -p $out/lib/cmake/cocos2dx
+    # FMOD's SONAME is libfmod.so.6 but the archive ships unversioned files.
+    for dir in $out/share/cocos2dx/linux-specific/fmod/prebuilt/64-bit \
+               $out/lib/cmake/cocos2dx/linux-specific/fmod/prebuilt/64-bit; do
+      if [ -d "$dir" ]; then
+        ln -sf libfmod.so "$dir/libfmod.so.6"
+        ln -sf libfmodL.so "$dir/libfmodL.so.6"
+      fi
+    done
+
+    cat > $out/lib/cmake/cocos2dx/cocos2dx-config.cmake <<'EOF'
+include("''${CMAKE_CURRENT_LIST_DIR}/../../../share/cocos2dx/cocos2dx-config.cmake")
+EOF
   '';
 
   meta = with lib; {
