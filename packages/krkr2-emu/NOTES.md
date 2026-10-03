@@ -56,12 +56,23 @@ Three changes made while fixing save loading were reverted on request:
 * The PSB resource registration rework that went with them
   (`PSBMedia::removeByPrefix` + `registerPsbResources`, matching KrKr2-Next).
 
-State after the revert: rendering is stable again, and loading a save fails
-with `Not a valid PSB file` (kagenvplayer.tjs → initStorage → `PSBFile` on a
-`scn/*.ks.scn`), exactly as before. The current best explanation is that the
-engine's rendering of the transition into the save picker is what breaks, and
-it only became visible once the scene data could actually be loaded; that needs
-investigating before the MDF fix can come back.
+Everything added after that point was also backed out (relative-path handling
+included), so the package is exactly the patch set that first ran the
+scrambled/encrypted titles — the rebuild reproduces the identical store path
+`c7hjcd2mia198iam5x1xycyir15isgjn-krkr2-emu-1.5.0-unstable`.
+
+State after the revert: loading a save fails with `Not a valid PSB file`
+(kagenvplayer.tjs → initStorage → `PSBFile` on a `scn/*.ks.scn`), exactly as
+before the save-load work.
+
+Open question: the frame flashing is triggered by the transition into the save
+picker (`wave` → crossfade fallback). It is present in this reverted build too,
+so it is *not* caused by the backed-out save-load changes: it presumably became
+visible when the scrambled-script fix first let these titles run at all (before
+that, the engine died on `Storages.tjs` and no picker was ever reached). The
+next step is to diagnose the transition rendering itself — log the transition
+parameters and layer tree, and consider making unknown handlers switch
+instantly instead of running a crossfade.
 
 ## The `Storages.tjs` failure (fixed)
 

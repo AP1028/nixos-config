@@ -88,13 +88,11 @@ stdenv.mkDerivation {
     # psbfile's load() used a file-local PSBMedia pointer that initPSBMedia()
     # (a different translation unit) never initialised -> null deref crash.
     ./patches/psbfile-storage-media.patch
-    # `krkr2 data.xp3` failed with "Error opening archive": a bare relative
-    # path is treated as a storage name, so resolve it against the cwd first.
-    ./patches/launcher-relative-path.patch
-    # NOTE: the lowercase-"mdf" signature fix (which let save loading succeed)
-    # and the transition-warning-dialog change were backed out: together they
-    # made the frame flash continuously after opening the save picker. See
-    # NOTES.md. Save loading therefore still fails with "Not a valid PSB file".
+    # NOTE: the changes made after this point (relative-path handling, the
+    # lowercase-"mdf" signature fix and the transition-warning-dialog change)
+    # were all backed out; the latter two coincided with continuous frame
+    # flashing after opening the save picker. This patch set is the exact state
+    # that first ran the scrambled/encrypted titles. See NOTES.md.
   ];
 
   nativeBuildInputs = [
