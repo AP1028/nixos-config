@@ -221,11 +221,6 @@ in {
     #     old.postInstall;
     # }))
 
-    # KrKr2 Emulator (2468785842/krkr2): cocos2d-x based KiriKiri2 runtime.
-    # Disabled: frame rendering breaks (persistent flashing) once a title
-    # reaches its save picker; see packages/krkr2-emu/NOTES.md.
-    # (pkgs.callPackage ../../../packages/krkr2-emu/krkr2emu.nix { })
-
     texliveFull
     dotnet-sdk_9
 
