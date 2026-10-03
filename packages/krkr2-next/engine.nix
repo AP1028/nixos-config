@@ -73,6 +73,15 @@ stdenv.mkDerivation {
     # bound, so once the game created its (power-of-two) layer textures the
     # readback returned a layer texture instead of the composed screen.
     ./frame-readback-fix.patch
+    # Games that ship their own fonts register them through the Windows-only
+    # "addFont.dll" plugin; without it they fall back to a substituted font
+    # (wrong glyph shapes and advances, or missing-glyph dots when no CJK font
+    # is present at all). This provides that plugin as an internal module.
+    ./addfont-plugin.patch
+    # Pick a Regular-weight face as the default font. Collections and variable
+    # fonts also contain Thin/Light instances, and the old "last name wins"
+    # rule could select one of those, which renders hairline-looking text.
+    ./font-default-regular.patch
   ];
 
   nativeBuildInputs = [

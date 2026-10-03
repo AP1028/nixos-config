@@ -1,0 +1,127 @@
+diff --git a/cpp/plugins/CMakeLists.txt b/cpp/plugins/CMakeLists.txt
+index b6183e0..5a07884 100644
+--- a/cpp/plugins/CMakeLists.txt
++++ b/cpp/plugins/CMakeLists.txt
+@@ -129,6 +129,7 @@ add_subdirectory(psdfile)
+ add_subdirectory(psbfile)
+ add_subdirectory(layerex_draw)
+ add_subdirectory(motionplayer)
++add_subdirectory(addfont)
+ add_subdirectory(kagparserex)
+ 
+ #add_subdirectory(json)
+@@ -140,6 +141,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
+         psbfile
+         layerExDraw
+         motionplayer
++        addfont
+         kagparserex
+         fstat
+ #        json steam DrawDeviceForSteam
+diff --git a/cpp/plugins/addfont/CMakeLists.txt b/cpp/plugins/addfont/CMakeLists.txt
+new file mode 100644
+index 0000000..5968aaf
+--- /dev/null
++++ b/cpp/plugins/addfont/CMakeLists.txt
+@@ -0,0 +1,10 @@
++cmake_minimum_required(VERSION 3.19)
++project(addfont)
++
++add_library(${PROJECT_NAME} STATIC)
++
++target_sources(${PROJECT_NAME} PUBLIC
++    main.cpp
++)
++
++target_link_libraries(${PROJECT_NAME} PRIVATE krkr2plugin)
+diff --git a/cpp/plugins/addfont/main.cpp b/cpp/plugins/addfont/main.cpp
+new file mode 100644
+index 0000000..1763395
+--- /dev/null
++++ b/cpp/plugins/addfont/main.cpp
+@@ -0,0 +1,85 @@
++// Shim for the Windows-only "addFont.dll" plugin.
++//
++// KiriKiri games ship their own fonts inside the game archives (for example
++// font/MTLc3m.ttf and font/SourceHanSansJP-Regular.otf in Yuzusoft titles) and
++// register them at startup through this plugin's AddTrueTypeFont(). When the
++// plugin is missing the engine substitutes whatever font it can find; if that
++// font has no CJK glyphs the text renders as missing-glyph dots, and if it has
++// different metrics the glyphs are laid out with the wrong advances.
++//
++// The engine can already register every face contained in a font file through
++// TVPEnumFontsProc(), which reads the file through the storage layer (so it
++// works for fonts inside .xp3 archives). This shim only has to feed it the
++// paths the game passes to the plugin's exported functions.
++#include "ncbind.hpp"
++
++#include <spdlog/spdlog.h>
++
++#include "FontImpl.h"
++#include "StorageIntf.h"
++
++#define NCB_MODULE_NAME TJS_W("addFont.dll")
++#define LOGGER spdlog::get("plugin")
++
++namespace {
++
++    // Register every argument that names an existing storage as a font file.
++    // The exported signature differs between games, so accepting any number of
++    // arguments and picking the ones that resolve as storage keeps this
++    // compatible with all of them.
++    int RegisterFontsFromArguments(tjs_int count, tTJSVariant **param) {
++        int registered = 0;
++        for(tjs_int i = 0; i < count; ++i) {
++            if((*param[i]).Type() != tvtString)
++                continue;
++            const ttstr path(*param[i]);
++            if(path.IsEmpty())
++                continue;
++            if(!TVPIsExistentStorageNoSearch(path) &&
++               !TVPIsExistentStorage(path)) {
++                LOGGER->debug("addFont: [{}] is not a storage", path.AsStdString());
++                continue;
++            }
++            const int faces = TVPEnumFontsProc(path);
++            LOGGER->info("addFont: registered {} face(s) from [{}]", faces,
++                         path.AsStdString());
++            if(faces > 0)
++                registered += faces;
++        }
++        return registered;
++    }
++
++    // Members the plugin family exposes that this shim does not need to act
++    // on: accept them so a game's font setup cannot fail on a missing export.
++    tjs_error LenientFunc(tTJSVariant *result, tjs_int numparams,
++                          tTJSVariant **param, iTJSDispatch2 *) {
++        std::string args;
++        for(tjs_int i = 0; i < numparams; ++i) {
++            args += " [";
++            args += ((*param[i]).Type() == tvtObject)
++                        ? "obj"
++                        : ttstr(*param[i]).AsStdString();
++            args += "]";
++        }
++        LOGGER->debug("addFont: stub export ({} args):{}", numparams, args);
++        if(result)
++            *result = tTJSVariant(static_cast<tjs_int>(0));
++        return TJS_S_OK;
++    }
++
++} // namespace
++
++tjs_error AddTrueTypeFontFunc(tTJSVariant *result, tjs_int numparams,
++                              tTJSVariant **param, iTJSDispatch2 *) {
++    const int faces = RegisterFontsFromArguments(numparams, param);
++    if(result)
++        *result = tTJSVariant(static_cast<tjs_int>(faces > 0 ? 1 : 0));
++    return TJS_S_OK;
++}
++
++NCB_REGISTER_FUNCTION(AddTrueTypeFont, AddTrueTypeFontFunc);
++NCB_REGISTER_FUNCTION(AddTrueTypeFontFromMemory, LenientFunc);
++NCB_REGISTER_FUNCTION(AddTrueTypeFontFromFile, LenientFunc);
++NCB_REGISTER_FUNCTION(AddFont, LenientFunc);
++NCB_REGISTER_FUNCTION(RemoveFont, LenientFunc);
++NCB_REGISTER_FUNCTION(GetFontCount, LenientFunc);

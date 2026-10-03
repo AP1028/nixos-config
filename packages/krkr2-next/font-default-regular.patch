@@ -1,0 +1,70 @@
+diff --git a/cpp/core/visual/FontImpl.cpp b/cpp/core/visual/FontImpl.cpp
+index b5a1e85..ca15776 100644
+--- a/cpp/core/visual/FontImpl.cpp
++++ b/cpp/core/visual/FontImpl.cpp
+@@ -16,6 +16,8 @@
+ #endif
+ 
+ #include <fstream>
++#include <algorithm>
++#include <string>
+ #include <vector>
+ #include "StorageImpl.h"
+ #include "BinaryStream.h"
+@@ -30,6 +32,12 @@
+ 
+ tTJSHashTable<ttstr, TVPFontNamePathInfo, tTVPttstrHash> TVPFontNames;
+ static ttstr TVPDefaultFontName;
++
++// Family name of a Regular-weight face seen while enumerating fonts. Used to
++// pick the default font: collections (TTCollection) and variable fonts contain
++// Thin/Light instances as well, and the previous "last registered name" rule
++// could land on one of those, which renders hairline/hollow-looking text.
++static ttstr TVPPreferredRegularFontName;
+ const ttstr &TVPGetDefaultFontName() { return TVPDefaultFontName; }
+ void TVPGetAllFontList(std::vector<ttstr> &list) {
+     auto itend = TVPFontNames.GetLast();
+@@ -122,11 +130,29 @@ static int TVPInternalEnumFonts(
+                 }
+                 TVPFontNamePathInfo info;
+                 info.Path = FontPath;
+-                info.Index = j;
++                // Index is the *face* index used to open the font later
++                // (FT_New_Memory_Face / OpenFaceByIndex), not the index of the
++                // name record we just read. Storing j here made localized
++                // (CJK) names resolve to an arbitrary face of a collection --
++                // typically a Thin/Light instance, which is why text drawn
++                // through such a name came out hairline.
++                info.Index = i;
+                 info.Getter = getter;
+                 TVPFontNames.Add(fontname, info);
+                 addCount = 1;
+             }
++            if(fontface->style_name && fontface->family_name) {
++                std::string style(fontface->style_name);
++                std::transform(style.begin(), style.end(), style.begin(),
++                               [](unsigned char c) {
++                                   return static_cast<char>(std::tolower(c));
++                               });
++                if(style.find("regular") != std::string::npos ||
++                   style.find("normal") != std::string::npos) {
++                    TVPPreferredRegularFontName =
++                        ttstr((tjs_nchar *)fontface->family_name);
++                }
++            }
+             /*if (!addCount)*/ {
+                 ttstr fontname((tjs_nchar *)fontface->family_name);
+                 TVPFontNamePathInfo info;
+@@ -354,7 +380,11 @@ void TVPInitFontNames() {
+     } while(false);
+     if(TVPFontNames.GetCount() > 0) {
+         // set default fontface name
+-        TVPDefaultFontName = TVPFontNames.GetLast().GetKey();
++        if(!TVPPreferredRegularFontName.IsEmpty()) {
++            TVPDefaultFontName = TVPPreferredRegularFontName;
++        } else {
++            TVPDefaultFontName = TVPFontNames.GetLast().GetKey();
++        }
+     }
+ 
+     // check exePath + "/fonts/*.ttf"

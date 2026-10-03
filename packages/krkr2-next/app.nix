@@ -6,7 +6,7 @@
   cmake,
   ninja,
   gtk3,
-  noto-fonts-cjk-sans,
+  wqy_microhei,
 }:
 
 flutter347.buildFlutterApplication {
@@ -52,10 +52,16 @@ flutter347.buildFlutterApplication {
     # The engine has no system-font fallback on Linux (only Android/iOS/macOS
     # have one), so ship a CJK-capable default font inside the bundle. The
     # engine scans <exe dir>/default.{ttf,ttc,otf,otc} and <exe dir>/fonts/.
+    #
+    # Ship a font with a single *Regular* face. Multi-weight collections and
+    # variable fonts (NotoSansCJK-VF.otf.ttc, SourceHanSans.ttc) contain
+    # Thin/ExtraLight instances, and registering those as the default made the
+    # game text render hairline/hollow-looking. WenQuanYi Micro Hei is one
+    # static Regular face covering Chinese, Japanese kana and Korean.
     mkdir -p $out/app/krkr2-next/fonts
-    cp ${noto-fonts-cjk-sans}/share/fonts/opentype/noto-cjk/NotoSansCJK-VF.otf.ttc \
+    cp ${wqy_microhei}/share/fonts/truetype/wqy-microhei.ttc \
       $out/app/krkr2-next/fonts/
-    ln -s fonts/NotoSansCJK-VF.otf.ttc $out/app/krkr2-next/default.ttc
+    ln -s fonts/wqy-microhei.ttc $out/app/krkr2-next/default.ttc
 
     # Upstream ships no Linux desktop entry or icon (only macOS assets), so
     # add both here from the bundled macOS app icon set.
