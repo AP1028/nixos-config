@@ -1,3 +1,38 @@
+diff --git a/cpp/plugins/psbfile/PSBMedia.cpp b/cpp/plugins/psbfile/PSBMedia.cpp
+index e218121..dd5fc6a 100644
+--- a/cpp/plugins/psbfile/PSBMedia.cpp
++++ b/cpp/plugins/psbfile/PSBMedia.cpp
+@@ -48,4 +48,13 @@ namespace PSB {
+                        const std::shared_ptr<PSBResource> &resource) {
+         this->_resources[name] = *resource;
+     }
++
++    void PSBMedia::removeByPrefix(const std::string &prefix) {
++        for(auto it = _resources.begin(); it != _resources.end();) {
++            if(it->first.rfind(prefix, 0) == 0)
++                it = _resources.erase(it);
++            else
++                ++it;
++        }
++    }
+ } // namespace PSB
+\ No newline at end of file
+diff --git a/cpp/plugins/psbfile/PSBMedia.h b/cpp/plugins/psbfile/PSBMedia.h
+index d581321..3828fc1 100644
+--- a/cpp/plugins/psbfile/PSBMedia.h
++++ b/cpp/plugins/psbfile/PSBMedia.h
+@@ -39,6 +39,11 @@ namespace PSB {
+         void add(const std::string &name,
+                  const std::shared_ptr<PSBResource> &resource);
+ 
++        // Drop every entry registered under "prefix/". Reloading the same PSB
++        // source (which these titles do constantly, e.g. when opening the save
++        // picker) must not leave stale images behind.
++        void removeByPrefix(const std::string &prefix);
++
+     private:
+         int _ref = 0;
+         std::unordered_map<std::string, PSBResource> _resources;
 diff --git a/cpp/plugins/psbfile/PSBMediaRegistry.cpp b/cpp/plugins/psbfile/PSBMediaRegistry.cpp
 index ec9c088..34cb044 100644
 --- a/cpp/plugins/psbfile/PSBMediaRegistry.cpp
@@ -33,7 +68,7 @@ index 0aaf9e2..e4c8fca 100644
      registerRootResources(const ttstr &container,
                            const std::shared_ptr<const PSBDictionary> &root);
 diff --git a/cpp/plugins/psbfile/main.cpp b/cpp/plugins/psbfile/main.cpp
-index 7f6dba0..32b9a39 100644
+index 7f6dba0..8f454e1 100644
 --- a/cpp/plugins/psbfile/main.cpp
 +++ b/cpp/plugins/psbfile/main.cpp
 @@ -4,6 +4,7 @@
@@ -52,10 +87,51 @@ index 7f6dba0..32b9a39 100644
  
  void initPsbFile() { initPSBMedia(); }
  
-@@ -58,14 +58,20 @@ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
+@@ -43,6 +43,38 @@ static tjs_error getRoot(tTJSVariant *r, tjs_int n, tTJSVariant **p,
+     return TJS_S_OK;
+ }
+ 
++// Register a freshly loaded PSB's resources, replacing stale entries from a
++// previous load of the same source (upstream's loop re-normalised the domain
++// repeatedly and never dropped old entries).
++static void registerPsbResources(PSBFile *self, ttstr path) {
++    PSBMedia *media = getPSBMedia();
++    if(media == nullptr) {
++        initPSBMedia();
++        media = getPSBMedia();
++    }
++    if(media == nullptr) {
++        LOGGER->error("psbfile: storage media is not initialised");
++        return;
++    }
++
++    media->NormalizeDomainName(path);
++
++    auto objs = self->getObjects();
++    if(!objs)
++        return;
++
++    media->removeByPrefix((path + TJS_W("/")).AsStdString());
++
++    for(const auto &[k, v] : *objs) {
++        const auto &res = std::dynamic_pointer_cast<PSBResource>(v);
++        if(res == nullptr)
++            continue;
++        ttstr pathN{ k };
++        media->NormalizePathName(pathN);
++        media->add((path + TJS_W("/") + pathN).AsStdString(), res);
++    }
++}
++
+ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
+                       iTJSDispatch2 *obj) {
+     bool loadSuccess = true;
+@@ -56,16 +88,8 @@ static tjs_error load(tTJSVariant *r, tjs_int count, tTJSVariant **p,
+         if(!self->loadPSBFile(path)) {
+             LOGGER->info("cannot load psb file : {}", path.AsStdString());
              loadSuccess = false;
-         }
-         auto objs = self->getObjects();
+-        }
+-        auto objs = self->getObjects();
 -        for(const auto &[k, v] : *objs) {
 -            const auto &res = std::dynamic_pointer_cast<PSBResource>(v);
 -            if(res == nullptr)
@@ -64,20 +140,8 @@ index 7f6dba0..32b9a39 100644
 -            psbMedia->NormalizeDomainName(path);
 -            psbMedia->NormalizePathName(pathN);
 -            psbMedia->add((path + TJS_W("/") + pathN).AsStdString(), res);
-+        PSBMedia *media = getPSBMedia();
-+        if(media == nullptr) {
-+            LOGGER->error("psbfile: storage media is not initialised");
-+            loadSuccess = false;
 +        } else {
-+            for(const auto &[k, v] : *objs) {
-+                const auto &res = std::dynamic_pointer_cast<PSBResource>(v);
-+                if(res == nullptr)
-+                    continue;
-+                ttstr pathN{ k };
-+                media->NormalizeDomainName(path);
-+                media->NormalizePathName(pathN);
-+                media->add((path + TJS_W("/") + pathN).AsStdString(), res);
-+            }
++            registerPsbResources(self, path);
          }
      } else if((*p)->Type() == tvtOctet) {
          LOGGER->critical("PSBFile::load stream no implement!");

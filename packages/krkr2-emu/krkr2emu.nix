@@ -85,14 +85,21 @@ stdenv.mkDerivation {
     # ship their .tjs/.ks bit-scrambled, and the loader skipped only 4 header
     # bytes, shifting every UTF-16 code unit by one so the parser saw garbage.
     ./patches/kirikiri-scrambled-script.patch
-    # psbfile's load() used a file-local PSBMedia pointer that initPSBMedia()
-    # (a different translation unit) never initialised -> null deref crash.
+    # psbfile: use the shared PSBMedia instance (a file-local pointer was
+    # never initialised -> null deref) and register a loaded PSB's resources
+    # the way the reference implementation does, dropping stale entries.
     ./patches/psbfile-storage-media.patch
-    # NOTE: the changes made after this point (relative-path handling, the
-    # lowercase-"mdf" signature fix and the transition-warning-dialog change)
-    # were all backed out; the latter two coincided with continuous frame
-    # flashing after opening the save picker. This patch set is the exact state
-    # that first ran the scrambled/encrypted titles. See NOTES.md.
+    # `krkr2 data.xp3` failed with "Error opening archive": a bare relative
+    # path is treated as a storage name, so resolve it against the cwd first.
+    ./patches/launcher-relative-path.patch
+    # Yuzusoft scenario containers are "mdf\0" (lowercase) + zlib; the MDF
+    # signature check was case-sensitive, so loading a save failed with
+    # "Not a valid PSB file" when it parsed the scene file.
+    ./patches/psbfile-mdf-signature.patch
+    # A transition handler from a Windows-only plugin (yuzuex.dll provides
+    # "wave") falls back to crossfade, but the engine popped a modal warning
+    # that blocked the transition. Log it instead.
+    ./patches/transition-missing-handler-log.patch
   ];
 
   nativeBuildInputs = [
