@@ -19,13 +19,10 @@ in {
   programs.steam-asahi.enable = true;
 
   environment.systemPackages = with pkgs; [
-    # KrKr2-Next: Flutter-based KiriKiri2 (krkr2) visual novel engine,
-    # packaged in packages/krkr2-next (engine + app built from source;
-    # libunrar is unfree, covered by nixpkgs.config.allowUnfree)
-    (pkgs.callPackage ../../../packages/krkr2-next/app.nix {
-      flutter347 = pkgs.flutter347;
-      engine = pkgs.callPackage ../../../packages/krkr2-next/engine.nix { };
-    })
+    # KrKr2 Emulator (2468785842/krkr2): cocos2d-x based KiriKiri2 runtime,
+    # packaged in packages/krkr2-emu (cocos2d-x + 7-Zip SDK + blend2d built
+    # from source; libunrar is unfree, covered by allowUnfree)
+    (pkgs.callPackage ../../../packages/krkr2-emu/krkr2emu.nix { })
 
     wget
     git
