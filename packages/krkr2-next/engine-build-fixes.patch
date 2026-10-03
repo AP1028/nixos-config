@@ -34,19 +34,43 @@ index a05dddb..08ac526 100644
      add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)
  elseif(WINDOWS)
      add_executable(${PROJECT_NAME}
+diff --git a/cpp/core/base/7zArchive_stub.cpp b/cpp/core/base/7zArchive_stub.cpp
+new file mode 100644
+index 0000000..c472840
+--- /dev/null
++++ b/cpp/core/base/7zArchive_stub.cpp
+@@ -0,0 +1,16 @@
++// Stub for the 7z archive backend.
++//
++// The real implementation (7zArchive.cpp) requires the 7-Zip C++ SDK, which is
++// not available in this build. Archive probing reaches this function for every
++// candidate file, so return "not a 7z archive" — identical to what the real
++// implementation does for non-7z input.
++#include "tjsCommHead.h"
++#include "StorageIntf.h"
++
++tTVPArchive *TVPOpen7ZArchive(const ttstr &name, tTJSBinaryStream *st,
++                              bool normalizeFileName) {
++    (void)name;
++    (void)st;
++    (void)normalizeFileName;
++    return nullptr;
++}
 diff --git a/cpp/core/base/CMakeLists.txt b/cpp/core/base/CMakeLists.txt
-index 5e368de..f337f53 100644
+index 5e368de..bd5c487 100644
 --- a/cpp/core/base/CMakeLists.txt
 +++ b/cpp/core/base/CMakeLists.txt
-@@ -3,7 +3,6 @@ project(core_base_module LANGUAGES CXX)
+@@ -3,8 +3,8 @@ project(core_base_module LANGUAGES CXX)
  
  set(BASE_PATH ${CMAKE_CURRENT_LIST_DIR})
  set(BASE_SOURCE_FILES
 -    ${BASE_PATH}/7zArchive.cpp
      ${BASE_PATH}/BinaryStream.cpp
++    ${BASE_PATH}/7zArchive_stub.cpp
      ${BASE_PATH}/CharacterSet.cpp
      ${BASE_PATH}/EventIntf.cpp
-@@ -39,12 +38,24 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${BASE_HEADERS_DIR})
+     ${BASE_PATH}/ScriptMgnIntf.cpp
+@@ -39,12 +39,24 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${BASE_HEADERS_DIR})
  target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_visual_module core_plugin_module core_environ_module core_extension_module core_sound_module core_utils_module)
  
  find_package(uchardet CONFIG REQUIRED)
@@ -73,13 +97,41 @@ index 5e368de..f337f53 100644
  
  target_link_libraries(${PROJECT_NAME} PRIVATE
      uchardet::libuchardet
-@@ -55,5 +66,5 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
+@@ -55,5 +67,5 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
  
      $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
      $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
 -    unofficial::minizip::minizip
 +    PkgConfig::MINIZIP
  )
+diff --git a/cpp/core/base/impl/StorageImpl.cpp b/cpp/core/base/impl/StorageImpl.cpp
+index fd6d0ec..0335d1c 100644
+--- a/cpp/core/base/impl/StorageImpl.cpp
++++ b/cpp/core/base/impl/StorageImpl.cpp
+@@ -963,9 +963,23 @@ tTVPIStreamAdapter::tTVPIStreamAdapter(tTJSBinaryStream *ref) {
+ //---------------------------------------------------------------------------
+ tTVPIStreamAdapter::~tTVPIStreamAdapter() { delete Stream; }
+ //---------------------------------------------------------------------------
++#if defined(_WIN32)
+ extern "C" const IID IID_IUnknown;
+ extern "C" const IID IID_IStream;
+ extern "C" const IID IID_ISequentialStream;
++#else
++// Windows provides these GUIDs via uuid.lib; define them for the portable
++// builds so the COM stream adapter does not leave undefined symbols.
++extern "C" const IID IID_IUnknown = {
++    0x00000000, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 }
++};
++extern "C" const IID IID_ISequentialStream = {
++    0x0C733A30, 0x2A1C, 0x11CE, { 0xAD, 0xE5, 0x00, 0xAA, 0x00, 0x44, 0x77, 0x3D }
++};
++extern "C" const IID IID_IStream = {
++    0x0000000C, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 }
++};
++#endif
+ 
+ HRESULT STDMETHODCALLTYPE tTVPIStreamAdapter::QueryInterface(REFIID riid,
+                                                              void **ppvObject) {
 diff --git a/cpp/core/environ/CMakeLists.txt b/cpp/core/environ/CMakeLists.txt
 index fb1e057..b6ca018 100644
 --- a/cpp/core/environ/CMakeLists.txt
@@ -360,10 +412,24 @@ index b472912..f879203 100644
  target_link_libraries(${PROJECT_NAME} PUBLIC
      Boost::locale
 diff --git a/cpp/core/visual/CMakeLists.txt b/cpp/core/visual/CMakeLists.txt
-index 7312423..e54a2ca 100644
+index 7312423..97a24f7 100644
 --- a/cpp/core/visual/CMakeLists.txt
 +++ b/cpp/core/visual/CMakeLists.txt
-@@ -107,24 +107,26 @@ else()
+@@ -102,29 +102,41 @@ else()
+         # Fallback: link system EGL/GLES2 on Android if ANGLE is not available
+         target_link_libraries(${PROJECT_NAME} PRIVATE EGL GLESv2)
+         message(STATUS "ANGLE not found — Android fallback to system EGL/GLES2")
++    elseif(LINUX)
++        # Fallback: link the system EGL/GLESv2 (libglvnd/mesa) providers.
++        # Without this the module has undefined egl*/gl* symbols and the
++        # shared library cannot be dlopen()ed at all.
++        find_package(PkgConfig REQUIRED)
++        pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
++        pkg_check_modules(GLESV2 REQUIRED IMPORTED_TARGET glesv2)
++        target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::EGL PkgConfig::GLESV2)
++        message(STATUS "ANGLE not found — Linux fallback to system EGL/GLESv2")
+     else()
+         message(WARNING "ANGLE not found — GL rendering may not work")
      endif()
  endif()
  
@@ -383,6 +449,7 @@ index 7312423..e54a2ca 100644
 +if(NOT TARGET libjpeg-turbo::turbojpeg)
 +    add_library(libjpeg-turbo::turbojpeg ALIAS PkgConfig::LIBJPEGTURBO)
 +endif()
++target_link_libraries(${PROJECT_NAME} PUBLIC PkgConfig::LIBJPEGTURBO)
  
 -set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
 -find_package(OpenCV REQUIRED)
@@ -418,10 +485,31 @@ index 2134d5a..dc11ead 100644
 +pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavutil libavcodec)
 +target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FFMPEG)
 diff --git a/cpp/external/libbpg/libbpg.c b/cpp/external/libbpg/libbpg.c
-index 19bf201..733806a 100644
+index 19bf201..403d179 100644
 --- a/cpp/external/libbpg/libbpg.c
 +++ b/cpp/external/libbpg/libbpg.c
-@@ -397,7 +397,7 @@ static int hevc_write_frame(AVCodecContext *avctx,
+@@ -342,7 +342,6 @@ static int dyn_buf_push(DynBuf *s, const uint8_t *data, int len)
+     return 0;
+ }
+ 
+-extern AVCodec ff_hevc_decoder;
+ 
+ static int hevc_decode_init1(DynBuf *pbuf, AVFrame **pframe,
+                              AVCodecContext **pc, 
+@@ -365,7 +364,11 @@ static int hevc_decode_init1(DynBuf *pbuf, AVFrame **pframe,
+     if (ret1 < 0)
+         return -1;
+     
+-    codec = &ff_hevc_decoder;
++    /* Use the FFmpeg registry: the internal ff_hevc_decoder symbol is not
++       exported by shared FFmpeg builds. */
++    codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
++    if (!codec)
++        return -1;
+ 
+     c = avcodec_alloc_context3(codec);
+     if (!c) 
+@@ -397,7 +400,7 @@ static int hevc_write_frame(AVCodecContext *avctx,
      avpkt.data = (uint8_t *)buf;
      avpkt.size = buf_len;
      /* avoid using uninitialized data */
@@ -430,7 +518,7 @@ index 19bf201..733806a 100644
      len = avcodec_decode_video2(avctx, frame, &got_frame, &avpkt);
      if (len < 0 || !got_frame)
          return -1;
-@@ -474,14 +474,14 @@ static int hevc_decode_frame_internal(BPGDecoderContext *s,
+@@ -474,14 +477,14 @@ static int hevc_decode_frame_internal(BPGDecoderContext *s,
      }
      
      if (s->alpha_dec_ctx) {
@@ -448,7 +536,7 @@ index 19bf201..733806a 100644
      ret = hevc_write_frame(s->dec_ctx, s->frame, cbuf->buf, cbuf->len);
      if (ret < 0)
 diff --git a/cpp/plugins/CMakeLists.txt b/cpp/plugins/CMakeLists.txt
-index b6183e0..5fb0621 100644
+index b6183e0..e903053 100644
 --- a/cpp/plugins/CMakeLists.txt
 +++ b/cpp/plugins/CMakeLists.txt
 @@ -28,7 +28,6 @@ target_sources(${PROJECT_NAME} PUBLIC
@@ -486,7 +574,7 @@ index b6183e0..5fb0621 100644
  
  if(ANDROID)
      set(CUBISM_CORE_ARCH ${CMAKE_ANDROID_ARCH_ABI})
-@@ -113,21 +118,29 @@ elseif(APPLE)
+@@ -113,21 +118,32 @@ elseif(APPLE)
      endif()
  endif()
  
@@ -503,6 +591,9 @@ index b6183e0..5fb0621 100644
 +if(CUBISM_SDK_AVAILABLE)
  target_compile_definitions(${PROJECT_NAME} PUBLIC CSM_TARGET_ANGLE_ES2)
  target_link_libraries(${PROJECT_NAME} PUBLIC CubismFramework)
++else()
++target_compile_definitions(${PROJECT_NAME} PRIVATE KRKR_NO_CUBISM=1)
++target_sources(${PROJECT_NAME} PUBLIC live2d_render_target.cpp)
 +endif()
  
  target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder})
@@ -516,7 +607,7 @@ index b6183e0..5fb0621 100644
  add_subdirectory(motionplayer)
  add_subdirectory(kagparserex)
  
-@@ -138,7 +151,6 @@ add_subdirectory(fstat)
+@@ -138,7 +154,6 @@ add_subdirectory(fstat)
  target_link_libraries(${PROJECT_NAME} PUBLIC
          psdfile
          psbfile
@@ -549,6 +640,31 @@ index b1a7ec4..7f95545 100644
 +    target_link_libraries(${PROJECT_NAME} PUBLIC libgdiplus::libgdiplus)
  
  endif ()
+diff --git a/cpp/plugins/live2d_render_target.cpp b/cpp/plugins/live2d_render_target.cpp
+new file mode 100644
+index 0000000..4acea3c
+--- /dev/null
++++ b/cpp/plugins/live2d_render_target.cpp
+@@ -0,0 +1,19 @@
++// Stub definition of the Live2D render target.
++//
++// krkrlive2d.cpp normally defines g_live2dRenderTarget, but it cannot be built
++// without the proprietary Live2D Cubism SDK. krkrgles.cpp still references the
++// symbol, so provide a zero-initialised instance in that case.
++#include <EGL/egl.h>
++#include <GLES2/gl2.h>
++
++struct Live2DRenderTarget {
++    GLuint fbo = 0;
++    GLsizei width = 0;
++    GLsizei height = 0;
++};
++
++Live2DRenderTarget g_live2dRenderTarget;
++
++// engine_api.cpp anchors the internal plugins by calling this registration
++// hook; krkrlive2d.cpp provides it when the Cubism SDK is available.
++extern "C" void TVPRegisterKrkrLive2DPluginAnchor() {}
 diff --git a/cpp/plugins/psdfile/psdparse/CMakeLists.txt b/cpp/plugins/psdfile/psdparse/CMakeLists.txt
 index 7c92501..2ac6321 100644
 --- a/cpp/plugins/psdfile/psdparse/CMakeLists.txt
