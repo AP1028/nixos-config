@@ -43,6 +43,26 @@ flutter347.buildFlutterApplication {
     # looks for libengine_api.so.
     mkdir -p $out/app/krkr2-next/lib
     cp ${engine}/lib/libengine_api.so $out/app/krkr2-next/lib/
+
+    # Upstream ships no Linux desktop entry or icon (only macOS assets), so
+    # add both here from the bundled macOS app icon set.
+    for size in 16 32 64 128 256 1024; do
+      install -Dm644 \
+        macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_$size.png \
+        $out/share/icons/hicolor/''${size}x''${size}/apps/krkr2-next.png
+    done
+    mkdir -p $out/share/applications
+    cat > $out/share/applications/krkr2-next.desktop <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=KrKr2-Next
+Comment=KiriKiri2 visual novel engine (Flutter port)
+Exec=flutter_app %U
+Icon=krkr2-next
+Terminal=false
+Categories=Game;Emulator;
+Keywords=krkr;kirikiri;visual-novel;
+EOF
   '';
 
   meta = with lib; {
