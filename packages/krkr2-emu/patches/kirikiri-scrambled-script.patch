@@ -1,0 +1,95 @@
+diff --git a/cpp/core/base/TextStream.cpp b/cpp/core/base/TextStream.cpp
+index a70d4b6..4535c4e 100644
+--- a/cpp/core/base/TextStream.cpp
++++ b/cpp/core/base/TextStream.cpp
+@@ -16,6 +16,41 @@
+ 
+ static std::string G_DefaultReadEncoding = "UTF-8";
+ 
++static bool hasNonAsciiBytes(const unsigned char *raw, size_t size) {
++    for(size_t i = 0; i < size; i++) {
++        if(raw[i] >= 0x80)
++            return true;
++    }
++    return false;
++}
++
++static bool isValidUTF8(const unsigned char *raw, size_t size) {
++    size_t i = 0;
++    while(i < size) {
++        if(raw[i] < 0x80) {
++            i++;
++            continue;
++        }
++        int cont = 0;
++        if((raw[i] & 0xE0) == 0xC0)
++            cont = 1;
++        else if((raw[i] & 0xF0) == 0xE0)
++            cont = 2;
++        else if((raw[i] & 0xF8) == 0xF0)
++            cont = 3;
++        else
++            return false;
++        i++;
++        while(cont-- > 0) {
++            if(i >= size || (raw[i] & 0xC0) != 0x80)
++                return false;
++            i++;
++        }
++    }
++    return true;
++}
++
++
+ std::string checkTextEncoding(const void *buf, size_t size,
+                               std::uint8_t &bomSize) {
+     auto raw = static_cast<const unsigned char *>(buf);
+@@ -54,6 +89,19 @@ std::string checkTextEncoding(const void *buf, size_t size,
+             encoding = "cp932";
+         } else if(encoding == "WINDOWS-1252") {
+             encoding = "ASCII";
++        } else if(encoding.find("MAC") != std::string::npos) {
++            encoding = "cp932";
++        }
++
++        if(hasNonAsciiBytes(raw, size)) {
++            // Fall back to cp932 only when uchardet gives nothing usable.
++            // Other detected encodings are trusted as-is: these re-packs ship
++            // Chinese scripts as GB18030/GBK, which must not become cp932.
++            if(encoding.empty() || encoding == "ASCII") {
++                encoding = "cp932";
++            } else if(encoding == "UTF-8" && !isValidUTF8(raw, size)) {
++                encoding = "cp932";
++            }
+         }
+     }
+ 
+@@ -83,13 +131,23 @@ public:
+         if(size >= 3 && raw[0] == 0xFE && raw[1] == 0xFE) {
+             std::uint8_t m = raw[2];
+             if(m == 0 || m == 1) {
+-                // 解密 UTF-16 数据
+-                const auto *src =
+-                    reinterpret_cast<const char16_t *>(raw.data() + 4);
+-                size_t len = (size - 4) / 2;
++                // Descramble UTF-16 data. The header is FE FE <mode>, followed
++                // by an optional UTF-16 BOM: skipping a fixed 4 bytes shifts
++                // the whole payload by one byte and produces unparsable text.
++                size_t hdr = 3;
++                if(size >= 5 && raw[3] == 0xFF && raw[4] == 0xFE)
++                    hdr = 5; // unencrypted UTF-16LE BOM
++                else if(size >= 5 && raw[3] == 0xFE && raw[4] == 0xFF)
++                    hdr = 5; // unencrypted UTF-16BE BOM
++                size_t data_size = size - hdr;
++                if(data_size & 1)
++                    data_size--;
++                size_t len = data_size / 2;
+                 _buffer.resize(len);
+                 for(size_t i = 0; i < len; i++) {
+-                    char16_t ch = src[i];
++                    char16_t ch =
++                        static_cast<char16_t>(raw[hdr + i * 2]) |
++                        (static_cast<char16_t>(raw[hdr + i * 2 + 1]) << 8);
+                     if(m == 0) {
+                         if(ch >= 0x20)
+                             ch ^= (((ch & 0xfe) << 8) ^ 1);

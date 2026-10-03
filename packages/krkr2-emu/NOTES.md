@@ -34,16 +34,41 @@ Tested with `bin/krkr2 <title>/data.xp3` (or the archive that owns
 | 魔女的夜宴 | run (91) |
 | 夏空彼方 | exits early, 0 scripts — not yet diagnosed |
 | DRACU-RIOT! | needs Windows plugin `plugin/dracuriot.tpm` |
-| PARQUET | `TJS/ns0·4s0` script container |
-| Riddle Joker | `TJS/ns0·4s0` script container |
-| 千恋万花 | `TJS/ns0·4s0` script container |
-| 星光咖啡馆与死神之蝶 | `TJS/ns0·4s0` script container |
+| PARQUET | run (140) — was failing before the scrambled-script fix |
+| Riddle Joker | run (120) — was failing before the scrambled-script fix |
+| 千恋万花 | run (116) — was failing before the scrambled-script fix |
+| 星光咖啡馆与死神之蝶 | run (128) — was failing before the scrambled-script fix |
 
 Note: in the test sandbox the game directories are read-only, so titles that
 save (`savedata/savecheck`) abort with `File Writing Error`. On a normal
 machine the directories are writable and those runs continue.
 
-## The `Storages.tjs` failure
+## The `Storages.tjs` failure (fixed)
+
+The four titles above ship **Kirikiri-scrambled** scripts: the file starts with
+`FE FE <mode> FF FE` (magic, scrambling mode, UTF-16LE BOM) and the payload is
+bit-scrambled UTF-16. The loader skipped only 4 header bytes, so every code
+unit was shifted by one byte and the TJS parser saw garbage:
+
+```
+FE FE 01 FF FE | 1F 00 15 00 0E 00 05 ...     raw storage
+                 -> mode 1 bit de-interleave ->
+                 2F 00 2A 00 0D 00 0A ...     "/*\r\n" (valid TJS)
+```
+
+`patches/kirikiri-scrambled-script.patch` fixes the header skip (3 bytes, or 5
+when a BOM follows) and keeps the existing mode 0/1/2 handling. Reference:
+<https://github.com/arcusmaximus/KirikiriTools> (`KirikiriDescrambler`).
+No key material is involved — these files were never encrypted, only
+scrambled, and the games' own `xp3filter.tjs` XOR layer is decoded correctly.
+
+`patches/psbfile-storage-media.patch` fixes a second crash that surfaced once
+the scripts loaded: `psbfile`'s `load()` used a translation-unit-local
+`PSBMedia *` that `initPSBMedia()` (in `PSBMediaRegistry.cpp`) never
+initialised, so the first `new PSBFile(...).load("*.pimg")` died on a null
+virtual call.
+
+## Original analysis of the `Storages.tjs` failure
 
 All four failing titles stop on the same script:
 
@@ -70,6 +95,15 @@ Verification performed:
   <https://git.lifegpc.com/lifegpc/msg-tool/raw/branch/master/src/scripts/kirikiri/tjs_ns0.rs>
 * Related tooling for cxdec/hxv4 protected resources:
   <https://github.com/hktkqj/cxdec-hxv4-static-analysis>
+
+## Remaining (after the fixes)
+
+The four titles now reach their boot sequence (e.g. 千恋万花 loads 116 scripts,
+brings up the cocos UI and starts the motion/logo stage). The next gap is the
+motion API: the game's `affinesourceimage.tjs` `loadImages` raises a TJS
+exception, and DRACU-RIOT! still needs the Windows plugin `dracuriot.tpm`.
+Runs also still abort when they try to save, because the test sandbox keeps the
+game directories read-only (`File Writing Error: .../savedata/savecheck`).
 
 ## Upstream bugs worth reporting
 

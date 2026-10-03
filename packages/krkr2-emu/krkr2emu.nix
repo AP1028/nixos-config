@@ -79,7 +79,16 @@ stdenv.mkDerivation {
     hash = "sha256-JB7rXoi/nVT2yxWDtooTKnlhXOwUHZxhHnox6Qf5F3o=";
   };
 
-  patches = [ ./patches/krkr2-linux-fixes.patch ];
+  patches = [
+    ./patches/krkr2-linux-fixes.patch
+    # Kirikiri "scrambled" scripts (FE FE <mode> FF FE): these re-packed titles
+    # ship their .tjs/.ks bit-scrambled, and the loader skipped only 4 header
+    # bytes, shifting every UTF-16 code unit by one so the parser saw garbage.
+    ./patches/kirikiri-scrambled-script.patch
+    # psbfile's load() used a file-local PSBMedia pointer that initPSBMedia()
+    # (a different translation unit) never initialised -> null deref crash.
+    ./patches/psbfile-storage-media.patch
+  ];
 
   nativeBuildInputs = [
     cmake
