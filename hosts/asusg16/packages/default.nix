@@ -221,6 +221,14 @@ in {
     #     old.postInstall;
     # }))
 
+    # KrKr2-Next: Flutter-based KiriKiri2 (krkr2) visual novel engine,
+    # packaged in packages/krkr2-next (engine + app built from source;
+    # libunrar is unfree, covered by nixpkgs.config.allowUnfree)
+    (pkgs.callPackage ../../../packages/krkr2-next/app.nix {
+      flutter347 = pkgs.flutter347;
+      engine = pkgs.callPackage ../../../packages/krkr2-next/engine.nix { };
+    })
+
     texliveFull
     dotnet-sdk_9
 

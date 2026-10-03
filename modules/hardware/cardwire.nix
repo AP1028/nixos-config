@@ -35,6 +35,41 @@
   );
 
   dgpuExports = exportsOf dgpuEnv;
+
+  # The frozen nixpkgs snapshot the cardwire package is built from (flake.nix).
+  # Imported once here so both the package and the GUI shim below share it.
+  cardwireNixpkgs = import inputs.nixpkgs-cardwire.outPath {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    config = config.nixpkgs.config or { };
+  };
+
+  # Same library path the package's stock cardwire-gui wrapper sets
+  # (wayland, libxkbcommon, vulkan-loader, libglvnd).
+  cardwireGuiLibPath = cardwireNixpkgs.lib.makeLibraryPath (with cardwireNixpkgs; [
+    wayland
+    libxkbcommon
+    vulkan-loader
+    libglvnd
+  ]);
+
+  # cardwire is built from the pinned nixpkgs (glibc 2.42), but
+  # /run/opengl-driver — where cardwire-gui picks up Mesa/EGL — comes from the
+  # *system* nixpkgs (glibc 2.44, Mesa 26.2.3). Mesa's libgallium requires
+  # GLIBC_2.43+, so inside the pinned-glibc process glvnd's dlopen of
+  # libEGL_mesa.so.0 fails and the Mesa EGL vendor is silently dropped; NVIDIA's
+  # EGL vendor then fails too and glvnd returns EGL_NO_DISPLAY *without* setting
+  # an EGL error, which makes khronos-egl panic during wgpu's Instance::new.
+  # Run the real GUI binary through the system loader instead — the pinned
+  # binary itself is forward compatible — while keeping the pinned runtime
+  # libraries exactly like the stock wrapper did.
+  cardwireGuiShim = pkgs.writeShellScriptBin "cardwire-gui" ''
+    exec ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 \
+      --library-path ${lib.escapeShellArg (lib.concatStringsSep ":" [
+        "${pkgs.glibc}/lib"
+        cardwireGuiLibPath
+      ])} \
+      ${config.services.cardwired.package}/bin/.cardwire-gui-wrapped "$@"
+  '';
 in {
   # Cardwire installs eBPF LSM hooks that make the blocked GPU's device nodes
   # (/dev/dri/renderD*, /dev/nvidia*, nvidia modeset/uvm, GPU sysfs attributes)
@@ -162,10 +197,7 @@ in {
   #                                       (steamwebhelper is denied by name), and
   #                                       discover apps as Allowed rows
   services.cardwired.package = let
-    cardwireNixpkgs = import inputs.nixpkgs-cardwire.outPath {
-      inherit (pkgs.stdenv.hostPlatform) system;
-      config = config.nixpkgs.config or { };
-    };    # Content-addressed, so editing anything else in this repository does not
+    # Content-addressed, so editing anything else in this repository does not
     # change the patch store paths — and therefore does not force a cardwire
     # recompile on the next rebuild.
     patch = name:
@@ -263,6 +295,11 @@ in {
       export CARDWIRE_ALLOW=1
       exec ${pkgs.nvtopPackages.nvidia}/bin/nvtop "$@"
     ''))
+
+    # cardwire-gui must run under the system glibc, not the pinned one (see
+    # cardwireGuiShim above); hiPrio makes it win over the package's binary,
+    # including for the Exec=cardwire-gui line in the desktop file.
+    (lib.hiPrio cardwireGuiShim)
 
     # No Steam launcher and no per-game launch options: under the blacklist every
     # game is Allowed by default and picks the GPU itself on first launch. Only

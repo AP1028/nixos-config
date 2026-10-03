@@ -1,0 +1,567 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a05dddb..08ac526 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -48,7 +48,9 @@ if(VCPKG_TARGET_ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+         include(cmake/vcpkg_android.cmake)
+     endif()
+ else()
+-    set(CMAKE_TOOLCHAIN_FILE $ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake)
++    if(DEFINED ENV{VCPKG_ROOT})
++        set(CMAKE_TOOLCHAIN_FILE $ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake)
++    endif()
+ endif()
+ 
+ set(APP_NAME krkr2)
+@@ -62,6 +64,11 @@ endif()
+ option(ENABLE_TESTS "enable tests execute build(exclude android)" ON)
+ option(BUILD_TOOLS "build tools execute build(exclude android ios)" ON)
+ option(BUILD_ENGINE_API "build engine_api bridge shared library" ON)
++option(BUILD_LINUX_STANDALONE "build the standalone Linux GTK executable" OFF)
++
++if(LINUX)
++    add_compile_definitions(LINUX=1)
++endif()
+ 
+ set(CMAKE_C_STANDARD 17)
+ set(CMAKE_CXX_STANDARD 17)
+@@ -86,7 +93,7 @@ if(ANDROID)
+         find_package(unofficial-breakpad CONFIG REQUIRED)
+         target_link_libraries(${PROJECT_NAME} PUBLIC unofficial::breakpad::libbreakpad_client)
+     endif()
+-elseif(LINUX)
++elseif(LINUX AND BUILD_LINUX_STANDALONE)
+     add_executable(${PROJECT_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/platforms/linux/main.cpp)
+ elseif(WINDOWS)
+     add_executable(${PROJECT_NAME}
+diff --git a/cpp/core/base/CMakeLists.txt b/cpp/core/base/CMakeLists.txt
+index 5e368de..f337f53 100644
+--- a/cpp/core/base/CMakeLists.txt
++++ b/cpp/core/base/CMakeLists.txt
+@@ -3,7 +3,6 @@ project(core_base_module LANGUAGES CXX)
+ 
+ set(BASE_PATH ${CMAKE_CURRENT_LIST_DIR})
+ set(BASE_SOURCE_FILES
+-    ${BASE_PATH}/7zArchive.cpp
+     ${BASE_PATH}/BinaryStream.cpp
+     ${BASE_PATH}/CharacterSet.cpp
+     ${BASE_PATH}/EventIntf.cpp
+@@ -39,12 +38,24 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${BASE_HEADERS_DIR})
+ target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_visual_module core_plugin_module core_environ_module core_extension_module core_sound_module core_utils_module)
+ 
+ find_package(uchardet CONFIG REQUIRED)
+-find_package(unrar CONFIG REQUIRED)
++find_package(PkgConfig REQUIRED)
++pkg_check_modules(MINIZIP REQUIRED IMPORTED_TARGET minizip)
++find_path(UNRAR_INCLUDE_DIR raros.hpp PATH_SUFFIXES unrar)
++find_library(UNRAR_LIBRARY unrar)
++if(NOT UNRAR_INCLUDE_DIR OR NOT UNRAR_LIBRARY)
++    message(FATAL_ERROR "unrar not found")
++endif()
++if(NOT TARGET unrar::unrar)
++    add_library(unrar::unrar UNKNOWN IMPORTED)
++    set_target_properties(unrar::unrar PROPERTIES
++        IMPORTED_LOCATION "${UNRAR_LIBRARY}"
++        INTERFACE_INCLUDE_DIRECTORIES "${UNRAR_INCLUDE_DIR}")
++endif()
+ find_package(LibArchive REQUIRED)
+ find_package(LibXml2 REQUIRED)
+ find_package(SDL2 CONFIG REQUIRED)
+ find_package(zstd CONFIG REQUIRED)
+-find_package(unofficial-minizip CONFIG REQUIRED)
++
+ 
+ target_link_libraries(${PROJECT_NAME} PRIVATE
+     uchardet::libuchardet
+@@ -55,5 +66,5 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
+ 
+     $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
+     $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
+-    unofficial::minizip::minizip
++    PkgConfig::MINIZIP
+ )
+diff --git a/cpp/core/environ/CMakeLists.txt b/cpp/core/environ/CMakeLists.txt
+index fb1e057..b6ca018 100644
+--- a/cpp/core/environ/CMakeLists.txt
++++ b/cpp/core/environ/CMakeLists.txt
+@@ -12,7 +12,6 @@ set(ENVIRON_SOURCE_FILES
+     ${ENVIRON_PATH}/DumpSend.cpp
+     ${ENVIRON_PATH}/EngineBootstrap.cpp
+     ${ENVIRON_PATH}/EngineLoop.cpp
+-    ${ENVIRON_PATH}/XP3ArchiveRepack.cpp
+ 
+     $<$<BOOL:${ANDROID}>:${ENVIRON_PATH}/android/AndroidUtils.cpp>
+     $<$<BOOL:${ANDROID}>:${ENVIRON_PATH}/android/KrkrJniHelper.cpp>
+@@ -47,16 +46,19 @@ set(ENVIRON_HEADERS_DIR
+     ${ENVIRON_PATH}/sdl
+ )
+ 
++find_package(PkgConfig REQUIRED)
++pkg_check_modules(MINIZIP REQUIRED IMPORTED_TARGET minizip)
++pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
++
+ add_library(${PROJECT_NAME} STATIC ${ENVIRON_SOURCE_FILES})
+ target_include_directories(${PROJECT_NAME} PUBLIC ${ENVIRON_HEADERS_DIR})
+ target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_visual_module core_sound_module core_plugin_module core_movie_module core_utils_module)
+ 
+-find_package(7zip CONFIG REQUIRED)
+ find_package(tinyxml2 CONFIG REQUIRED)
+-find_package(unofficial-minizip CONFIG REQUIRED)
++
+ 
+ target_link_libraries(${PROJECT_NAME} PRIVATE
+-        7zip::7zip
+-        unofficial::minizip::minizip
++        PkgConfig::MINIZIP
++        PkgConfig::GTK3
+         tinyxml2::tinyxml2
+ )
+diff --git a/cpp/core/environ/ConfigManager/GlobalConfigManager.cpp b/cpp/core/environ/ConfigManager/GlobalConfigManager.cpp
+index 815ecec..89a0fa9 100644
+--- a/cpp/core/environ/ConfigManager/GlobalConfigManager.cpp
++++ b/cpp/core/environ/ConfigManager/GlobalConfigManager.cpp
+@@ -1,3 +1,4 @@
++    #include <cstdarg>
+ #include "GlobalConfigManager.h"
+ #include <tinyxml2.h>
+ #include "Platform.h"
+diff --git a/cpp/core/movie/CMakeLists.txt b/cpp/core/movie/CMakeLists.txt
+index e29f77a..6407c2c 100644
+--- a/cpp/core/movie/CMakeLists.txt
++++ b/cpp/core/movie/CMakeLists.txt
+@@ -49,15 +49,6 @@ add_library(${PROJECT_NAME} STATIC ${MOVIE_SOURCE_FILES})
+ target_include_directories(${PROJECT_NAME} PUBLIC ${MOVIE_HEADERS_DIR})
+ target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_sound_module core_utils_module core_environ_module core_visual_module)
+ 
+-find_package(FFMPEG COMPONENTS
+-        avutil
+-        avfilter
+-        avcodec
+-        swscale
+-        swresample REQUIRED
+-)
+-target_include_directories(${PROJECT_NAME} PUBLIC ${FFMPEG_INCLUDE_DIRS})
+-
+-target_link_libraries(${PROJECT_NAME} PRIVATE
+-    ${FFMPEG_LIBRARIES}
+-)
++find_package(PkgConfig REQUIRED)
++pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavutil libavfilter libavcodec libswscale libswresample)
++target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FFMPEG)
+diff --git a/cpp/core/movie/ffmpeg/AudioCodecFFmpeg.cpp b/cpp/core/movie/ffmpeg/AudioCodecFFmpeg.cpp
+index 35701c5..7eca4d9 100644
+--- a/cpp/core/movie/ffmpeg/AudioCodecFFmpeg.cpp
++++ b/cpp/core/movie/ffmpeg/AudioCodecFFmpeg.cpp
+@@ -64,8 +64,8 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints,
+     m_pCodecContext->debug = 0;
+     m_pCodecContext->workaround_bugs = 1;
+ 
+-    if(pCodec->capabilities & CODEC_CAP_TRUNCATED)
+-        m_pCodecContext->flags |= CODEC_FLAG_TRUNCATED;
++    if(pCodec->capabilities & AV_CODEC_CAP_TRUNCATED)
++        m_pCodecContext->flags |= AV_CODEC_FLAG_TRUNCATED;
+ 
+     m_matrixEncoding = AV_MATRIX_ENCODING_NONE;
+     m_channels = 0;
+@@ -80,7 +80,7 @@ bool CDVDAudioCodecFFmpeg::Open(CDVDStreamInfo &hints,
+ 
+     if(hints.extradata && hints.extrasize > 0) {
+         m_pCodecContext->extradata = (uint8_t *)av_mallocz(
+-            hints.extrasize + FF_INPUT_BUFFER_PADDING_SIZE);
++            hints.extrasize + AV_INPUT_BUFFER_PADDING_SIZE);
+         if(m_pCodecContext->extradata) {
+             m_pCodecContext->extradata_size = hints.extrasize;
+             memcpy(m_pCodecContext->extradata, hints.extradata,
+diff --git a/cpp/core/movie/ffmpeg/DemuxFFmpeg.cpp b/cpp/core/movie/ffmpeg/DemuxFFmpeg.cpp
+index 1810ee7..130c085 100644
+--- a/cpp/core/movie/ffmpeg/DemuxFFmpeg.cpp
++++ b/cpp/core/movie/ffmpeg/DemuxFFmpeg.cpp
+@@ -29,7 +29,7 @@ static const struct StereoModeConversionMap WmvToInternalStereoModeMap[] = {
+     {}
+ };
+ 
+-#define FF_MAX_EXTRADATA_SIZE ((1 << 28) - FF_INPUT_BUFFER_PADDING_SIZE)
++#define FF_MAX_EXTRADATA_SIZE ((1 << 28) - AV_INPUT_BUFFER_PADDING_SIZE)
+ #define FFMPEG_FILE_BUFFER_SIZE 32768 // default reading size for ffmpeg
+ 
+ std::string CDemuxStreamAudioFFmpeg::GetStreamName() {
+@@ -1547,7 +1547,7 @@ void CDVDDemuxFFmpeg::ParsePacket(AVPacket *pkt) {
+             // a new stream to be created and used.
+             st->codec->extradata_size = i;
+             st->codec->extradata = (uint8_t *)av_malloc(
+-                st->codec->extradata_size + FF_INPUT_BUFFER_PADDING_SIZE);
++                st->codec->extradata_size + AV_INPUT_BUFFER_PADDING_SIZE);
+             if(st->codec->extradata) {
+                 //	CLog::Log(LOGDEBUG, "CDVDDemuxFFmpeg::Read()
+                 // fetching
+@@ -1556,7 +1556,7 @@ void CDVDDemuxFFmpeg::ParsePacket(AVPacket *pkt) {
+                 memcpy(st->codec->extradata, pkt->data,
+                        st->codec->extradata_size);
+                 memset(st->codec->extradata + i, 0,
+-                       FF_INPUT_BUFFER_PADDING_SIZE);
++                       AV_INPUT_BUFFER_PADDING_SIZE);
+             } else {
+                 st->codec->extradata_size = 0;
+             }
+diff --git a/cpp/core/movie/ffmpeg/DemuxPacket.cpp b/cpp/core/movie/ffmpeg/DemuxPacket.cpp
+index bd45c54..de9a072 100644
+--- a/cpp/core/movie/ffmpeg/DemuxPacket.cpp
++++ b/cpp/core/movie/ffmpeg/DemuxPacket.cpp
+@@ -41,14 +41,14 @@ DemuxPacket *DemuxPacket::Allocate(int iDataSize /*= 0*/) {
+              * segfault
+              */
+             pPacket->pData = (uint8_t *)TJSAlignedAlloc(
+-                iDataSize + FF_INPUT_BUFFER_PADDING_SIZE, 4);
++                iDataSize + AV_INPUT_BUFFER_PADDING_SIZE, 4);
+             if(!pPacket->pData) {
+                 Free(pPacket);
+                 return nullptr;
+             }
+ 
+             // reset the last 8 bytes to 0;
+-            memset(pPacket->pData + iDataSize, 0, FF_INPUT_BUFFER_PADDING_SIZE);
++            memset(pPacket->pData + iDataSize, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+         }
+ 
+         // setup defaults
+diff --git a/cpp/core/movie/ffmpeg/VideoCodecFFmpeg.cpp b/cpp/core/movie/ffmpeg/VideoCodecFFmpeg.cpp
+index 6a92321..d2d0329 100644
+--- a/cpp/core/movie/ffmpeg/VideoCodecFFmpeg.cpp
++++ b/cpp/core/movie/ffmpeg/VideoCodecFFmpeg.cpp
+@@ -347,14 +347,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
+     } else
+         m_decoderState = STATE_SW_SINGLE;
+ 
+-#if defined(TARGET_DARWIN_IOS)
+-    // ffmpeg with enabled neon will crash and burn if this is enabled
+-    m_pCodecContext->flags &= CODEC_FLAG_EMU_EDGE;
+-#else
+-    if(pCodec->id != AV_CODEC_ID_H264 && pCodec->capabilities & CODEC_CAP_DR1 &&
+-       pCodec->id != AV_CODEC_ID_VP8)
+-        m_pCodecContext->flags |= CODEC_FLAG_EMU_EDGE;
+-#endif
++    // CODEC_CAP_DR1 / CODEC_FLAG_EMU_EDGE removed in modern FFmpeg
+ 
+     // if we don't do this, then some codecs seem to fail.
+     m_pCodecContext->coded_height = hints.height;
+@@ -364,7 +357,7 @@ bool CDVDVideoCodecFFmpeg::Open(CDVDStreamInfo &hints,
+     if(hints.extradata && hints.extrasize > 0) {
+         m_pCodecContext->extradata_size = hints.extrasize;
+         m_pCodecContext->extradata = (uint8_t *)av_mallocz(
+-            hints.extrasize + FF_INPUT_BUFFER_PADDING_SIZE);
++            hints.extrasize + AV_INPUT_BUFFER_PADDING_SIZE);
+         memcpy(m_pCodecContext->extradata, hints.extradata, hints.extrasize);
+     }
+ 
+@@ -832,13 +825,13 @@ bool CDVDVideoCodecFFmpeg::GetPictureCommon(DVDVideoPicture *pDvdVideoPicture) {
+         m_pFrame, &pDvdVideoPicture->qstride, &qscale_type);
+ 
+     switch(qscale_type) {
+-        case FF_QSCALE_TYPE_MPEG1:
++        case 1 /* FF_QSCALE_TYPE_MPEG1 */:
+             pDvdVideoPicture->qscale_type = DVP_QSCALE_MPEG1;
+             break;
+-        case FF_QSCALE_TYPE_MPEG2:
++        case 2 /* FF_QSCALE_TYPE_MPEG2 */:
+             pDvdVideoPicture->qscale_type = DVP_QSCALE_MPEG2;
+             break;
+-        case FF_QSCALE_TYPE_H264:
++        case 3 /* FF_QSCALE_TYPE_H264 */:
+             pDvdVideoPicture->qscale_type = DVP_QSCALE_H264;
+             break;
+         default:
+@@ -935,8 +928,8 @@ int CDVDVideoCodecFFmpeg::FilterOpen(const std::string &filters, bool scale) {
+         return -1;
+     }
+ 
+-    AVFilter *srcFilter = avfilter_get_by_name("buffer");
+-    AVFilter *outFilter = avfilter_get_by_name(
++    const AVFilter *srcFilter = avfilter_get_by_name("buffer");
++    const AVFilter *outFilter = avfilter_get_by_name(
+         "buffersink"); // should be last filter in the graph for now
+ 
+     char args[128];
+diff --git a/cpp/core/sound/CMakeLists.txt b/cpp/core/sound/CMakeLists.txt
+index 46cc5cd..b64838a 100644
+--- a/cpp/core/sound/CMakeLists.txt
++++ b/cpp/core/sound/CMakeLists.txt
+@@ -38,9 +38,27 @@ add_library(${PROJECT_NAME} STATIC ${SOUND_SOURCE_FILES})
+ target_include_directories(${PROJECT_NAME} PUBLIC ${SOUND_HEADERS_DIR})
+ target_link_libraries(${PROJECT_NAME} PUBLIC tjs2 PRIVATE core_base_module core_movie_module core_utils_module core_environ_module)
+ 
+-find_package(Vorbis CONFIG REQUIRED)
+-find_package(Opus CONFIG REQUIRED)
+-find_package(OpusFile CONFIG REQUIRED)
++find_package(PkgConfig REQUIRED)
++pkg_check_modules(VORBIS REQUIRED IMPORTED_TARGET vorbis)
++pkg_check_modules(VORBISFILE REQUIRED IMPORTED_TARGET vorbisfile)
++pkg_check_modules(VORBISENC REQUIRED IMPORTED_TARGET vorbisenc)
++pkg_check_modules(OPUS REQUIRED IMPORTED_TARGET opus)
++pkg_check_modules(OPUSFILE REQUIRED IMPORTED_TARGET opusfile)
++if(NOT TARGET Vorbis::vorbis)
++    add_library(Vorbis::vorbis ALIAS PkgConfig::VORBIS)
++endif()
++if(NOT TARGET Vorbis::vorbisfile)
++    add_library(Vorbis::vorbisfile ALIAS PkgConfig::VORBISFILE)
++endif()
++if(NOT TARGET Vorbis::vorbisenc)
++    add_library(Vorbis::vorbisenc ALIAS PkgConfig::VORBISENC)
++endif()
++if(NOT TARGET Opus::opus)
++    add_library(Opus::opus ALIAS PkgConfig::OPUS)
++endif()
++if(NOT TARGET OpusFile::opusfile)
++    add_library(OpusFile::opusfile ALIAS PkgConfig::OPUSFILE)
++endif()
+ 
+ if(ANDROID)
+     # vcpkg's oboe port does not ship CMake config files; find manually.
+@@ -60,7 +78,10 @@ if(ANDROID)
+     )
+ endif()
+ 
+-find_package(OpenAL CONFIG REQUIRED)
++pkg_check_modules(OPENAL REQUIRED IMPORTED_TARGET openal)
++if(NOT TARGET OpenAL::OpenAL)
++    add_library(OpenAL::OpenAL ALIAS PkgConfig::OPENAL)
++endif()
+ 
+ target_link_libraries(${PROJECT_NAME} PRIVATE
+     Vorbis::vorbis
+diff --git a/cpp/core/sound/FFWaveDecoder.cpp b/cpp/core/sound/FFWaveDecoder.cpp
+index 9fdcc6d..cbeee59 100644
+--- a/cpp/core/sound/FFWaveDecoder.cpp
++++ b/cpp/core/sound/FFWaveDecoder.cpp
+@@ -308,8 +308,7 @@ bool FFWaveDecoder::SetStream(const ttstr &url) {
+     avctx->codec_id = codec->id;
+     avctx->workaround_bugs = /*workaround_bugs*/ 1;
+     avctx->error_concealment = 3;
+-    if(codec->capabilities & CODEC_CAP_DR1)
+-        avctx->flags |= CODEC_FLAG_EMU_EDGE;
++    // CODEC_CAP_DR1 / CODEC_FLAG_EMU_EDGE removed in modern FFmpeg
+ 
+     if(avcodec_open2(avctx, codec, nullptr) < 0) {
+         return false;
+diff --git a/cpp/core/tjs2/CMakeLists.txt b/cpp/core/tjs2/CMakeLists.txt
+index b472912..f879203 100644
+--- a/cpp/core/tjs2/CMakeLists.txt
++++ b/cpp/core/tjs2/CMakeLists.txt
+@@ -135,7 +135,11 @@ target_include_directories(${PROJECT_NAME}
+ find_package(Boost COMPONENTS locale REQUIRED NO_MODULE)
+ find_package(fmt CONFIG REQUIRED)
+ find_package(spdlog CONFIG REQUIRED)
+-find_package(oniguruma CONFIG REQUIRED)
++find_package(PkgConfig REQUIRED)
++pkg_check_modules(ONIG REQUIRED IMPORTED_TARGET oniguruma)
++if(NOT TARGET oniguruma::onig)
++    add_library(oniguruma::onig ALIAS PkgConfig::ONIG)
++endif()
+ 
+ target_link_libraries(${PROJECT_NAME} PUBLIC
+     Boost::locale
+diff --git a/cpp/core/visual/CMakeLists.txt b/cpp/core/visual/CMakeLists.txt
+index 7312423..e54a2ca 100644
+--- a/cpp/core/visual/CMakeLists.txt
++++ b/cpp/core/visual/CMakeLists.txt
+@@ -107,24 +107,26 @@ else()
+     endif()
+ endif()
+ 
+-find_package(JXR REQUIRED)
++find_package(PkgConfig REQUIRED)
++pkg_check_modules(JXR REQUIRED IMPORTED_TARGET libjxr)
+ target_compile_definitions(${PROJECT_NAME} PRIVATE -D__ANSI__)
+-target_include_directories(${PROJECT_NAME} PRIVATE ${JXR_INCLUDE_DIRS})
+-target_link_libraries(${PROJECT_NAME} PRIVATE ${JXR_LIBRARIES})
++target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::JXR)
+ 
+-find_package(libjpeg-turbo CONFIG REQUIRED)
+-target_link_libraries(${PROJECT_NAME} PUBLIC
+-    $<IF:$<TARGET_EXISTS:libjpeg-turbo::turbojpeg>,libjpeg-turbo::turbojpeg,libjpeg-turbo::turbojpeg-static>
+-)
++pkg_check_modules(LIBJPEGTURBO REQUIRED IMPORTED_TARGET libturbojpeg)
++if(NOT TARGET libjpeg-turbo::turbojpeg)
++    add_library(libjpeg-turbo::turbojpeg ALIAS PkgConfig::LIBJPEGTURBO)
++endif()
+ 
+-set(OpenCV_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4")
+-find_package(OpenCV REQUIRED)
++find_package(OpenCV REQUIRED COMPONENTS core imgproc)
+ target_link_libraries(${PROJECT_NAME} PUBLIC
+     opencv_imgproc
+     opencv_core
+ )
+ 
+-find_package(lz4 CONFIG REQUIRED)
++pkg_check_modules(LZ4PC REQUIRED IMPORTED_TARGET liblz4)
++if(NOT TARGET lz4::lz4)
++    add_library(lz4::lz4 ALIAS PkgConfig::LZ4PC)
++endif()
+ target_link_libraries(${PROJECT_NAME} PUBLIC
+     lz4::lz4
+ )
+diff --git a/cpp/external/libbpg/CMakeLists.txt b/cpp/external/libbpg/CMakeLists.txt
+index 2134d5a..dc11ead 100644
+--- a/cpp/external/libbpg/CMakeLists.txt
++++ b/cpp/external/libbpg/CMakeLists.txt
+@@ -14,9 +14,6 @@ target_include_directories(${PROJECT_NAME}
+             $<INSTALL_INTERFACE:include/>
+ )
+ 
+-find_package(FFMPEG COMPONENTS
+-        avutil
+-        avcodec REQUIRED
+-)
+-target_include_directories(${PROJECT_NAME} PRIVATE ${FFMPEG_INCLUDE_DIRS})
+-target_link_libraries(${PROJECT_NAME} PRIVATE ${FFMPEG_LIBRARIES})
++find_package(PkgConfig REQUIRED)
++pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavutil libavcodec)
++target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::FFMPEG)
+diff --git a/cpp/external/libbpg/libbpg.c b/cpp/external/libbpg/libbpg.c
+index 19bf201..733806a 100644
+--- a/cpp/external/libbpg/libbpg.c
++++ b/cpp/external/libbpg/libbpg.c
+@@ -397,7 +397,7 @@ static int hevc_write_frame(AVCodecContext *avctx,
+     avpkt.data = (uint8_t *)buf;
+     avpkt.size = buf_len;
+     /* avoid using uninitialized data */
+-    memset(buf + buf_len, 0, FF_INPUT_BUFFER_PADDING_SIZE);
++    memset(buf + buf_len, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+     len = avcodec_decode_video2(avctx, frame, &got_frame, &avpkt);
+     if (len < 0 || !got_frame)
+         return -1;
+@@ -474,14 +474,14 @@ static int hevc_decode_frame_internal(BPGDecoderContext *s,
+     }
+     
+     if (s->alpha_dec_ctx) {
+-        if (dyn_buf_resize(abuf, abuf->len + FF_INPUT_BUFFER_PADDING_SIZE) < 0)
++        if (dyn_buf_resize(abuf, abuf->len + AV_INPUT_BUFFER_PADDING_SIZE) < 0)
+             goto fail;
+         ret = hevc_write_frame(s->alpha_dec_ctx, s->alpha_frame, abuf->buf, abuf->len);
+         if (ret < 0)
+             goto fail;
+     }
+ 
+-    if (dyn_buf_resize(cbuf, cbuf->len + FF_INPUT_BUFFER_PADDING_SIZE) < 0)
++    if (dyn_buf_resize(cbuf, cbuf->len + AV_INPUT_BUFFER_PADDING_SIZE) < 0)
+         goto fail;
+     ret = hevc_write_frame(s->dec_ctx, s->frame, cbuf->buf, cbuf->len);
+     if (ret < 0)
+diff --git a/cpp/plugins/CMakeLists.txt b/cpp/plugins/CMakeLists.txt
+index b6183e0..5fb0621 100644
+--- a/cpp/plugins/CMakeLists.txt
++++ b/cpp/plugins/CMakeLists.txt
+@@ -28,7 +28,6 @@ target_sources(${PROJECT_NAME} PUBLIC
+     layerExRaster.cpp
+     layerExAreaAverage.cpp
+     layerExLongExposure.cpp
+-    krkrlive2d.cpp
+     krkrgles.cpp
+     drawDeviceD2DCompat.cpp
+     wfBasicEffectCompat.cpp
+@@ -65,6 +64,10 @@ add_definitions(-D__STDC_CONSTANT_MACROS -DTJS_TEXT_OUT_CRLF)
+ set(CUBISM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cubism)
+ set(CUBISM_CORE_DIR ${CUBISM_DIR}/Core)
+ set(CUBISM_FW_DIR ${CUBISM_DIR}/Framework)
++set(CUBISM_SDK_AVAILABLE OFF)
++if(EXISTS "${CUBISM_FW_DIR}/src")
++    set(CUBISM_SDK_AVAILABLE ON)
++endif()
+ 
+ file(GLOB_RECURSE CUBISM_FW_SOURCES
+     ${CUBISM_FW_DIR}/*.cpp
+@@ -72,6 +75,7 @@ file(GLOB_RECURSE CUBISM_FW_SOURCES
+ # Exclude non-OpenGL renderers (already removed from tree, but safety net)
+ list(FILTER CUBISM_FW_SOURCES EXCLUDE REGEX ".*/D3D9/.*|.*/D3D11/.*|.*/Vulkan/.*|.*/Metal/.*|.*/Cocos2d/.*")
+ 
++if(CUBISM_SDK_AVAILABLE)
+ add_library(CubismFramework STATIC ${CUBISM_FW_SOURCES})
+ target_include_directories(CubismFramework PUBLIC
+     ${CUBISM_FW_DIR}
+@@ -99,6 +103,7 @@ if(unofficial-angle_FOUND)
+ elseif(ANDROID)
+     target_link_libraries(CubismFramework PRIVATE EGL GLESv2)
+ endif()
++endif()
+ 
+ if(ANDROID)
+     set(CUBISM_CORE_ARCH ${CMAKE_ANDROID_ARCH_ABI})
+@@ -113,21 +118,29 @@ elseif(APPLE)
+     endif()
+ endif()
+ 
++if(CUBISM_SDK_AVAILABLE)
+ target_link_libraries(CubismFramework PUBLIC ${CUBISM_CORE_LIB})
++endif()
+ 
++if(CUBISM_SDK_AVAILABLE)
+ target_include_directories(${PROJECT_NAME} PUBLIC
+     ${CUBISM_FW_DIR}
+     ${CUBISM_CORE_DIR}/include
+ )
++endif()
++if(CUBISM_SDK_AVAILABLE)
+ target_compile_definitions(${PROJECT_NAME} PUBLIC CSM_TARGET_ANGLE_ES2)
+ target_link_libraries(${PROJECT_NAME} PUBLIC CubismFramework)
++endif()
+ 
+ target_include_directories(${PROJECT_NAME} PUBLIC ${KRKR2PLUGIN_PATH} ${KRKR2PLUGIN_PATH}/simplebinder})
+ target_link_libraries(${PROJECT_NAME} PUBLIC krkr2core)
+ 
+ add_subdirectory(psdfile)
+ add_subdirectory(psbfile)
++if(KRKR_ENABLE_LAYEREX_DRAW)
+ add_subdirectory(layerex_draw)
++endif()
+ add_subdirectory(motionplayer)
+ add_subdirectory(kagparserex)
+ 
+@@ -138,7 +151,6 @@ add_subdirectory(fstat)
+ target_link_libraries(${PROJECT_NAME} PUBLIC
+         psdfile
+         psbfile
+-        layerExDraw
+         motionplayer
+         kagparserex
+         fstat
+diff --git a/cpp/plugins/layerex_draw/CMakeLists.txt b/cpp/plugins/layerex_draw/CMakeLists.txt
+index b1a7ec4..7f95545 100644
+--- a/cpp/plugins/layerex_draw/CMakeLists.txt
++++ b/cpp/plugins/layerex_draw/CMakeLists.txt
+@@ -17,14 +17,11 @@ else()
+             general/DrawPath.cpp
+     )
+ 
+-    find_package(libgdiplus CONFIG REQUIRED)
+-    target_link_libraries(${PROJECT_NAME} PRIVATE libgdiplus::libgdiplus)
+-
+-    set(VCPKG_INSTALL_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}")
+-
+-    # glibconfig
+-    # https://invent.kde.org/frameworks/extra-cmake-modules/-/blob/master/find-modules/FindGLIB2.cmake
+-    target_include_directories(${PROJECT_NAME} PUBLIC "${VCPKG_INSTALL_DIR}/lib/glib-2.0/include")
+-    target_include_directories(${PROJECT_NAME} PUBLIC "${VCPKG_INSTALL_DIR}/include/glib-2.0")
++    find_package(PkgConfig REQUIRED)
++    pkg_check_modules(LIBGDIPLUS REQUIRED IMPORTED_TARGET libgdiplus glib-2.0)
++    if(NOT TARGET libgdiplus::libgdiplus)
++        add_library(libgdiplus::libgdiplus ALIAS PkgConfig::LIBGDIPLUS)
++    endif()
++    target_link_libraries(${PROJECT_NAME} PUBLIC libgdiplus::libgdiplus)
+ 
+ endif ()
+diff --git a/cpp/plugins/psdfile/psdparse/CMakeLists.txt b/cpp/plugins/psdfile/psdparse/CMakeLists.txt
+index 7c92501..2ac6321 100644
+--- a/cpp/plugins/psdfile/psdparse/CMakeLists.txt
++++ b/cpp/plugins/psdfile/psdparse/CMakeLists.txt
+@@ -12,8 +12,8 @@ add_library(${PROJECT_NAME} STATIC
+ 	psdresource.cpp
+ )
+ 
+-find_package(Boost COMPONENTS phoenix spirit iostreams REQUIRED NO_MODULE)
++find_package(Boost COMPONENTS iostreams REQUIRED NO_MODULE)
+ 
+ target_link_libraries(${PROJECT_NAME} PRIVATE
+-	krkr2plugin Boost::phoenix Boost::spirit Boost::iostreams
++	krkr2plugin Boost::headers Boost::iostreams
+ )
+\ No newline at end of file
