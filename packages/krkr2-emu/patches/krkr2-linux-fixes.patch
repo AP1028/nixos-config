@@ -378,40 +378,79 @@ index 1d58f9b..5aaa0e6 100644
  target_link_libraries(${PROJECT_NAME} PUBLIC
      Boost::locale
 diff --git a/cpp/core/tjs2/tjsInterCodeExec.cpp b/cpp/core/tjs2/tjsInterCodeExec.cpp
-index c3e7a72..ed0b4d2 100644
+index c3e7a72..a475f8a 100644
 --- a/cpp/core/tjs2/tjsInterCodeExec.cpp
 +++ b/cpp/core/tjs2/tjsInterCodeExec.cpp
-@@ -788,6 +788,9 @@ namespace TJS {
-         tjs_int info_len = info.GetLen();
- 
-         tjs->OutputToConsole(info.c_str());
-+        // The VM dump can fault on partially-unwound frames; the exception
-+        // message itself (printed by the caller) is what matters.
-+        if(false) {
-         tjs->OutputToConsole(TJS_W("-- Disassembled VM code --"));
-         DisassembleSrcLine(codepos);
- 
-@@ -798,7 +801,12 @@ namespace TJS {
+@@ -798,6 +798,8 @@ namespace TJS {
          tjs_int ra_count =
              MaxVariableCount + VariableReserveCount + 1 + MaxFrameCount;
          ttstr line;
 +        // Diagnostic register dump: guard against corrupt variants that can
 +        // crash the dump itself and hide the actual exception.
          for(tjs_int i = 0; i < ra_count; i++) {
-+            if(ra_start[i].Type() == tvtString &&
-+               ra_start[i].GetString() == nullptr)
-+                continue;
              ttstr reg_info = TJS_W("%") +
                  ttstr(i - (MaxVariableCount + VariableReserveCount)) +
-                 TJS_W("=") + TJSVariantToReadableString(ra_start[i]);
-@@ -817,6 +825,7 @@ namespace TJS {
-         }
- 
-         tjs->OutputToConsoleSeparator(TJS_W("-"), info_len);
+diff --git a/cpp/core/tjs2/tjsInterCodeGen.cpp b/cpp/core/tjs2/tjsInterCodeGen.cpp
+index 0f8c74a..5f39188 100644
+--- a/cpp/core/tjs2/tjsInterCodeGen.cpp
++++ b/cpp/core/tjs2/tjsInterCodeGen.cpp
+@@ -37,15 +37,35 @@
+ //---------------------------------------------------------------------------
+ namespace TJS // following is in the namespace
+ {
++    static std::string sActiveBlockName = "<unknown>";
++    static tTJSScriptBlock *sActiveBlock = nullptr;
++
+     int yylex(parser::value_type *yylex, tTJSScriptBlock *ptr) {
+         tjs_int n;
++        if(ptr) {
++            sActiveBlock = ptr;
++            sActiveBlockName = ptr->GetNameInfo().AsStdString();
 +        }
+         const tjs_int t = ptr->GetLexicalAnalyzer()->GetNext(n);
+         yylex->num = n;
+         return t;
+     }
+ 
+     void parser::error(const std::string &msg) {
+-        spdlog::get("tjs2")->critical(msg);
++        // identify the script (and offending line) being compiled
++        std::string detail;
++        if(sActiveBlock) {
++            tjs_int pos = 0;
++            if(sActiveBlock->GetLexicalAnalyzer())
++                pos = sActiveBlock->GetLexicalAnalyzer()->GetCurrentPosition();
++            tjs_int line = sActiveBlock->SrcPosToLine(pos) + 1;
++            tjs_int len = 0;
++            const tjs_char *text = sActiveBlock->GetLine(line, &len);
++            detail = fmt::format(" at line {}: [{}]", line,
++                                 text ? ttstr(text, len).AsStdString() : "");
++        }
++        spdlog::get("tjs2")->critical("{} (block: {}){}", msg, sActiveBlockName,
++                                      detail);
      }
  
      //---------------------------------------------------------------------------
+@@ -53,6 +73,7 @@ namespace TJS // following is in the namespace
+         // handles errors that happen in the compilation
+ 
+         tTJSScriptBlock *sb = (tTJSScriptBlock *)pm;
++        if(sb) sActiveBlockName = sb->GetNameInfo().AsStdString();
+ 
+         // message conversion
+         ttstr str;
+diff --git a/cpp/core/tjs2/tjsLex.cpp b/cpp/core/tjs2/tjsLex.cpp
+index 895307d..ba8b28b 100644
+--- a/cpp/core/tjs2/tjsLex.cpp
++++ b/cpp/core/tjs2/tjsLex.cpp
+@@ -8,6 +8,7 @@
+ //---------------------------------------------------------------------------
+ // TJS2 lexical analyzer
+ //---------------------------------------------------------------------------
++#include <spdlog/spdlog.h>
+ #include "tjsCommHead.h"
+ 
+ #include "tjsInterCodeGen.h"
 diff --git a/cpp/core/visual/CMakeLists.txt b/cpp/core/visual/CMakeLists.txt
 index d7fd66d..44d469c 100644
 --- a/cpp/core/visual/CMakeLists.txt
