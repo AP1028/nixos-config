@@ -134,6 +134,9 @@ stdenv.mkDerivation {
     description = "KiriKiri2 engine rebuilt on Flutter + ANGLE (KrKr2-Next native engine library)";
     homepage = "https://github.com/reAAAq/KrKr2-Next";
     license = with licenses; [ mit ];
-    platforms = [ "x86_64-linux" ];
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
   };
 }

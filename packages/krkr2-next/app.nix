@@ -69,7 +69,10 @@ EOF
     description = "KrKr2-Next: cross-platform KiriKiri2 visual novel emulator built on Flutter";
     homepage = "https://github.com/reAAAq/KrKr2-Next";
     license = with licenses; [ mit ];
-    platforms = [ "x86_64-linux" ];
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
     mainProgram = "flutter_app";
   };
 }
