@@ -221,6 +221,15 @@ in {
     #     old.postInstall;
     # }))
 
+    # Kirikiri2 runtime (reAAAq/KrKr2-Next): Flutter front end over a native
+    # engine, packaged in packages/krkr2-next. The engine carries local patches
+    # (dependency fixes, Kirikiri scrambled scripts, node-flipped/shifted frame
+    # readback); libunrar is unfree, covered by allowUnfree.
+    (pkgs.callPackage ../../../packages/krkr2-next/app.nix {
+      flutter347 = pkgs.flutter347;
+      engine = pkgs.callPackage ../../../packages/krkr2-next/engine.nix { };
+    })
+
     texliveFull
     dotnet-sdk_9
 
