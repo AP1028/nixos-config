@@ -1,0 +1,27 @@
+diff --git a/platforms/linux/main.cpp b/platforms/linux/main.cpp
+index 2327a54..7cf1c28 100644
+--- a/platforms/linux/main.cpp
++++ b/platforms/linux/main.cpp
+@@ -1,4 +1,6 @@
++#include <filesystem>
+ #include <memory>
++#include <system_error>
+ #include <gtk/gtk.h>
+ 
+ #include <spdlog/spdlog.h>
+@@ -17,7 +19,14 @@ int main(int argc, char **argv) {
+     static auto plugin_logger = spdlog::stdout_color_mt("plugin");
+     // 将输入的参数也就是输入文件转为wstring
+     if(argc > 1) {
+-        TVPMainFileSelectorForm::filePath = argv[1];
++        // Resolve the project path against the current directory first: a
++        // bare relative name such as "data.xp3" is treated as a storage name
++        // and the archive cannot be opened.
++        std::error_code ec;
++        std::filesystem::path absolute =
++            std::filesystem::absolute(std::filesystem::path(argv[1]), ec);
++        TVPMainFileSelectorForm::filePath =
++            ec ? std::string(argv[1]) : absolute.string();
+     }
+     spdlog::set_default_logger(core_logger);
+ 

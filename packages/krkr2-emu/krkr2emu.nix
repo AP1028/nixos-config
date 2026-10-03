@@ -88,6 +88,9 @@ stdenv.mkDerivation {
     # psbfile's load() used a file-local PSBMedia pointer that initPSBMedia()
     # (a different translation unit) never initialised -> null deref crash.
     ./patches/psbfile-storage-media.patch
+    # `krkr2 data.xp3` failed with "Error opening archive": a bare relative
+    # path is treated as a storage name, so resolve it against the cwd first.
+    ./patches/launcher-relative-path.patch
   ];
 
   nativeBuildInputs = [
