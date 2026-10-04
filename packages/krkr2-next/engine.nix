@@ -97,6 +97,10 @@ stdenv.mkDerivation {
     ./motion-psb-center.patch
     # Without a display, GTK message boxes abort the process; log instead.
     ./messagebox-headless.patch
+    # Layer.loadImages raised for images the original multi-image plugin would
+    # have resolved; games call it from their affine-layer setup, where the
+    # exception tore down the whole scene. Log and leave the layer as it is.
+    ./layer-loadimages-tolerant.patch
   ];
 
   nativeBuildInputs = [

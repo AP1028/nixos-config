@@ -1,0 +1,29 @@
+diff --git a/cpp/core/visual/LayerIntf.cpp b/cpp/core/visual/LayerIntf.cpp
+index 4e8a100..c32b68e 100644
+--- a/cpp/core/visual/LayerIntf.cpp
++++ b/cpp/core/visual/LayerIntf.cpp
+@@ -2892,8 +2892,22 @@ iTJSDispatch2 *tTJSNI_BaseLayer::LoadImages(const ttstr &name,
+     iTJSDispatch2 *metainfo = nullptr;
+ 
+     int64_t oldBytes = TVPCalcMainImageBytes(MainImage);
+-    TVPLoadGraphic(MainImage, name, colorkey, 0, 0, glmNormal, &provincename,
+-                   &metainfo);
++    try {
++        TVPLoadGraphic(MainImage, name, colorkey, 0, 0, glmNormal, &provincename,
++                       &metainfo);
++    } catch(...) {
++        // A missing or unsupported image must not abort the caller. Games use
++        // this from their painting/affine layer setup (Yuzusoft's
++        // AffineSourceImage.loadImages, for example) and ask for names that
++        // only the original multi-image plugin could resolve; letting the
++        // exception escape tore down the whole scene. Leave the layer as it is
++        // and report the failure.
++        spdlog::warn("Layer.loadImages: cannot load image [{}]",
++                     name.AsStdString());
++        if(metainfo)
++            metainfo->Release();
++        return nullptr;
++    }
+     TVPLayerBitmapTotalBytes.fetch_add(TVPCalcMainImageBytes(MainImage) - oldBytes,
+                                        std::memory_order_relaxed);
+ 
