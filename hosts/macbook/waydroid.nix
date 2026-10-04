@@ -6,6 +6,68 @@
   # Waydroid binds the session's data directory into the container as /data.
   dataDir = "${config.users.users.${config.local.username}.home}/.local/share/waydroid/data";
   dataImage = "/var/lib/waydroid/data.img";
+
+  # One way to bring the UI up that copes with every state Android can be left
+  # in.  Android's own power menu "Shut down" stops the *container* but leaves
+  # the session manager running, and in that state `show-full-ui` just waits for
+  # a binder service manager that never appears, while `session start` refuses
+  # with "Session is already running" -- the container is only booted when the
+  # session manager itself starts.  So: restart the session when the container
+  # is neither running nor frozen, wait for it, then show the UI.
+  waydroid-ui = pkgs.writeShellApplication {
+    name = "waydroid-show-full-ui";
+    runtimeInputs = [
+      config.virtualisation.waydroid.package
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.util-linux
+    ];
+    text = ''
+      log="''${XDG_RUNTIME_DIR:-/tmp}/waydroid-show-full-ui.log"
+
+      container_up() {
+        waydroid status 2>/dev/null | grep -qE 'Container:[[:space:]]*(RUNNING|FROZEN)'
+      }
+      session_up() {
+        waydroid status 2>/dev/null | grep -qE 'Session:[[:space:]]*RUNNING'
+      }
+
+      if ! container_up; then
+        # Android was shut down from its own power menu: the session manager is
+        # still alive (so `show-full-ui` has nothing to talk to), and a session
+        # manager only boots the container when it starts itself.  Cycle it,
+        # waiting for the old manager to release its name and retrying the start
+        # in case that name is still held.
+        waydroid session stop >/dev/null 2>&1 || true
+        for _ in $(seq 1 20); do
+          if ! session_up; then break; fi
+          sleep 1
+        done
+        for _ in $(seq 1 10); do
+          setsid waydroid session start >>"$log" 2>&1 &
+          for _ in $(seq 1 15); do
+            if session_up; then break 2; fi
+            sleep 1
+          done
+          sleep 2
+        done
+      fi
+
+      # `show-full-ui` exits 0 even when it does nothing: it logs "Waiting for
+      # binder Service Manager" while the container is down and "Failed to get
+      # service waydroidplatform" during Android's ~30 s boot.  Silence means
+      # the request landed, so retry until then.
+      for _ in $(seq 1 24); do
+        out=$(timeout 15 waydroid --details-to-stdout show-full-ui 2>&1) || true
+        if [ -z "$out" ]; then
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "waydroid-show-full-ui: gave up after retrying; log: $log" >&2
+      exit 1
+    '';
+  };
 in {
   # ── Waydroid: Android 16 (LineageOS 23.0) in an LXC container ────────────
   #
@@ -50,6 +112,25 @@ in {
     url = "https://github.com/UtkarshVerma/waydroid-on-asahi/releases/download/lineage-23.0/vendor.img";
     hash = "sha256-e8RkIdZAom+XPMd/XmYCJcguHs5AHilmQorgvrkN7EU=";
   };
+
+  # Launcher that goes straight to the single Android window, booting Android
+  # first if it has been shut down (see waydroid-ui above).  The package's own
+  # Waydroid.desktop runs bare `waydroid`, i.e. `first-launch` (which also
+  # offers the GUI initializer) before showing the UI; this one is explicit.
+  environment.systemPackages = [
+    waydroid-ui
+    (pkgs.makeDesktopItem {
+      name = "waydroid-full-ui";
+      desktopName = "Waydroid (Full UI)";
+      genericName = "Android Container";
+      comment = "Show the Waydroid Android UI in a window";
+      exec = "${waydroid-ui}/bin/waydroid-show-full-ui";
+      icon = "waydroid";
+      categories = ["Utility" "X-WayDroid-App"];
+      terminal = false;
+      startupNotify = false;
+    })
+  ];
 
   # The desktop entry runs plain `waydroid`, which only *shows* an already
   # running session (it never starts one), so the session manager has to be
@@ -157,6 +238,15 @@ in {
   # 26.0.6").  Hardware Vulkan needs an image built with Android's
   # VK_ANDROID_native_buffer support, e.g. the HLM319 LineageOS 23.2 tree --
   # nothing host-side can add it.
+
+  # ── DMA-BUF heaps: also missing, but on the kernel side ──────────────────
+  #
+  # The Asahi kernel is built without CONFIG_DMABUF_HEAPS, so /dev/dma_heap
+  # does not exist, Waydroid's init logs "DMA-BUF system heap does not exist"
+  # and Android's libdmabufheap logs "No ion heap of name system exists".
+  # Only DMA-BUF/zero-copy (video) paths care -- the graphics path in use is
+  # minigbm_gbm_mesa on /dev/dri/renderD128.  Fixing it needs a linux-asahi
+  # rebuild; the boot.kernelPatches snippet is in docs/waydroid-asahi.md.
 
   # ── /sdcard (emulated storage) ───────────────────────────────────────────
   #

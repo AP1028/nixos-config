@@ -69,6 +69,71 @@ Vulkan fall back to SwiftShader (software). Hardware Vulkan needs an image built
 with Android's `VK_ANDROID_native_buffer` support, e.g. the HLM319 LineageOS
 23.2 tree; that is an Android build, not a configuration change.
 
+## DMA-BUF heaps (the "Missing DMA-BUF support" warning)
+
+Waydroid's host-side init logs this on every container start:
+
+```
+waydroid-init: DMA-BUF system heap does not exist, video playback might not work properly
+```
+
+and Android agrees in logcat:
+
+```
+E DMABUFHEAPS: No ion heap of name system exists
+```
+
+Both are correct, and the cause is the kernel, not Waydroid:
+
+```
+$ ls /dev/dma_heap                     # no such directory: no heap devices at all
+$ zcat /proc/config.gz | grep DMABUF
+# CONFIG_DMABUF_HEAPS is not set
+```
+
+The Asahi kernel is built without the DMA-BUF heaps framework, so
+`/dev/dma_heap/system` does not exist on the host; Waydroid's LXC config binds
+the `/dev/dma_heap/*` glob and therefore binds nothing, and Android's
+`libdmabufheap` finds no heap. It does **not** affect what works: the container
+allocates graphics buffers through `ro.hardware.gralloc=minigbm_gbm_mesa` on
+`/dev/dri/renderD128`, so GLES/HWUI, apps and storage are fine. Only DMA-BUF /
+zero-copy paths (video) are affected — and these images have no hardware video
+codecs anyway, so playback is software-decoded regardless.
+
+**Fixed (2026-10).** `hosts/macbook/hardware/default.nix` now builds
+`linux-asahi` with the patch below, so the host has `/dev/dma_heap/system`
+(`0666 root root`) and the `waydroid-init` / `DMABUFHEAPS` messages are gone.
+Two things to know if you redo this:
+
+* It needs a full `linux-asahi` build (~30–60 min here) and a reboot.
+* **Re-run `waydroid init -f` afterwards.** Waydroid writes the LXC device
+  entries in `set_lxc_config()`, which only runs at init time — a container
+  started from an older config keeps a `config_nodes` with no `dma_heap` line,
+  so the container still has no `/dev/dma_heap` and Android keeps logging the
+  warning even though the kernel now provides the heap. After re-initialising,
+  `config_nodes` contains
+  `lxc.mount.entry = /dev/dma_heap/system dev/dma_heap/system none bind,create=file,optional 0 0`
+  and the node appears in the container as `/dev/dma_heap/system`
+  (`0444 system system`, which is the image's own `/system/etc/ueventd.rc`
+  rule and normal for the heap API).
+
+```nix
+boot.kernelPatches = [
+  {
+    name = "dmabuf-heaps";
+    patch = null;
+    structuredExtraConfig = with lib.kernel; {
+      DMABUF_HEAPS = yes;
+      DMABUF_HEAPS_SYSTEM = yes; # provides /dev/dma_heap/system
+    };
+  }
+];
+```
+
+It still does not give hardware video decode on this image (no hardware
+codecs), and the graphics path in use remains
+`ro.hardware.gralloc=minigbm_gbm_mesa` on `/dev/dri/renderD128`.
+
 ## Images
 
 | file | source | size | sha256 |
@@ -113,9 +178,11 @@ sudo /run/current-system/sw/bin/waydroid init -f
 #    at login; to start it by hand now:
 waydroid session start
 
-# 4. launch the UI — prefer the "Waydroid" app-menu entry.  Android idles by
-#    freezing the container (`suspend_action=freeze`), which is normal: showing
-#    the UI again unfreezes it.
+# 4. launch the UI.  Two app-menu entries exist: "Waydroid" (the package's,
+#    which runs bare `waydroid` = first-launch) and "Waydroid (Full UI)" (from
+#    hosts/macbook/waydroid.nix, which runs `waydroid show-full-ui` directly).
+#    Android idles by freezing the container (`suspend_action=freeze`), which is
+#    normal: showing the UI again unfreezes it.
 waydroid show-full-ui
 
 # 5. apps (arm64-only images: no libhoudini/libndk bridge, so no 32-bit APKs)
@@ -137,6 +204,10 @@ and writable, and `waydroid app install` / `waydroid shell` work.
 * **Camera** does not work (removed from the image build).
 * **Bluetooth** is non-functional (errors merely suppressed at build time).
 * **No hardware video decode** — only software codecs are enabled.
+* **No DMA-BUF heaps** — the Asahi kernel has `CONFIG_DMABUF_HEAPS` off, so
+  Android sees no `/dev/dma_heap/system` and Waydroid logs "Missing DMA-BUF
+  support". Zero-copy/video paths only; see the DMA-BUF section for the
+  `boot.kernelPatches` fix (needs a kernel rebuild).
 * **No hardware Vulkan** — see the Vulkan section above; apps fall back to
   SwiftShader. GLES is hardware accelerated.
 * **No GApps** in these images (VANILLA build).
