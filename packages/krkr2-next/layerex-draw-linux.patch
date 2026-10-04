@@ -1,0 +1,166 @@
+diff --git a/bridge/engine_api/src/engine_api.cpp b/bridge/engine_api/src/engine_api.cpp
+index ccda9df..275397e 100644
+--- a/bridge/engine_api/src/engine_api.cpp
++++ b/bridge/engine_api/src/engine_api.cpp
+@@ -54,6 +54,8 @@ int TVPDrawSceneOnce(int interval);
+ 
+ extern "C" void TVPRegisterKrkrGLESPluginAnchor();
+ extern "C" void TVPRegisterKrkrLive2DPluginAnchor();
++// Present only when the layerExDraw plugin is built (KRKR_ENABLE_LAYEREX_DRAW).
++extern "C" void TVPRegisterLayerExDrawPluginAnchor() __attribute__((weak));
+ 
+ struct engine_handle_s {
+   std::recursive_mutex mutex;
+@@ -199,6 +201,8 @@ void InstallCrashSignalHandlers() {
+ void EnsureInternalPluginAnchorsLinked() {
+   TVPRegisterKrkrGLESPluginAnchor();
+   TVPRegisterKrkrLive2DPluginAnchor();
++  if(TVPRegisterLayerExDrawPluginAnchor)
++    TVPRegisterLayerExDrawPluginAnchor();
+ }
+ 
+ void EnsureRuntimeLoggersInitialized() {
+diff --git a/cpp/plugins/CMakeLists.txt b/cpp/plugins/CMakeLists.txt
+index a534f5c..dc9098a 100644
+--- a/cpp/plugins/CMakeLists.txt
++++ b/cpp/plugins/CMakeLists.txt
+@@ -152,6 +152,12 @@ add_subdirectory(kagparserex)
+ add_subdirectory(fstat)
+ #add_subdirectory(steam)
+ #add_subdirectory(DrawDeviceForSteam)
++if(KRKR_ENABLE_LAYEREX_DRAW)
++    # The option guards both the subdirectory and this link, otherwise the
++    # plugin's objects are never pulled into the final library.
++    target_link_libraries(${PROJECT_NAME} PUBLIC layerExDraw)
++endif()
++
+ target_link_libraries(${PROJECT_NAME} PUBLIC
+         psdfile
+         psbfile
+diff --git a/cpp/plugins/layerex_draw/general/LayerExDraw.cpp b/cpp/plugins/layerex_draw/general/LayerExDraw.cpp
+index 7a49843..334e520 100644
+--- a/cpp/plugins/layerex_draw/general/LayerExDraw.cpp
++++ b/cpp/plugins/layerex_draw/general/LayerExDraw.cpp
+@@ -187,7 +187,9 @@ layerex::FontInfo::FontInfo(const FontInfo &orig) {
+ 
+     FT_New_Face(TVPGetFontLibrary(), ftFace->family_name, 0, &this->ftFace);
+ 
+-    int dpi = gdip_get_display_dpi();
++    // gdip_get_display_dpi() is libgdiplus-internal and not exported by the
++    // shared library, so use the standard desktop DPI instead.
++    int dpi = 96;
+     FT_Set_Char_Size(this->ftFace, 0, emSize * 64, dpi, dpi);
+ }
+ 
+@@ -239,7 +241,7 @@ void layerex::FontInfo::setFamilyName(const tjs_char *fName) {
+     FT_New_Memory_Face(TVPGetFontLibrary(), buffer.get(), bufferSize, 0,
+                        &this->ftFace);
+ 
+-    const float dpi = gdip_get_display_dpi();
++    const float dpi = 96.0f; // see above: libgdiplus does not export this
+     FT_Set_Char_Size(this->ftFace, 0, emSize * 64, dpi, dpi);
+ }
+ 
+@@ -2253,13 +2255,16 @@ public:
+     EncoderParameters *params;
+ 
+     EncoderParameterGetter() {
+-        infos[0] = EncoderInfo("compression", GdipEncoderCompression, -1);
+-        infos[1] = EncoderInfo("scanmethod", GdipEncoderScanMethod, -1);
+-        infos[2] = EncoderInfo("version", GdipEncoderVersion, -1);
+-        infos[3] = EncoderInfo("render", GdipEncoderRenderMethod, -1);
+-        infos[4] = EncoderInfo("tansform", GdipEncoderTransformation, -1);
+-        infos[5] = EncoderInfo("quality", GdipEncoderQuality, -1);
+-        infos[6] = EncoderInfo("depth", GdipEncoderColorDepth, 24);
++        // libgdiplus declares these GUIDs in its own namespace while another
++        // header also declares them globally, which makes the unqualified
++        // names ambiguous; qualify them explicitly.
++        infos[0] = EncoderInfo("compression", libgdiplus::GdipEncoderCompression, -1);
++        infos[1] = EncoderInfo("scanmethod", libgdiplus::GdipEncoderScanMethod, -1);
++        infos[2] = EncoderInfo("version", libgdiplus::GdipEncoderVersion, -1);
++        infos[3] = EncoderInfo("render", libgdiplus::GdipEncoderRenderMethod, -1);
++        infos[4] = EncoderInfo("tansform", libgdiplus::GdipEncoderTransformation, -1);
++        infos[5] = EncoderInfo("quality", libgdiplus::GdipEncoderQuality, -1);
++        infos[6] = EncoderInfo("depth", libgdiplus::GdipEncoderColorDepth, 24);
+         params = (EncoderParameters *)malloc(sizeof(EncoderParameters) +
+                                              6 * sizeof(EncoderParameter));
+     };
+@@ -2385,12 +2390,13 @@ tTJSVariant LayerExDraw::getColorRegionRects(ARGB color) {
+ 
+         // 矩形一覧取得
+         GpMatrix matrix;
+-        int count{};
++        UINT count{};
+         GdipGetRegionScansCount(region, &count, &matrix);
+         if(count > 0) {
+             auto *rects = new RectF[count];
+-            GdipGetRegionScans(region, rects, &count, &matrix);
+-            for(int i = 0; i < count; i++) {
++            INT scanCount = static_cast<INT>(count);
++            GdipGetRegionScans(region, rects, &scanCount, &matrix);
++            for(INT i = 0; i < scanCount; i++) {
+                 RectF *rect = &rects[i];
+                 tTJSVariant x(rect->X);
+                 tTJSVariant y(rect->Y);
+diff --git a/cpp/plugins/layerex_draw/general/main.cpp b/cpp/plugins/layerex_draw/general/main.cpp
+index 82949ff..89cd50f 100644
+--- a/cpp/plugins/layerex_draw/general/main.cpp
++++ b/cpp/plugins/layerex_draw/general/main.cpp
+@@ -909,25 +909,29 @@ NCB_ATTACH_CLASS_WITH_HOOK(LayerExDraw, Layer) {
+     NCB_METHOD(getColorRegionRects);
+ 
+ #define ENUM(n) Variant(#n, (int)n)
+-    ENUM(EncoderValueCompressionLZW);
+-    ENUM(EncoderValueCompressionCCITT3);
+-    ENUM(EncoderValueCompressionCCITT4);
+-    ENUM(EncoderValueCompressionRle);
+-    ENUM(EncoderValueCompressionNone);
+-    ENUM(EncoderValueScanMethodInterlaced);
+-    ENUM(EncoderValueScanMethodNonInterlaced);
+-    ENUM(EncoderValueVersionGif87);
+-    ENUM(EncoderValueVersionGif89);
+-    ENUM(EncoderValueRenderProgressive);
+-    ENUM(EncoderValueRenderNonProgressive);
+-    ENUM(EncoderValueTransformRotate90);
+-    ENUM(EncoderValueTransformRotate180);
+-    ENUM(EncoderValueTransformRotate270);
+-    ENUM(EncoderValueTransformFlipHorizontal);
+-    ENUM(EncoderValueTransformFlipVertical);
++    Variant("EncoderValueCompressionLZW", (int)libgdiplus::EncoderValueCompressionLZW);
++    Variant("EncoderValueCompressionCCITT3", (int)libgdiplus::EncoderValueCompressionCCITT3);
++    Variant("EncoderValueCompressionCCITT4", (int)libgdiplus::EncoderValueCompressionCCITT4);
++    Variant("EncoderValueCompressionRle", (int)libgdiplus::EncoderValueCompressionRle);
++    Variant("EncoderValueCompressionNone", (int)libgdiplus::EncoderValueCompressionNone);
++    Variant("EncoderValueScanMethodInterlaced", (int)libgdiplus::EncoderValueScanMethodInterlaced);
++    Variant("EncoderValueScanMethodNonInterlaced", (int)libgdiplus::EncoderValueScanMethodNonInterlaced);
++    Variant("EncoderValueVersionGif87", (int)libgdiplus::EncoderValueVersionGif87);
++    Variant("EncoderValueVersionGif89", (int)libgdiplus::EncoderValueVersionGif89);
++    Variant("EncoderValueRenderProgressive", (int)libgdiplus::EncoderValueRenderProgressive);
++    Variant("EncoderValueRenderNonProgressive", (int)libgdiplus::EncoderValueRenderNonProgressive);
++    Variant("EncoderValueTransformRotate90", (int)libgdiplus::EncoderValueTransformRotate90);
++    Variant("EncoderValueTransformRotate180", (int)libgdiplus::EncoderValueTransformRotate180);
++    Variant("EncoderValueTransformRotate270", (int)libgdiplus::EncoderValueTransformRotate270);
++    Variant("EncoderValueTransformFlipHorizontal", (int)libgdiplus::EncoderValueTransformFlipHorizontal);
++    Variant("EncoderValueTransformFlipVertical", (int)libgdiplus::EncoderValueTransformFlipVertical);
+ }
+ 
+ // ----------------------------------- 起動・開放処理
+ 
+ NCB_PRE_REGIST_CALLBACK(initGdiPlus);
+ NCB_POST_UNREGIST_CALLBACK(deInitGdiPlus);
++
++// Empty anchor: referencing this from the bridge keeps this translation unit
++// (and with it the plugin's static NCB registration) in the final library.
++extern "C" void TVPRegisterLayerExDrawPluginAnchor() {}
+diff --git a/cpp/plugins/layerex_draw/windows/main.cpp b/cpp/plugins/layerex_draw/windows/main.cpp
+index fff3549..c3be0ed 100644
+--- a/cpp/plugins/layerex_draw/windows/main.cpp
++++ b/cpp/plugins/layerex_draw/windows/main.cpp
+@@ -927,3 +927,7 @@ NCB_ATTACH_CLASS_WITH_HOOK(LayerExDraw, Layer) {
+ 
+ NCB_PRE_REGIST_CALLBACK(initGdiPlus);
+ NCB_POST_UNREGIST_CALLBACK(deInitGdiPlus);
++
++// Empty anchor: referencing this from the bridge keeps this translation unit
++// (and with it the plugin's static NCB registration) in the final library.
++extern "C" void TVPRegisterLayerExDrawPluginAnchor() {}

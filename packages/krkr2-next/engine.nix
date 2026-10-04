@@ -101,6 +101,10 @@ stdenv.mkDerivation {
     # have resolved; games call it from their affine-layer setup, where the
     # exception tore down the whole scene. Log and leave the layer as it is.
     ./layer-loadimages-tolerant.patch
+    # Port the tree's layerExDraw plugin (which the game loads by name for its
+    # affine/raster layers) to Linux/libgdiplus and link it in. It only builds
+    # with KRKR_ENABLE_LAYEREX_DRAW, which cmakeFlags now sets.
+    ./layerex-draw-linux.patch
   ];
 
   nativeBuildInputs = [
@@ -159,6 +163,11 @@ stdenv.mkDerivation {
     "-DENABLE_TESTS=OFF"
     "-DBUILD_ENGINE_API=ON"
     "-DBUILD_LINUX_STANDALONE=OFF"
+    # Yuzusoft titles load layerExDraw.dll for their affine/raster layers (the
+    # game asks for it by name and logs "layerExRaster plugin not loaded"-style
+    # failures otherwise). The cross-platform sources are in the tree and only
+    # build with this option; they need libgdiplus, which is already an input.
+    "-DKRKR_ENABLE_LAYEREX_DRAW=ON"
   ];
 
   # The visual module needs GL headers at runtime configuration only.

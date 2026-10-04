@@ -93,7 +93,24 @@ gaps were found from the engine's own logs rather than by guessing:
   display); it now logs and returns, so a script error can no longer take the
   whole app down. `messagebox-headless.patch`.
 
-Still failing: the game's own `affinesourceimage.tjs(loadImages)` throws
+Progress on that path:
+
+* `Layer.loadImages` raised for images the original multi-image plugin would
+  have resolved (the game asks for names such as `blandlogo1.png`, which do not
+  exist in the release). It now logs and leaves the layer untouched, which
+  removed the last script exception: the run no longer throws at all.
+* The tree's **`layerExDraw`** plugin is the `layerExDraw.dll` the game asks
+  for. It sits behind the unset `KRKR_ENABLE_LAYEREX_DRAW` option, is absent
+  from the plugin link list, and its cross-platform sources did not compile
+  against libgdiplus (ambiguous encoder GUIDs/constants, an `int*`/`UINT*`
+  mismatch, and the internal `gdip_get_display_dpi` symbol that the shared
+  library does not export). All of that is fixed and the option is enabled, so
+  the log now reports `Loading Plugin: layerExDraw.dll Success`.
+
+The title art still does not appear: the game reaches its title menu and stays
+there with no background art.
+
+Still failing: the game's own `affinesourceimage.tjs(loadImages)` used to throw
 (`VM ip = 666`) whenever the affine layer is set up, which aborts the title art
 compositing. The same exception is present in every run, including those before
 these changes, so it is a pre-existing gap rather than a regression. Next step
