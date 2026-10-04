@@ -1,0 +1,48 @@
+diff --git a/cpp/core/plugin/PluginImpl.cpp b/cpp/core/plugin/PluginImpl.cpp
+index 75d988a..1be7827 100644
+--- a/cpp/core/plugin/PluginImpl.cpp
++++ b/cpp/core/plugin/PluginImpl.cpp
+@@ -10,6 +10,7 @@
+ //---------------------------------------------------------------------------
+ #include <set>
+ #include <algorithm>
++#include <cctype>
+ #include <functional>
+ 
+ #include <spdlog/spdlog.h>
+@@ -299,10 +300,34 @@ static void TVPRegisterGamepadStub() {
+     spdlog::info("Registered GamepadPort/Gamepad stub for missing gamepad.dll");
+ }
+ 
++namespace {
++    // Lowercased file name of a plugin request, which may be a bare name or a
++    // full path into the game's plugin directory.
++    std::string PluginBaseNameLower(const ttstr &name) {
++        std::string s = name.AsStdString();
++        const auto slash = s.find_last_of("/\\");
++        if(slash != std::string::npos)
++            s = s.substr(slash + 1);
++        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
++            return static_cast<char>(std::tolower(c));
++        });
++        return s;
++    }
++} // namespace
++
+ void TVPLoadPlugin(const ttstr &name) {
+     auto pluginName = name;
+-    if(name == TJS_W("emoteplayer.dll"))
++    // The motion player in this tree renders through its own GL path, so it
++    // serves as the regular ("motionplayer.dll"/"emoteplayer.dll") as well as
++    // the "no Direct3D" variants. Games such as Yuzusoft titles ask for
++    // motionplayer_nod3d.dll explicitly and, when it is missing, fall back to
++    // the D3D adapter path -- which is only stubbed here, leaving the motion
++    // (for example the title background) unrendered.
++    const std::string base = PluginBaseNameLower(name);
++    if(base == "emoteplayer.dll" || base == "motionplayer_nod3d.dll" ||
++       base == "emoteplayer_nod3d.dll") {
+         pluginName = "motionplayer.dll";
++    }
+ 
+     if(TVPLoadInternalPlugin(pluginName)) {
+         spdlog::debug("Loading Plugin: {} Success", name.AsStdString());

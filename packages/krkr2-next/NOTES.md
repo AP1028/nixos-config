@@ -66,6 +66,42 @@ internal plugin accepts its exported `AddTrueTypeFont()` calls and registers the
 referenced files through the storage layer (verified: `addFont: registered 1
 face(s) from [font/MTLc3m.ttf]`).
 
+## Motion / title art (in progress)
+
+The title screen's art comes from PSB motions (`title_bg.mtn`, `yuzulogo.mtn`,
+`m2logo.mtn`) driven through Yuzusoft's affine layer system. Several concrete
+gaps were found from the engine's own logs rather than by guessing:
+
+* The game asks for **`motionplayer_nod3d.dll`** (the non-Direct3D motion
+  player) and, when it is missing, falls back to the `Motion.D3DAdaptor` path.
+  This runtime's motion player *is* the non-D3D implementation, so
+  `motionplayer-nod3d.patch` routes that name (and `emoteplayer*.dll`) to it,
+  matching by file name so full plugin paths work too.
+* `Motion.D3DAdaptor` answered `mainImageBuffer`, `mainImageBufferPitch`,
+  `width`, `height`, `canvasCaptureEnabled` … with zeroes. It now forwards them
+  to the layer passed to `captureCanvas()` (verified in the log: the game reads
+  `width -> 1920`, `height -> 1080`) and forwards the drawing calls, answering
+  harmlessly when the canvas does not implement one — a hard error there turned
+  into a script exception inside the game's `affinelayer.tjs / drawAffine`.
+* PSB layer positions are **centre-relative** (a full-screen 1920x1080 layer is
+  at `-960,-540`, the logo at `-923,-480`), but the compositor used them as
+  top-left coordinates, so everything was drawn off-screen. It now shifts by
+  half the composition size (`drawPSBImages: centre offset 960/540`) and
+  re-composites on every draw instead of once, since the game repaints its work
+  layer each frame.
+* `TVPShowSimpleMessageBox` aborted the process when GTK could not start (no
+  display); it now logs and returns, so a script error can no longer take the
+  whole app down. `messagebox-headless.patch`.
+
+Still failing: the game's own `affinesourceimage.tjs(loadImages)` throws
+(`VM ip = 666`) whenever the affine layer is set up, which aborts the title art
+compositing. The same exception is present in every run, including those before
+these changes, so it is a pre-existing gap rather than a regression. Next step
+is to trace that function's calls (it is compiled bytecode) and provide the
+missing plugin surface — likely `LayerExDraw`/`perspective`, which this tree
+keeps behind the unset `KRKR_ENABLE_LAYEREX_DRAW` CMake option while
+`layerExRaster`, `layerExImage` and `layerExMovie` are already compiled in.
+
 ## Known remaining gap
 
 The **title screen's own art is black**. Its `title_bg`/event objects are drawn

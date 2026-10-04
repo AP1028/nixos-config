@@ -1,0 +1,67 @@
+diff --git a/cpp/plugins/motionplayer/Player.h b/cpp/plugins/motionplayer/Player.h
+index 8c28958..d08b260 100644
+--- a/cpp/plugins/motionplayer/Player.h
++++ b/cpp/plugins/motionplayer/Player.h
+@@ -307,8 +307,9 @@ namespace motion {
+                            const std::shared_ptr<spdlog::logger> &logger) {
+             if(_psbImages.empty()) return;
+ 
+-            // Skip re-compositing when images haven't changed since last draw
+-            if(_composited) return;
++            // Composite on every draw: the game repaints (and clears) its work
++            // layer each frame, so compositing only once left the layer empty
++            // for all subsequent frames.
+ 
+             iTJSDispatch2 *realLayer = resolveRealLayer(target);
+             iTJSDispatch2 *tempParent = realLayer ? realLayer : target;
+@@ -316,6 +317,39 @@ namespace motion {
+             tTJSVariant faceVal(static_cast<tjs_int>(0)); // dfAlpha
+             target->PropSet(0, TJS_W("face"), nullptr, &faceVal, target);
+ 
++            // PSB layer positions are relative to the centre of the
++            // composition: a full-screen 1920x1080 layer sits at (-960,-540)
++            // and the logo at (-923,-480). The target layer's origin is its
++            // top-left corner, so shift everything by half the composition
++            // size; without this the art is drawn entirely off-screen.
++            int centerX = 0, centerY = 0;
++            {
++                auto readSize = [target](const tjs_char *name, int &out) {
++                    tTJSVariant value;
++                    if(TJS_SUCCEEDED(target->PropGet(0, name, nullptr, &value,
++                                                     target))) {
++                        const int v = static_cast<int>(value.AsInteger());
++                        if(v > 0) {
++                            out = v;
++                            return true;
++                        }
++                    }
++                    return false;
++                };
++                int w = 0, h = 0;
++                if(!readSize(TJS_W("imageWidth"), w))
++                    readSize(TJS_W("width"), w);
++                if(!readSize(TJS_W("imageHeight"), h))
++                    readSize(TJS_W("height"), h);
++                if(w > 0 && h > 0) {
++                    centerX = w / 2;
++                    centerY = h / 2;
++                }
++            }
++            if(logger)
++                logger->debug("drawPSBImages: centre offset {}/{}", centerX,
++                              centerY);
++
+             for(size_t i = 0; i < _psbImages.size(); i++) {
+                 const auto &img = _psbImages[i];
+ 
+@@ -335,8 +369,8 @@ namespace motion {
+                 if(opacity <= 0) continue;
+ 
+                 tTJSVariant opArgs[9] = {
+-                    tTJSVariant(static_cast<tjs_int>(img.left)),
+-                    tTJSVariant(static_cast<tjs_int>(img.top)),
++                    tTJSVariant(static_cast<tjs_int>(centerX + img.left)),
++                    tTJSVariant(static_cast<tjs_int>(centerY + img.top)),
+                     tTJSVariant(temp, temp),
+                     tTJSVariant(static_cast<tjs_int>(0)),
+                     tTJSVariant(static_cast<tjs_int>(0)),

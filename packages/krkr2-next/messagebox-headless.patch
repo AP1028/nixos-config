@@ -1,0 +1,20 @@
+diff --git a/cpp/core/environ/linux/Platform.cpp b/cpp/core/environ/linux/Platform.cpp
+index c64a01a..5591b52 100644
+--- a/cpp/core/environ/linux/Platform.cpp
++++ b/cpp/core/environ/linux/Platform.cpp
+@@ -139,6 +139,15 @@ std::string TVPGetCurrentLanguage() {
+ 
+ int TVPShowSimpleMessageBox(const ttstr &text, const ttstr &caption,
+                             const std::vector<ttstr> &vecButtons) {
++    // Without a display (headless runs, embedded front ends, failed GTK
++    // startup) creating a dialog aborts the process inside GTK. Log the
++    // message instead so the caller can carry on.
++    if(gtk_init_check(nullptr, nullptr) == 0) {
++        fprintf(stderr, "[TVPShowSimpleMessageBox] %s: %s\n",
++                caption.AsStdString().c_str(), text.AsStdString().c_str());
++        return -1;
++    }
++
+     GtkWidget *dialog = nullptr;
+     DEFER({
+         if(dialog) {

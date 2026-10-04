@@ -1,0 +1,299 @@
+diff --git a/cpp/plugins/motionplayer/main.cpp b/cpp/plugins/motionplayer/main.cpp
+index 2fed813..0ad1592 100644
+--- a/cpp/plugins/motionplayer/main.cpp
++++ b/cpp/plugins/motionplayer/main.cpp
+@@ -31,6 +31,57 @@ using namespace TJS;
+ // own GL path and has no Direct3D adapter, but Yuzusoft KAG scripts construct
+ // this class while drawing affine (motion) layers, so provide a no-op object.
+ namespace motion {
++    // Helpers for exposing the canvas a D3DAdaptor was bound to. Yuzusoft's
++    // KAG scripts hand the adapter a Layer through captureCanvas() and then
++    // read that layer's raw pixel buffer and geometry back through the adapter
++    // (mainImageBuffer / mainImageBufferPitch / width / height) in order to
++    // composite the motion into it, so these have to answer with the canvas'
++    // values instead of a constant.
++    inline tjs_error ForwardPropGet(iTJSDispatch2 *target, const tjs_char *name,
++                                    tTJSVariant *result) {
++        if(!target) {
++            if(result)
++                *result = tTJSVariant(static_cast<tjs_int>(0));
++            return TJS_S_OK;
++        }
++        tTJSVariant value;
++        const tjs_error hr = target->PropGet(0, name, nullptr, &value, target);
++        LOGGER->debug("D3DAdaptor: canvas read {} -> {} ({})",
++                      ttstr(name).AsStdString(),
++                      TJS_SUCCEEDED(hr) ? static_cast<int>(value.Type()) : -1,
++                      TJS_SUCCEEDED(hr) ? ttstr(value).AsStdString() : "missing");
++        if(result) {
++            *result = TJS_SUCCEEDED(hr) ? value
++                                        : tTJSVariant(static_cast<tjs_int>(0));
++        }
++        return TJS_S_OK;
++    }
++
++    inline tjs_error ForwardFuncCall(iTJSDispatch2 *target, const tjs_char *name,
++                                     tTJSVariant *result, tjs_int count,
++                                     tTJSVariant **param, const char *log_name) {
++        LOGGER->debug("D3DAdaptor::{} ({} args) canvas={}", log_name, count,
++                      static_cast<const void *>(target));
++        if(!target) {
++            if(result)
++                *result = tTJSVariant(static_cast<tjs_int>(0));
++            return TJS_S_OK;
++        }
++        // Forward when the canvas implements the member, otherwise behave the
++        // way the previous no-op stub did: answering with an error here turns
++        // into a script exception in the game's paint path.
++        const tjs_error hr =
++            target->FuncCall(0, name, nullptr, result, count, param, target);
++        if(TJS_FAILED(hr)) {
++            LOGGER->debug("D3DAdaptor::{} not handled by canvas ({:#x})",
++                          log_name, static_cast<unsigned>(hr));
++            if(result)
++                *result = tTJSVariant(static_cast<tjs_int>(0));
++            return TJS_S_OK;
++        }
++        return hr;
++    }
++
+     class D3DAdaptor {
+     public:
+         D3DAdaptor() = default;
+@@ -58,9 +109,6 @@ namespace motion {
+             return TJS_S_OK;
+         }
+ 
+-        // Members used by Yuzusoft's KAG scripts while drawing affine motion
+-        // layers. This runtime renders motions through its own GL path, so the
+-        // adapter only needs to accept the calls and hold the state.
+         static tjs_error captureCanvas(tTJSVariant * /*result*/, tjs_int numparams,
+                                        tTJSVariant **param,
+                                        iTJSDispatch2 *objthis) {
+@@ -76,6 +124,37 @@ namespace motion {
+             return TJS_S_OK;
+         }
+ 
++        // Pixel buffer / geometry of the captured canvas.
++        static tjs_error getMainImageBuffer(tTJSVariant *result, tjs_int,
++                                            tTJSVariant **,
++                                            iTJSDispatch2 *objthis) {
++            return ForwardPropGet(Canvas(objthis), TJS_W("mainImageBuffer"), result);
++        }
++
++        static tjs_error getMainImageBufferForWrite(tTJSVariant *result, tjs_int,
++                                                    tTJSVariant **,
++                                                    iTJSDispatch2 *objthis) {
++            return ForwardPropGet(Canvas(objthis), TJS_W("mainImageBufferForWrite"),
++                                  result);
++        }
++
++        static tjs_error getMainImageBufferPitch(tTJSVariant *result, tjs_int,
++                                                 tTJSVariant **,
++                                                 iTJSDispatch2 *objthis) {
++            return ForwardPropGet(Canvas(objthis), TJS_W("mainImageBufferPitch"),
++                                  result);
++        }
++
++        static tjs_error getWidth(tTJSVariant *result, tjs_int, tTJSVariant **,
++                                  iTJSDispatch2 *objthis) {
++            return ForwardPropGet(Canvas(objthis), TJS_W("width"), result);
++        }
++
++        static tjs_error getHeight(tTJSVariant *result, tjs_int, tTJSVariant **,
++                                   iTJSDispatch2 *objthis) {
++            return ForwardPropGet(Canvas(objthis), TJS_W("height"), result);
++        }
++
+         static tjs_error getClearEnabled(tTJSVariant *result, tjs_int,
+                                          tTJSVariant **, iTJSDispatch2 *objthis) {
+             auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
+@@ -92,9 +171,105 @@ namespace motion {
+             return TJS_S_OK;
+         }
+ 
++        static tjs_error getCanvasCaptureEnabled(tTJSVariant *result, tjs_int,
++                                                 tTJSVariant **,
++                                                 iTJSDispatch2 *objthis) {
++            auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
++            if(result)
++                *result = tTJSVariant(
++                    static_cast<tjs_int>(self && self->_canvasCaptureEnabled ? 1 : 0));
++            return TJS_S_OK;
++        }
++
++        static tjs_error setCanvasCaptureEnabled(tTJSVariant *, tjs_int numparams,
++                                                 tTJSVariant **param,
++                                                 iTJSDispatch2 *objthis) {
++            auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
++            if(self && numparams >= 1)
++                self->_canvasCaptureEnabled = (static_cast<tjs_int>(*param[0]) != 0);
++            return TJS_S_OK;
++        }
++
++        static tjs_error getNeutralColor(tTJSVariant *result, tjs_int,
++                                         tTJSVariant **,
++                                         iTJSDispatch2 *objthis) {
++            auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
++            if(result)
++                *result = self ? self->_neutralColor
++                               : tTJSVariant(static_cast<tjs_int>(0));
++            return TJS_S_OK;
++        }
++
++        static tjs_error setNeutralColor(tTJSVariant *, tjs_int numparams,
++                                         tTJSVariant **param,
++                                         iTJSDispatch2 *objthis) {
++            auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
++            if(self && numparams >= 1)
++                self->_neutralColor = *param[0];
++            return TJS_S_OK;
++        }
++
++        // Sub-image layers of the captured canvas, so scripts that walk them
++        // get an (empty) array to iterate instead of an integer.
++        static tjs_error getSubImageLayers(tTJSVariant *result, tjs_int,
++                                           tTJSVariant **,
++                                           iTJSDispatch2 *objthis) {
++            auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
++            if(self && self->_canvas) {
++                tTJSVariant value;
++                const tjs_error hr = self->_canvas->PropGet(
++                    0, TJS_W("subImageLayers"), nullptr, &value, self->_canvas);
++                if(TJS_SUCCEEDED(hr) && value.Type() == tvtObject) {
++                    if(result) *result = value;
++                    return TJS_S_OK;
++                }
++            }
++            if(result) {
++                iTJSDispatch2 *array = TJSCreateArrayObject();
++                if(array) {
++                    *result = tTJSVariant(array);
++                    array->Release();
++                } else {
++                    *result = tTJSVariant();
++                }
++            }
++            return TJS_S_OK;
++        }
++
++#define KRKR_D3D_FORWARD_METHOD(NAME)                                          \
++    static tjs_error NAME(tTJSVariant *result, tjs_int count,                  \
++                          tTJSVariant **param, iTJSDispatch2 *objthis) {       \
++        auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true); \
++        return ForwardFuncCall(self ? self->_canvas : nullptr, TJS_W(#NAME),    \
++                               result, count, param, #NAME);                    \
++    }
++
++        KRKR_D3D_FORWARD_METHOD(drawLayer)
++        KRKR_D3D_FORWARD_METHOD(copyRect)
++        KRKR_D3D_FORWARD_METHOD(setSize)
++        KRKR_D3D_FORWARD_METHOD(clear)
++        KRKR_D3D_FORWARD_METHOD(alphaOpAdd)
++        KRKR_D3D_FORWARD_METHOD(setClearColor)
++        KRKR_D3D_FORWARD_METHOD(setResizable)
++        KRKR_D3D_FORWARD_METHOD(registerBg)
++        KRKR_D3D_FORWARD_METHOD(registerCaption)
++        KRKR_D3D_FORWARD_METHOD(removeAllTextures)
++        KRKR_D3D_FORWARD_METHOD(removeAllBg)
++        KRKR_D3D_FORWARD_METHOD(removeAllCaption)
++        KRKR_D3D_FORWARD_METHOD(unloadUnusedTextures)
++
++#undef KRKR_D3D_FORWARD_METHOD
++
+     private:
++        static iTJSDispatch2 *Canvas(iTJSDispatch2 *objthis) {
++            auto *self = ncbInstanceAdaptor<D3DAdaptor>::GetNativeInstance(objthis, true);
++            return self ? self->_canvas : nullptr;
++        }
++
+         iTJSDispatch2 *_canvas = nullptr;
+         bool _clearEnabled = false;
++        bool _canvasCaptureEnabled = false;
++        tTJSVariant _neutralColor{ static_cast<tjs_int>(0) };
+     };
+ } // namespace motion
+ 
+@@ -307,8 +482,25 @@ static tjs_error SeparateLayerAdaptor_loadImages(tTJSVariant *r, tjs_int count,
+                                                  iTJSDispatch2 *objthis) {
+     auto *adaptor = GetSeparateLayerAdaptorInstance(objthis);
+     auto *target = GetSeparateAdaptorRenderTarget(adaptor);
+-    if(!target || count < 1) return TJS_E_INVALIDPARAM;
+-    return target->FuncCall(0, TJS_W("loadImages"), nullptr, r, count, p, target);
++    LOGGER->info("[SeparateLayerAdaptor] loadImages count={} adaptor={} owner={} target={}",
++                 count, static_cast<const void *>(adaptor),
++                 (adaptor ? static_cast<const void *>(adaptor->getOwner()) : nullptr),
++                 static_cast<const void *>(target));
++    if(!target || count < 1) {
++        // Answer harmlessly instead of raising: a failed image load here
++        // aborted the game's title/affine layer setup.
++        if(r) *r = tTJSVariant(static_cast<tjs_int>(0));
++        return TJS_S_OK;
++    }
++    const tjs_error hr =
++        target->FuncCall(0, TJS_W("loadImages"), nullptr, r, count, p, target);
++    if(TJS_FAILED(hr)) {
++        LOGGER->warn("[SeparateLayerAdaptor] loadImages not handled by target "
++                     "({:#x}); answering 0", static_cast<unsigned>(hr));
++        if(r) *r = tTJSVariant(static_cast<tjs_int>(0));
++        return TJS_S_OK;
++    }
++    return hr;
+ }
+ 
+ static tjs_error SeparateLayerAdaptor_fillRect(tTJSVariant *r, tjs_int count, tTJSVariant **p,
+@@ -373,26 +565,34 @@ NCB_REGISTER_SUBCLASS_DELAY(D3DAdaptor) {
+     NCB_METHOD_RAW_CALLBACK(captureCanvas, &motion::D3DAdaptor::captureCanvas, 0);
+     NCB_PROPERTY_RAW_CALLBACK(clearEnabled, &motion::D3DAdaptor::getClearEnabled,
+                               &motion::D3DAdaptor::setClearEnabled, 0);
+-    NCB_METHOD_RAW_CALLBACK(unloadUnusedTextures, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(removeAllTextures, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(removeAllBg, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(registerBg, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(registerCaption, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(removeAllCaption, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(alphaOpAdd, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(setClearColor, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(setResizable, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(getSubImageLayers, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(drawLayer, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(copyRect, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(setSize, &StubFunc, 0);
+-    NCB_METHOD_RAW_CALLBACK(clear, &StubFunc, 0);
+-    NCB_PROPERTY_RAW_CALLBACK(canvasCaptureEnabled, &StubGet, &StubSet, 0);
+-    NCB_PROPERTY_RAW_CALLBACK(mainImageBuffer, &StubGet, &StubSet, 0);
+-    NCB_PROPERTY_RAW_CALLBACK(mainImageBufferPitch, &StubGet, &StubSet, 0);
+-    NCB_PROPERTY_RAW_CALLBACK(width, &StubGet, &StubSet, 0);
+-    NCB_PROPERTY_RAW_CALLBACK(height, &StubGet, &StubSet, 0);
+-    NCB_PROPERTY_RAW_CALLBACK(neutralColor, &StubGet, &StubSet, 0);
++    // Canvas interface: forwarded to the layer handed to captureCanvas().
++    NCB_PROPERTY_RAW_CALLBACK_RO(mainImageBuffer,
++                                 &motion::D3DAdaptor::getMainImageBuffer, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(mainImageBufferForWrite,
++                                 &motion::D3DAdaptor::getMainImageBufferForWrite, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(mainImageBufferPitch,
++                                 &motion::D3DAdaptor::getMainImageBufferPitch, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(width, &motion::D3DAdaptor::getWidth, 0);
++    NCB_PROPERTY_RAW_CALLBACK_RO(height, &motion::D3DAdaptor::getHeight, 0);
++    NCB_PROPERTY_RAW_CALLBACK(canvasCaptureEnabled,
++                              &motion::D3DAdaptor::getCanvasCaptureEnabled,
++                              &motion::D3DAdaptor::setCanvasCaptureEnabled, 0);
++    NCB_PROPERTY_RAW_CALLBACK(neutralColor, &motion::D3DAdaptor::getNeutralColor,
++                              &motion::D3DAdaptor::setNeutralColor, 0);
++    NCB_METHOD_RAW_CALLBACK(unloadUnusedTextures, &motion::D3DAdaptor::unloadUnusedTextures, 0);
++    NCB_METHOD_RAW_CALLBACK(removeAllTextures, &motion::D3DAdaptor::removeAllTextures, 0);
++    NCB_METHOD_RAW_CALLBACK(removeAllBg, &motion::D3DAdaptor::removeAllBg, 0);
++    NCB_METHOD_RAW_CALLBACK(registerBg, &motion::D3DAdaptor::registerBg, 0);
++    NCB_METHOD_RAW_CALLBACK(registerCaption, &motion::D3DAdaptor::registerCaption, 0);
++    NCB_METHOD_RAW_CALLBACK(removeAllCaption, &motion::D3DAdaptor::removeAllCaption, 0);
++    NCB_METHOD_RAW_CALLBACK(alphaOpAdd, &motion::D3DAdaptor::alphaOpAdd, 0);
++    NCB_METHOD_RAW_CALLBACK(setClearColor, &motion::D3DAdaptor::setClearColor, 0);
++    NCB_METHOD_RAW_CALLBACK(setResizable, &motion::D3DAdaptor::setResizable, 0);
++    NCB_METHOD_RAW_CALLBACK(getSubImageLayers, &motion::D3DAdaptor::getSubImageLayers, 0);
++    NCB_METHOD_RAW_CALLBACK(drawLayer, &motion::D3DAdaptor::drawLayer, 0);
++    NCB_METHOD_RAW_CALLBACK(copyRect, &motion::D3DAdaptor::copyRect, 0);
++    NCB_METHOD_RAW_CALLBACK(setSize, &motion::D3DAdaptor::setSize, 0);
++    NCB_METHOD_RAW_CALLBACK(clear, &motion::D3DAdaptor::clear, 0);
+ }
+ 
+ NCB_REGISTER_SUBCLASS_DELAY(SeparateLayerAdaptor) {

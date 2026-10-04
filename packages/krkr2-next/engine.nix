@@ -82,6 +82,21 @@ stdenv.mkDerivation {
     # fonts also contain Thin/Light instances, and the old "last name wins"
     # rule could select one of those, which renders hairline-looking text.
     ./font-default-regular.patch
+    # Make the D3D adaptor expose the captured canvas' geometry/buffer instead
+    # of answering zeroes, tolerate the motion drawing calls it forwards, and
+    # keep the game alive when the affine image loader asks for something the
+    # canvas does not implement.
+    ./d3d-adaptor-canvas.patch
+    # Games ask for motionplayer_nod3d.dll (the non-Direct3D motion player) and
+    # fall back to the stubbed D3D path when it is missing. Our motion player is
+    # that non-D3D implementation, so route the name to it.
+    ./motionplayer-nod3d.patch
+    # PSB layer positions are centre-relative (a full-screen 1920x1080 layer is
+    # at -960,-540) and must be shifted by half the composition size, otherwise
+    # the motion art is composited off-screen.
+    ./motion-psb-center.patch
+    # Without a display, GTK message boxes abort the process; log instead.
+    ./messagebox-headless.patch
   ];
 
   nativeBuildInputs = [
