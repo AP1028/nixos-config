@@ -39,6 +39,27 @@
         "type": "github"
       }
     },
+    "cpak": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790989609,
+        "narHash": "sha256-LaCC6UpykTbALbauVgXCpMW7p7oFaHkdVedMD9WxxKg=",
+        "owner": "Containerpak",
+        "repo": "cpak",
+        "rev": "41e71ddec7342dad6ade7d970844f398105d0376",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Containerpak",
+        "ref": "v2",
+        "repo": "cpak",
+        "type": "github"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1789760033,
@@ -496,6 +517,7 @@
       "inputs": {
         "apple-silicon": "apple-silicon",
         "comfyui-nix": "comfyui-nix",
+        "cpak": "cpak",
         "home-manager": "home-manager",
         "home-manager-stable": "home-manager-stable",
         "i915-sriov-dkms": "i915-sriov-dkms",

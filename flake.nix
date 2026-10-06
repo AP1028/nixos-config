@@ -57,6 +57,18 @@
 
     nix-flatpak.url = "github:gmodena/nix-flatpak";
 
+    # cpak (https://cpak.it): OCI-image application format. Used on the macbook
+    # for Bottles, whose only ARM64 packaging is the cpak release — Flathub's
+    # com.usebottles.bottles is x86_64-only, and nixpkgs' `bottles` cannot even
+    # evaluate on aarch64-linux (buildFHSEnv with multiArch = true needs the
+    # i686 package set). The flake ships a NixOS module providing
+    # services.cpak: the it.cpak.SystemAuthority1 D-Bus/polkit service and its
+    # systemd units. See docs/bottles-asahi.md.
+    cpak = {
+      url = "github:Containerpak/cpak/v2";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     apple-silicon.url = "github:nix-community/nixos-apple-silicon";
 
     home-manager = {
@@ -118,6 +130,7 @@
     vscode-server,
     nix-flatpak,
     apple-silicon,
+    cpak,
     home-manager,
     home-manager-stable,
     nixvirt,
@@ -247,6 +260,8 @@
           ./hosts/macbook/default.nix
 
           apple-silicon.nixosModules.default
+          cpak.nixosModules.default
+          nix-flatpak.nixosModules.nix-flatpak
           home-manager.nixosModules.home-manager
         ];
       };

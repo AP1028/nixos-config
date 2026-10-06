@@ -6,6 +6,12 @@
   # Waydroid binds the session's data directory into the container as /data.
   dataDir = "${config.users.users.${config.local.username}.home}/.local/share/waydroid/data";
   dataImage = "/var/lib/waydroid/data.img";
+  # Apparent size of the sparse data image; Android's /data *and* /sdcard live
+  # in it, so it is the only storage limit that matters.  Only written blocks
+  # occupy host disk, so it can exceed the free space on / -- filling it beyond
+  # that fails on the host side rather than in Android.  Growing an existing
+  # image is `truncate` + `losetup -c` + `resize2fs` (ext4 cannot shrink).
+  dataImageSize = "128G";
 
   # One way to bring the UI up that copes with every state Android can be left
   # in.  Android's own power menu "Shut down" stops the *container* but leaves
@@ -162,6 +168,18 @@ in {
     description = "Create/migrate the Waydroid Android /data ext4 loop image";
     wantedBy = ["multi-user.target"];
     path = [pkgs.coreutils pkgs.util-linux pkgs.e2fsprogs];
+    # The data mount lives under /home, so systemd orders it Before
+    # local-fs.target; local-fs.target is Before sysinit.target, which is
+    # Before basic.target.  With the default dependencies this oneshot would
+    # itself wait for basic.target, closing the cycle
+    #   service -> basic -> sysinit -> local-fs -> mount -> service
+    # which systemd breaks by deleting arbitrary jobs -- sometimes
+    # systemd-tmpfiles-setup, which is what creates /run/opengl-driver
+    # (kwin_wayland then finds no DRM devices and SDDM's greeter dies).
+    unitConfig = {
+      DefaultDependencies = false;
+      RequiresMountsFor = ["/var/lib/waydroid" (builtins.dirOf dataDir)];
+    };
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
@@ -170,38 +188,56 @@ in {
       set -eu
       img=${dataImage}
       mnt=${dataDir}
+      size=${dataImageSize}
       mkdir -p "$(dirname "$img")" "$(dirname "$mnt")"
 
-      if [ -e "$img" ]; then
+      if [ ! -e "$img" ]; then
+        # Sparse image, ${dataImageSize} apparent.  +C (nodatacow) keeps btrfs
+        # COW from fragmenting the loop file; on other filesystems the chattr
+        # simply fails and is ignored.
+        truncate -s "$size" "$img"
+        chattr +C "$img" 2>/dev/null || true
+        ${pkgs.e2fsprogs}/sbin/mkfs.ext4 -q -F -O quota,project -L waydroid-data "$img"
+
+        # First run: move the existing btrfs data dir into the image, keeping the
+        # old directory as <data>.btrfs-backup.
+        if [ -d "$mnt" ]; then
+          tmp=$(mktemp -d)
+          mount -o loop "$img" "$tmp"
+          if [ -n "$(ls -A "$mnt" 2>/dev/null || true)" ]; then
+            cp -a "$mnt/." "$tmp/"
+          fi
+          umount "$tmp"
+          rmdir "$tmp"
+          bak="$mnt.btrfs-backup"
+          n=1
+          while [ -e "$bak" ]; do
+            bak="$mnt.btrfs-backup.$n"
+            n=$((n + 1))
+          done
+          mv "$mnt" "$bak" 2>/dev/null || true
+        fi
+        mkdir -p "$mnt"
         exit 0
       fi
 
-      # Sparse 32 GiB image.  +C (nodatacow) keeps btrfs COW from fragmenting
-      # the loop file; on other filesystems the chattr simply fails and is
-      # ignored.
-      truncate -s 32G "$img"
-      chattr +C "$img" 2>/dev/null || true
-      ${pkgs.e2fsprogs}/sbin/mkfs.ext4 -q -F -O quota,project -L waydroid-data "$img"
-
-      # First run: move the existing btrfs data dir into the image, keeping the
-      # old directory as <data>.btrfs-backup.
-      if [ -d "$mnt" ]; then
-        tmp=$(mktemp -d)
-        mount -o loop "$img" "$tmp"
-        if [ -n "$(ls -A "$mnt" 2>/dev/null || true)" ]; then
-          cp -a "$mnt/." "$tmp/"
+      # The image already exists: enforce the declared size.  The mount unit
+      # starts only after this service, so the filesystem is unmounted here and
+      # can be grown offline (ext4 grows but never shrinks, so this is a
+      # one-way ratchet; bump dataImageSize and rebuild to raise the limit).
+      want=$(numfmt --from=iec "$size")
+      have=$(stat -c %s "$img")
+      if [ "$have" -lt "$want" ]; then
+        echo "growing $img from $have to $want bytes"
+        truncate -s "$size" "$img"
+        rc=0
+        ${pkgs.e2fsprogs}/sbin/e2fsck -f -p "$img" || rc=$?
+        if [ "$rc" -le 2 ]; then
+          ${pkgs.e2fsprogs}/sbin/resize2fs "$img"
+        else
+          echo "waydroid-data-image: e2fsck exited $rc, leaving the filesystem as is" >&2
         fi
-        umount "$tmp"
-        rmdir "$tmp"
-        bak="$mnt.btrfs-backup"
-        n=1
-        while [ -e "$bak" ]; do
-          bak="$mnt.btrfs-backup.$n"
-          n=$((n + 1))
-        done
-        mv "$mnt" "$bak" 2>/dev/null || true
       fi
-      mkdir -p "$mnt"
     '';
   };
 
@@ -221,6 +257,81 @@ in {
       };
     }
   ];
+
+  # Android's /data/media is media_rw:media_rw 0770, so the host user cannot
+  # even traverse it, let alone drop files into /sdcard.  An ACL -- rather than
+  # a chmod/chown -- fixes that without touching the ownership and mode bits
+  # Android expects, and the default ACL is inherited by whatever Android
+  # creates below it.
+  systemd.services.waydroid-sdcard-access = {
+    description = "Grant the host user write access to Waydroid's /sdcard";
+    wantedBy = ["multi-user.target"];
+    unitConfig.RequiresMountsFor = dataDir;
+    path = [pkgs.acl pkgs.coreutils pkgs.gnugrep];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      set -eu
+      media=${dataDir}/media
+      user=${config.local.username}
+      [ -d "$media" ] || exit 0
+
+      # Traversal into media/, plus inheritance for anything created below.
+      setfacl -m "u:$user:rwx" -m "d:u:$user:rwx" "$media"
+      [ -d "$media/0" ] || exit 0
+
+      # Walk the tree only when /sdcard does not carry the entry yet: a large
+      # library should not be re-walked on every boot.
+      if getfacl -p "$media/0" 2>/dev/null | grep -q "^user:$user:rwx"; then
+        setfacl -m "u:$user:rwx" -m "d:u:$user:rwx" "$media/0"
+      else
+        setfacl -R -m "u:$user:rwx" -m "d:u:$user:rwx" "$media/0"
+      fi
+    '';
+  };
+
+  # Kirikiroid2 (org.github.krkr2) bundles a libSDL2.so linked for 4 KiB pages:
+  # its PT_GNU_RELRO ends at 0x122000, so bionic rounds the read-only region up
+  # to 0x124000 on this 16 KiB kernel, the first 8 KiB of .data is read-only,
+  # and SDL_DYNAPI_entry's memcpy() of its jump table there faults with
+  # SEGV_ACCERR ~200 ms after launch.
+  #
+  # The APK is deliberately left untouched: patching an installed APK breaks
+  # its signature, and PackageManager re-verifies signatures when it re-scans
+  # at boot, so the package is dropped and its directory deleted.  Instead the
+  # fixed library is written into the app's own lib dir, which the app's linker
+  # namespace searches before the APK (`library_path` starts with
+  # /data/app/<pkg>/lib/<abi>).  Running this on every boot also covers app
+  # reinstalls and updates; scripts/patch-waydroid-16k-relro.py does the
+  # rewriting and removes stale copies of libraries that no longer need it.
+  systemd.services.waydroid-krkr2-16k-libs = {
+    description = "Install 16 KiB-safe copies of Kirikiroid2's native libraries";
+    wantedBy = ["multi-user.target"];
+    unitConfig.RequiresMountsFor = dataDir;
+    path = [pkgs.coreutils pkgs.python3];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    script = ''
+      set -eu
+      for apk in ${dataDir}/app/*/org.github.krkr2*/base.apk; do
+        [ -e "$apk" ] || continue
+        libdir=$(dirname "$apk")/lib/arm64
+        [ -d "$libdir" ] || continue
+        python3 ${../../scripts/patch-waydroid-16k-relro.py} --emit "$libdir" "$apk"
+        # The app dir is owned by Android's `system` (uid 1000), same numeric
+        # id as this host's user.
+        for lib in "$libdir"/*.so; do
+          [ -e "$lib" ] || continue
+          chown 1000:1000 "$lib"
+          chmod 644 "$lib"
+        done
+      done
+    '';
+  };
 
   # ── Vulkan: not available on these images (recorded so it isn't retried) ──
   #

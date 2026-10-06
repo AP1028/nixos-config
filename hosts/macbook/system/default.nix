@@ -97,4 +97,13 @@
     magicOrExtension = "\\x7fELF\\x02\\x01\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\x02\\x00\\x3e\\x00";
     mask = "\\xff\\xff\\xff\\xff\\xff\\xfe\\xfe\\x00\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xff\\xfe\\xff\\xff\\xff";
   };
+
+  # Bound the time spent waiting for user-session processes that ignore
+  # SIGTERM (Electron/Flatpak apps, e.g. io.github.yucling.open-orpheus, and
+  # waydroid's session/portal): user@.service otherwise keeps deactivating for
+  # its 120s timeout, /run/user/1000 and /home stay busy, and the shutdown
+  # looks hung until the power button is held.  10s here, 10s in the user
+  # manager for the stuck unit itself; after that both are SIGKILLed.
+  systemd.user.settings.Manager.DefaultTimeoutStopSec = "10s";
+  systemd.services."user@".serviceConfig.TimeoutStopSec = "10s";
 }

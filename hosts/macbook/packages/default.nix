@@ -13,10 +13,13 @@ in {
   imports = [
     ../../../modules/packages/opencode.nix
     ../../../modules/packages/steam-asahi.nix
+    ../../../modules/packages/bottles-cpak.nix
+    ../../../modules/packages/flatpak-netease.nix
   ];
 
   programs.nix-ld.enable = true;
   programs.steam-asahi.enable = true;
+  services.flatpak.enable = true;
 
   environment.systemPackages = with pkgs; [
     wget
