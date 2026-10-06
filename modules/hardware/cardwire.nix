@@ -238,12 +238,64 @@ in {
   # cardwire-gui sticks. Relaunch an app after flipping it — a process keeps the
   # decision it got at exec.
   #
+  # The rest of the blacklist. Three more apps must stay on the iGPU:
+  #
+  #   kwin_wayland   The compositor. It is what presents every surface, and
+  #                  letting the KWin process open the dGPU is pure downside:
+  #                  the session then depends on the NVIDIA stack for
+  #                  presentation, so a dGPU stall/power transition takes the
+  #                  whole session with it. KWin keeps rendering on the iGPU's
+  #                  render node; dGPU clients are still composited normally,
+  #                  because presentation is iGPU-backed either way.
+  #                  NOTE: the row is `kwin_wayland` because that is the
+  #                  cmdline basename cardwire resolves, and the daemon log
+  #                  confirms it (`ALLOW: ... process: kwin_wayland`). The
+  #                  `.kwin_wayland-w` that `ps` shows is the kernel comm
+  #                  field, truncated to 15 bytes, and is NOT the lookup key.
+  #                  `kwin_wayland_wrapper` (the other half of the session) is
+  #                  deliberately left alone: it is a thin launcher that never
+  #                  renders, and blocking it would add nothing.
+  #   wechat         Qt/CEF client (modules/packages/wechat.nix). It runs
+  #                  QT_QPA_PLATFORM=xcb because the Wayland path is broken,
+  #                  and probing the dGPU on that path is what used to wedge
+  #                  it; it has no use for the dGPU at all.
+  #   marktext       Electron markdown editor (hosts/asusg16/packages/default.nix).
+  #                  Same Electron/CEF class as the others. The row is
+  #                  `marktext`, not `electron`: the NixOS wrapper uses
+  #                  `exec -a "$0"`, so the cmdline basename stays `marktext`
+  #                  and the resolver's `base_name == "electron"` branch (which
+  #                  would have dug the name out of the .asar path) never runs.
+  #                  Confirmed in the daemon log: `process: marktext`.
+  #   clash-verge    Tauri proxy client (modules/services/clash-verge.nix). Three
+  #                  separate processes carry the name, all confirmed in the
+  #                  daemon log:
+  #                    clash-verge          the GUI/Tauri window
+  #                    clash-verge-service  the privileged helper (systemd
+  #                                         unit, runs from boot)
+  #                    verge-mihomo         the networking core
+  #                  All three are blocked: a proxy is the last thing that should
+  #                  be waking the dGPU, and none of them renders with it. The
+  #                  core is pure networking, so its row is inert belt-and-braces
+  #                  rather than a fix for anything measured.
+  #   open-orpheus   Electron NetEase Cloud Music client (Flatpak
+  #                  io.github.yucling.open-orpheus, flatpak-netease.nix).
+  #                  Electron/CEF cannot drive the NVIDIA stack (same class of
+  #                  failure as steamwebhelper), so it must stay on the iGPU.
+  #                  The row is `open-orpheus`, the real Electron binary at
+  #                  /app/lib/open-orpheus/open-orpheus — NOT the
+  #                  `electron-wrapper` launcher named in the desktop file's
+  #                  Exec, which is shared by every Flatpak Electron app and
+  #                  would block unrelated ones.
+  #
   # Games need no rows: a game is discovered as Allowed on first launch and runs
-  # on the dGPU immediately. Add anything else that must stay on the iGPU here
-  # (`binary_name` is the process comm, e.g. `ps -o comm= -p <pid>`), or flip
-  # its discovered row to Blocked in cardwire-gui.
+  # on the dGPU immediately. Add anything else that must stay on the iGPU here —
+  # `binary_name` is the basename cardwire resolves from the process's cmdline
+  # (see `parse_cmdline_name` in crates/cardwire-daemon/src/analyzer/helpers.rs,
+  # lowercased), which for NixOS wrappers is the underlying binary, not the
+  # `.foo-wrapped` name — or flip its discovered row to Blocked in
+  # cardwire-gui.
   systemd.services.cardwire-steam-client-policy = {
-    description = "Keep the Steam client and its CEF host blocked in cardwire";
+    description = "Seed the cardwire dGPU blacklist (Steam, kwin_wayland, WeChat, MarkText, Clash Verge, Open Orpheus)";
     wantedBy = ["multi-user.target"];
     before = ["cardwired.service"];
     serviceConfig = {
@@ -272,6 +324,27 @@ in {
                      ON CONFLICT(binary_name) DO NOTHING;"
       sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
                      VALUES ('steamwebhelper', 'Steam CEF Host', NULL, 'steam', 0)
+                     ON CONFLICT(binary_name) DO NOTHING;"
+      sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+                     VALUES ('kwin_wayland', 'KWin (Wayland compositor)', NULL, 'kwin', 0)
+                     ON CONFLICT(binary_name) DO NOTHING;"
+      sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+                     VALUES ('wechat', 'WeChat', NULL, 'wechat', 0)
+                     ON CONFLICT(binary_name) DO NOTHING;"
+      sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+                     VALUES ('marktext', 'MarkText', NULL, 'marktext', 0)
+                     ON CONFLICT(binary_name) DO NOTHING;"
+      sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+                     VALUES ('clash-verge', 'Clash Verge', 'clash-verge', 'clash-verge', 0)
+                     ON CONFLICT(binary_name) DO NOTHING;"
+      sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+                     VALUES ('clash-verge-service', 'Clash Verge Service', NULL, 'clash-verge', 0)
+                     ON CONFLICT(binary_name) DO NOTHING;"
+      sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+                     VALUES ('verge-mihomo', 'Mihomo Core (Clash Verge)', NULL, 'clash-verge', 0)
+                     ON CONFLICT(binary_name) DO NOTHING;"
+      sqlite3 "$db" "INSERT INTO app_policies (binary_name, display_name, desktop_file_id, icon_name, policy)
+                     VALUES ('open-orpheus', 'Open Orpheus', NULL, 'io.github.yucling.open-orpheus', 0)
                      ON CONFLICT(binary_name) DO NOTHING;"
     '';
   };

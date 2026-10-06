@@ -1,5 +1,5 @@
 diff --git a/cpp/plugins/motionplayer/Player.h b/cpp/plugins/motionplayer/Player.h
-index 8c28958..d08b260 100644
+index 8c28958..4cf7fb9 100644
 --- a/cpp/plugins/motionplayer/Player.h
 +++ b/cpp/plugins/motionplayer/Player.h
 @@ -307,8 +307,9 @@ namespace motion {
@@ -14,7 +14,7 @@ index 8c28958..d08b260 100644
  
              iTJSDispatch2 *realLayer = resolveRealLayer(target);
              iTJSDispatch2 *tempParent = realLayer ? realLayer : target;
-@@ -316,6 +317,39 @@ namespace motion {
+@@ -316,13 +317,61 @@ namespace motion {
              tTJSVariant faceVal(static_cast<tjs_int>(0)); // dfAlpha
              target->PropSet(0, TJS_W("face"), nullptr, &faceVal, target);
  
@@ -47,14 +47,38 @@ index 8c28958..d08b260 100644
 +                    centerY = h / 2;
 +                }
 +            }
-+            if(logger)
-+                logger->debug("drawPSBImages: centre offset {}/{}", centerX,
-+                              centerY);
++            if(logger) {
++                tTJSVariant nameVar;
++                std::string targetName;
++                if(TJS_SUCCEEDED(target->PropGet(0, TJS_W("name"), nullptr,
++                                                 &nameVar, target)))
++                    targetName = ttstr(nameVar).AsStdString();
++                logger->info("drawPSBImages: target name=[{}] centre {}/{} "
++                             "images={}",
++                             targetName, centerX, centerY, _psbImages.size());
++            }
 +
              for(size_t i = 0; i < _psbImages.size(); i++) {
                  const auto &img = _psbImages[i];
  
-@@ -335,8 +369,8 @@ namespace motion {
+                 iTJSDispatch2 *temp = getOrCreateTempLayer(tempParent);
+-                if(!temp) continue;
++                if(!temp) {
++                    if(logger) logger->warn("drawPSBImages: no temp layer for {}",
++                                            img.path.AsStdString());
++                    continue;
++                }
+ 
+-                if(!tryLoadImage(temp, img.path)) continue;
++                if(!tryLoadImage(temp, img.path)) {
++                    if(logger) logger->warn("drawPSBImages: cannot load [{}]",
++                                            img.path.AsStdString());
++                    continue;
++                }
+ 
+                 tTJSVariant wVar, hVar;
+                 temp->PropGet(0, TJS_W("imageWidth"), nullptr, &wVar, temp);
+@@ -335,8 +384,8 @@ namespace motion {
                  if(opacity <= 0) continue;
  
                  tTJSVariant opArgs[9] = {
@@ -65,3 +89,109 @@ index 8c28958..d08b260 100644
                      tTJSVariant(temp, temp),
                      tTJSVariant(static_cast<tjs_int>(0)),
                      tTJSVariant(static_cast<tjs_int>(0)),
+@@ -348,6 +397,10 @@ namespace motion {
+                 tTJSVariant *opArgv[] = { &opArgs[0], &opArgs[1], &opArgs[2],
+                                           &opArgs[3], &opArgs[4], &opArgs[5],
+                                           &opArgs[6], &opArgs[7], &opArgs[8] };
++                if(logger)
++                    logger->info("drawPSBImages: draw [{}] at ({},{}) {}x{}",
++                                 img.path.AsStdString(), centerX + img.left,
++                                 centerY + img.top, iw, ih);
+                 try {
+                     target->FuncCall(0, TJS_W("operateRect"), nullptr, nullptr, 9, opArgv, target);
+                 } catch(const std::exception &e) {
+@@ -408,33 +461,85 @@ namespace motion {
+             if(!realLayer) return nullptr;
+ 
+             try {
++                auto log = _logger();
+                 iTJSDispatch2 *global = TVPGetScriptDispatch();
+-                if(!global) return nullptr;
++                if(!global) {
++                    if(log) log->warn("getOrCreateTempLayer: no script dispatch");
++                    return nullptr;
++                }
+ 
+                 tTJSVariant layerClassVar;
+                 global->PropGet(0, TJS_W("Layer"), nullptr, &layerClassVar, global);
+-
+-                tTJSVariant windowVar;
+-                if(TJS_FAILED(realLayer->PropGet(0, TJS_W("window"), nullptr, &windowVar, realLayer))) {
++                if(layerClassVar.Type() != tvtObject) {
++                    if(log) log->warn("getOrCreateTempLayer: no Layer class");
+                     global->Release();
+                     return nullptr;
+                 }
+ 
+-                tTJSVariant ctorArgs[2] = { windowVar, tTJSVariant(realLayer, realLayer) };
+-                tTJSVariant *ctorArgv[] = { &ctorArgs[0], &ctorArgs[1] };
++                // The layer the game hands us does not necessarily expose the
++                // window the Layer constructor wants (KAG layers use names such
++                // as _window/primaryLayer, and some objects have none at all),
++                // so look in a few places before giving up.
++                tTJSVariant windowVar;
++                bool haveWindow = false;
++                for(const tjs_char *prop :
++                    { TJS_W("window"), TJS_W("_window"), TJS_W("primaryLayer"),
++                      TJS_W("parent") }) {
++                    if(TJS_SUCCEEDED(realLayer->PropGet(0, prop, nullptr,
++                                                        &windowVar, realLayer)) &&
++                       windowVar.Type() == tvtObject) {
++                        haveWindow = true;
++                        if(log)
++                            log->debug("getOrCreateTempLayer: window from {}", ttstr(prop).AsStdString());
++                        break;
++                    }
++                }
++                if(!haveWindow && log)
++                    log->debug("getOrCreateTempLayer: no window property found; "
++                               "creating the layer unattached");
++
++                iTJSDispatch2 *layerClass = layerClassVar.AsObjectNoAddRef();
+                 iTJSDispatch2 *newLayer = nullptr;
+-                auto hr = layerClassVar.AsObjectNoAddRef()->CreateNew(
+-                    0, nullptr, nullptr, &newLayer, 2, ctorArgv, layerClassVar.AsObjectNoAddRef());
++                tjs_error hr = TJS_E_FAIL;
++                if(haveWindow) {
++                    tTJSVariant ctorArgs[2] = { windowVar,
++                                                tTJSVariant(realLayer, realLayer) };
++                    tTJSVariant *ctorArgv[] = { &ctorArgs[0], &ctorArgs[1] };
++                    hr = layerClass->CreateNew(0, nullptr, nullptr, &newLayer, 2,
++                                               ctorArgv, layerClass);
++                } else {
++                    // The engine's Layer constructor ignores its arguments (its
++                    // body just returns), but TJS still converts them, so a
++                    // void window is rejected. Pass the owner for both; the
++                    // resulting layer is only ever used as a drawing source.
++                    tTJSVariant ctorArgs[2] = { tTJSVariant(realLayer, realLayer),
++                                                tTJSVariant(realLayer, realLayer) };
++                    tTJSVariant *ctorArgv[] = { &ctorArgs[0], &ctorArgs[1] };
++                    hr = layerClass->CreateNew(0, nullptr, nullptr, &newLayer, 2,
++                                               ctorArgv, layerClass);
++                }
+                 global->Release();
+ 
+-                if(TJS_FAILED(hr) || !newLayer) return nullptr;
++                if(TJS_FAILED(hr) || !newLayer) {
++                    if(log) log->warn("getOrCreateTempLayer: CreateNew failed hr={:#x}",
++                                      static_cast<unsigned>(hr));
++                    return nullptr;
++                }
++                if(log) log->info("getOrCreateTempLayer: created layer ({})",
++                                  haveWindow ? "with window" : "unattached");
+ 
+                 tTJSVariant falseVar(false);
+                 newLayer->PropSet(TJS_MEMBERENSURE, TJS_W("visible"), nullptr, &falseVar, newLayer);
+ 
+                 _tempLayer = newLayer;
+                 return _tempLayer;
++            } catch(const std::exception &e) {
++                if(auto log = _logger())
++                    log->warn("getOrCreateTempLayer: exception {}", e.what());
++                return nullptr;
+             } catch(...) {
++                if(auto log = _logger())
++                    log->warn("getOrCreateTempLayer: unknown exception");
+                 return nullptr;
+             }
+         }
