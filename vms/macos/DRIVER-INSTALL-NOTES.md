@@ -635,6 +635,88 @@ stands: leave it unset. It is reverted here.
 the "wedges the display" bug documented earlier — they are the context of a
 **kernel panic**. Treat changing resolution as a crash-risk operation on this driver.
 
+## ROOT CAUSE of the remaining stall: the VRAM grant budget is exhausted
+
+This explains the "first interaction sticks for a second, then it is smooth"
+behaviour, and why it is worse with Steam running.
+
+**The budget is full and every allocation is now refused.** Measured live, via the
+driver's own `debug.nvrmfb_vramtest` knob (which grants N x 8 MB through
+`vramGrant`) — every size from 8 MB to 128 MB was refused:
+
+```
+nvAllocVram(8323072): REFUSED
+vramtest: holding 0 x 8 MB            <- nothing succeeded, at any size
+
+this boot:  parks 5136   park-ceiling hits 5137   REFUSED 771   grants 12
+```
+
+**Twelve** successful grants in an entire boot, against **5137** park-ceiling hits.
+
+### Why: `gParkedForever` is a permanent leak
+
+`nvAllocVram` handles an allocation landing on the console/scanout range by
+*parking* it — holding the memory mapped — and retrying. The array is literally
+named for it, and it is **never released**:
+
+```c
+static struct { struct NvKmsKapiMemory *m; void *k; NvU64 n; } gParkedForever[24];
+static volatile SInt64 gVramParkedBytes = 0;
+...
+gParkedForever[gNParkedForever++] = {m, k, want};    // held
+OSAddAtomic64((SInt64)want, &gVramParkedBytes);      // and counted against the budget
+```
+
+There is **no free path, no reset path, and no sysctl** — every reference to
+`gParkedForever` and `gVramParkedBytes` in the tree is either the declaration, the
+store, or the budget arithmetic. And the budget is:
+
+```c
+SInt64 before = OSAddAtomic64((SInt64)want, &gVramMappedBytes) + gVramParkedBytes;
+if (before + (SInt64)want > budget) { ...REFUSED — BAR1 budget spent...; return false; }
+```
+
+So leaked bytes are indistinguishable from live ones, forever.
+
+### The arithmetic, and why uptime makes it worse
+
+| | value |
+|---|---|
+| mapped shortly after boot | ~153-157 MB |
+| mapped after a few hours | **185 MB** |
+| park ceiling (`NVRM_VRAM_PARK_CEILING`) | 24 MB |
+| grant budget (`NVRM_VRAM_BAR1_BUDGET`, 256 MB BAR) | 192 MB |
+
+The ~28-30 MB of growth from boot to now matches the ~24 MB park ceiling, and
+`185 MB live + up to 24 MB leaked > 192 MB budget` is exactly the condition that
+refuses everything. Nothing recovers it at runtime.
+
+### What this means in practice
+
+* **The stall is an allocation failure, not a slow path.** When something needs a
+  new surface and the budget is spent, `nvAllocVram` refuses and the client must
+  retry or fall back — that is the one-second stick.
+* **Steam makes it worse** because it adds live VRAM pressure on top of the leak,
+  reaching the ceiling sooner.
+* **It degrades with uptime**, because the leak only grows.
+* **A reboot clears it** — that is the only reset, since no runtime path frees
+  parked memory.
+
+**Practical mitigations available today:**
+
+1. **Reboot when the desktop starts sticking.** It resets the leaked ~24 MB and
+   returns the budget to ~155 MB used. This is the single effective workaround.
+2. **Quit Steam when not gaming** — it is the largest live consumer.
+3. Nothing else: the budget cannot be raised (256 MB BAR ceiling, see
+   [Appendix C](#appendix-c--why-256-mb-and-how-it-was-found)), and the leak cannot
+   be freed without a driver change.
+
+Upstream, this is a strong report: the parking heuristic leaks budget permanently,
+so on a small-BAR system the driver degrades to zero allocatable VRAM. Reclaiming
+parked entries under pressure (they are rejects — the retry may succeed once other
+grants are released) would fix it. See
+[UPSTREAM-REPORT.md](UPSTREAM-REPORT.md) Finding 9.
+
 ## Still open (honest list)
 
 1. **The ~0.5 s drag-start stall is not fixed.** First-use shader compilation is

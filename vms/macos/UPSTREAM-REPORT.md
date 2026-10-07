@@ -405,6 +405,60 @@ enough to stop others losing a machine to it.
 
 
 
+## Finding 9 — `gParkedForever` leaks the VRAM budget permanently, until nothing can allocate
+
+**Severity: high on any small-BAR system.** This is the difference between a
+desktop that works for an hour and one that stops allocating altogether.
+
+`nvAllocVram` retries an allocation that lands on the console/scanout range by
+*parking* it and rolling again. Parked entries are never freed:
+
+```c
+static struct { struct NvKmsKapiMemory *m; void *k; NvU64 n; } gParkedForever[24];
+static volatile SInt64 gVramParkedBytes = 0;
+...
+gParkedForever[gNParkedForever++] = {m, k, want};
+OSAddAtomic64((SInt64)want, &gVramParkedBytes);
+```
+
+Every reference to `gParkedForever` / `gVramParkedBytes` in the tree is the
+declaration, the store, or the budget arithmetic — **there is no free path, no
+reset, and no sysctl.** The budget check counts them as if they were live:
+
+```c
+SInt64 before = OSAddAtomic64((SInt64)want, &gVramMappedBytes) + gVramParkedBytes;
+if (before + (SInt64)want > budget) { FBLOG("...REFUSED — BAR1 budget spent..."); return false; }
+```
+
+**Observed consequence.** On a 256 MB BAR the budget is `NVRM_VRAM_BAR1_BUDGET` =
+192 MB. After a few hours of uptime:
+
+```
+mapped 185 MB / budget 192 MB
+nvAllocVram(8323072): REFUSED          <- every attempt
+vramtest: holding 0 x 8 MB             <- 8 MB, 16, 32, 48, 64, 96, 128 MB: all refused
+
+this boot: parks 5136   park-ceiling hits 5137   REFUSED 771   grants 12
+```
+
+**Twelve** grants in a whole boot. The growth from ~155 MB (just after boot) to
+185 MB matches the 24 MB `NVRM_VRAM_PARK_CEILING`, and
+`185 live + ~24 parked > 192` is precisely the state that refuses everything. The
+user-visible effect is that the first interaction with any new window sticks for
+about a second — an allocation failure being retried — and it gets worse with
+uptime and with additional GPU clients (Steam).
+
+**Suggested fix.** Parked entries are *rejects*: the retry that parked them may
+well succeed once other grants are released, so they are the best possible
+reclaim candidate. Freeing them (or simply not counting them against the budget)
+when `before + want > budget` would let the driver recover instead of degrading to
+zero allocatable VRAM. A sysctl to drop them would be enough for users to recover
+without a reboot — currently a reboot is the only reset.
+
+**Also worth considering:** parking only ever happens because those allocations
+land on the console/scanout range. Reserving that range in the allocator rather
+than detecting collisions after the fact would avoid the leak entirely.
+
 ## Appendix for the author — the full runtime lever inventory
 
 Collected while working on this, in case it saves time. Everything below is
