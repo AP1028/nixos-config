@@ -311,6 +311,62 @@ BAR1 problem in section 1 — no need to look further.
 
 ---
 
+## WindowServer must NOT be given Metal — and the allow-list order bug
+
+**Symptom:** after arming Metal, the desktop **freezes** while the **cursor still
+moves**. The cursor moves because it is NVRMFB's hardware plane, not
+WindowServer's: the compositor has stopped updating, the cursor has not.
+
+**Cause — the shipped `nvmtl-allow.txt` makes its own WindowServer rule dead
+code.** `nvmtl_allowed()` in `plugin/NVMTLDevice.m` stops at the **first matching
+line**:
+
+```c
+if (*p == '-') { ...deny... }                     // '-' = hard deny, returns false
+if (*p == '!') { armedOnly = true; ... }          // '!' = allow, but only when armed
+if (strcmp(p, "*") && strcmp(p, me)) continue;    // match "*" or the exact name
+...
+ok = true; break;                                 // FIRST match wins, then stop
+```
+
+The shipped file is:
+
+```
+# rung 3: everyone; -Name denies
+*
+!WindowServer        <- unreachable: the "*" line above already matched
+```
+
+So `!WindowServer` never applies, `*` grants WindowServer the Metal plugin as soon
+as `MetalPluginName` is advertised, and WindowServer switches to Metal
+compositing — which this driver cannot sustain, so the UI stops updating.
+
+**Fix — put the deny FIRST:**
+
+```
+-WindowServer
+*
+```
+
+**Verify it empirically, without rebooting.** Copy a Metal test binary to a file
+*named* `WindowServer` and run it — the deny is by `getprogname()`:
+
+```sh
+sudo cp /tmp/metalrun /tmp/WindowServer && /tmp/WindowServer   # -> "no Metal device"
+/tmp/metalrun                                                  # -> device, compute OK
+```
+
+**Do not use `lsof` as the signal.** The Metal framework `dlopen`s the plugin
+bundle to ask it for devices *even when the allow-list refuses*, so
+`lsof -p <WindowServer> | grep NVMTLDriver` shows a mapping either way. The
+authoritative test is the name check above.
+
+**Consequence — the honest answer to "can everything render on Metal?":** no.
+WindowServer must stay off it or the desktop freezes. **Applications, games and
+compute get Metal 3**; desktop compositing does not. This matches the file's own
+label, `rung 3` — an incremental enablement stage, and compositing is evidently
+not there yet.
+
 ## Known limitations
 
 * **WindowServer does not get Metal.** `/Library/GPUBundles/nvmtl-allow.txt` is a
