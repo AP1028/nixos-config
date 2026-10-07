@@ -433,11 +433,13 @@ bundle to ask it for devices *even when the allow-list refuses*, so
 `lsof -p <WindowServer> | grep NVMTLDriver` shows a mapping either way. The
 authoritative test is the name check above.
 
-**Consequence — the honest answer to "can everything render on Metal?":** no.
-WindowServer must stay off it or the desktop freezes. **Applications, games and
-compute get Metal 3**; desktop compositing does not. This matches the file's own
-label, `rung 3` — an incremental enablement stage, and compositing is evidently
-not there yet.
+**Consequence — the honest answer to "can everything render on Metal?":** not in
+this configuration. WindowServer must stay off it or the desktop freezes, and
+because the `nvaccelfb` gate is global (see the root cause above), leaving it off
+means **no process gets Metal at all** — not games, Core ML or OpenCL either. It
+is an awkward all-or-nothing: working desktop XOR GPU compute. On a machine where
+macOS grants the large BAR the README asks for, the boot-hold wins its race and
+WindowServer composites through NVAccel, which is the intended behaviour.
 
 ## Known limitations
 
