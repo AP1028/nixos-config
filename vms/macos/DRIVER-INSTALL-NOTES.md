@@ -555,7 +555,7 @@ Everything below was measured with a repeatable harness, in `vms/macos/`:
 
 | file | what it does |
 |---|---|
-| `dragload.m` | opens a Metal-backed window and **moves it continuously**, reproducing the compositing load of a window drag without a human. Reports moves/s and compositor flips/s. |
+| `dragload.m` | opens a Metal-backed window and **moves it continuously**, reproducing the compositing load of a window drag without a human. Reports moves/s and compositor flips/s. **Known limitation:** its content does not actually redraw (`0 redraws` — `updateLayer` never fires despite a layer-backed view), so it exercises window *movement* only. That is enough for consistent A/B comparison (it produced every number below) but it is **lighter than a real drag** and does **not** reproduce the ~0.5 s drag-start stall. Reproducing that needs a human drag, or a fix to the redraw path. |
 | `bench.sh` | the one procedure per test: check the session is ready, run `dragload`, report **flips, WindowServer CPU per flip**, and the grant/park/refusal deltas |
 | `surfbench.m` | times IOSurface + Metal-texture creation (the surface path) |
 | `shaderbench.m` | times first-use shader compilation through the translator |
@@ -603,6 +603,7 @@ under a synthetic drag load.
 | Shader caches are cold, so first use recompiles | WindowServer has **70 MB / 2047 files** in `nvmtl/aircache`, plus `spvcache` and `nvmtl-mesa`; 128 MB total | ❌ caches warm |
 | First-use compilation is expensive anyway | `shaderbench`: **median 17.7 ms, p90 32 ms, max 203 ms** per distinct shader — so a drag needing several new variants can plausibly total ~0.5 s | ✅ plausible cause of the drag stall |
 | Surface allocation is the drag stall | `surfbench`: ~8 ms per surface, but the grant counters **did not move** and the import failed with `NVRM_SS_NO_VRAM` (`0x80000005`) — it exercised a *CPU-backed* path, not the compositor's | ⚠️ inconclusive |
+| The drag stall is reproducible without a human | `dragload` never redraws content, so it cannot reach the drag-start path | ❌ still open |
 | The 192 MB grant budget is exhausted | `budget spent: 0` — the budget check **never fired**; the failures are `OVERLAPS THE CONSOLE` → park → retry | ❌ wrong theory |
 | Allocation thrash happens | **3779** `parking it and rolling again`, **474** `REFUSED` (in one VM boot, before the conf fix) | ✅ real |
 | The stale/blinking image is a driver bug | it is the compositor correctly not re-presenting when idle; the panel keeps the last buffer flipped. It appears after a **WindowServer restart** because new content is only presented on change | ❌ benign |
@@ -633,6 +634,24 @@ stands: leave it unset. It is reverted here.
 **Corollary, and it matters more than HWPOOL:** display mode changes are not merely
 the "wedges the display" bug documented earlier — they are the context of a
 **kernel panic**. Treat changing resolution as a crash-risk operation on this driver.
+
+## Still open (honest list)
+
+1. **The ~0.5 s drag-start stall is not fixed.** First-use shader compilation is
+   the plausible cause — `shaderbench` measures **median 17.7 ms, p90 32 ms, max
+   203 ms** per distinct shader, so a drag needing several new pipeline variants
+   could total ~0.5 s, and the caches being warm explains why the *repeat* drag is
+   smooth. But it is not proven, because the synthetic load cannot reproduce the
+   stall (see the `dragload` limitation above). **Next step: a real drag while
+   watching the shader caches and the park/refusal counters.** If it is
+   compilation, nothing here can fix it — the caches are already warm and the
+   translator is inherent to the driver.
+2. **The park/refusal thrash is gone in this configuration** (`parks +0`,
+   `refusals +0` in the final benchmark, against 3779/474 in the pre-fix boot) but
+   the underlying cause is untouched: allocations still land on the console/scanout
+   range and are parked and retried. It is quiet now, not fixed.
+3. **Mode changes remain a crash risk** and there is no way to get a lower refresh
+   at native resolution.
 
 ## Known limitations
 
