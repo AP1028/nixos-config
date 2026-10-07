@@ -568,6 +568,12 @@ worth knowing:
    half-initialised session: **~10 fps and ~114 MB mapped** instead of ~108-133 fps
    and ~152-175 MB. `bench.sh` now requires the console user **and** the Dock **and**
    session-sized VRAM, and aborts rather than reporting a bogus number.
+   **Do not test for the Dock with `pgrep -x Dock`** — the session's Dock reports
+   its comm as the *full path*
+   (`/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock`), so an exact-name
+   match never succeeds and every run aborts with a false "no session". Match the
+   path (`pgrep -f "Dock.app/Contents/MacOS/Dock"`) instead. That single mistake
+   invalidated several runs here before it was caught.
 2. **Auto-login is a boot-time behaviour only.** A WindowServer restart drops to the
    login window and it does **not** come back; a **reboot** does (session up in
    ~40 s). So conf/plugin changes are tested by editing the conf and **rebooting**,
@@ -580,9 +586,13 @@ worth knowing:
 Baseline on this machine (post-reboot, code-default conf, 20 s load):
 
 ```
-flips ~2160,  WindowServer ~4.26 ms CPU per flip,  ~108-133 fps
-grants +3,  parks +0,  refusals +0,  mapped 157/192 MB
+flips ~2160-2214,  WindowServer ~4.26-4.34 ms CPU per flip,  ~108-133 fps
+grants +0,  parks +0,  refusals +0,  mapped 155-157/192 MB
 ```
+
+That is the state this document leaves the machine in: driver up, display armed,
+Metal 3 available, zero allocation thrash, and the compositor sustaining ~110 fps
+under a synthetic drag load.
 
 ## What was verified, and what it rules out
 
