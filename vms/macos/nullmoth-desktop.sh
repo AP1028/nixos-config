@@ -1,14 +1,31 @@
 #!/bin/bash
+# ############################################################################
+# DEPRECATED -- kept only for the record. DO NOT INSTALL THIS.
+#
+# Superseded by the `nvrmsettle=15000` boot-arg. The driver now arms the display
+# and the Metal plugin itself during boot (the 40 s IORegistry boot-hold finally
+# outlives the bring-up), so no runtime steps are needed at all.
+#
+# Worse, this script's WindowServer restart is now actively HARMFUL: since
+# nvmtl-allow.txt lists WindowServer as "!WindowServer" (allowed when armed), and
+# the driver self-arms at boot, a mid-session restart hands WindowServer a Metal
+# compositing path it cannot sustain and the UI stops updating.
+#
+# It remains useful only as a manual recovery from the "changing resolution
+# wedges the display" bug documented in DRIVER-INSTALL-NOTES.md -- but even there
+# `launchctl kickstart -k system/com.apple.WindowServer` is the whole fix.
+# ############################################################################
+#
 # Bring the NullMoth desktop up after a boot.  Installed to the guest as
 # /Library/NullMoth/nullmoth-desktop.sh by vms/macos/com.nullmoth.desktop.plist.
 #
-# WHY THIS EXISTS
-# The driver ships its display and Metal paths gated OFF on purpose, and every
-# gate is a runtime-only `debug.*` sysctl -- there is no config file that makes
-# them persist. On top of that, WindowServer starts long before the driver is
-# ready (the driver needs ~100 s), so even a permissive allow-list does not help
-# the first WindowServer of a boot. Something has to re-apply the gates after
-# each start, once the driver is actually up. This is that something.
+# WHY THIS EXISTED
+# The driver ships its display and Metal paths gated OFF, and every gate was a
+# runtime-only `debug.*` sysctl with no config file behind it. WindowServer also
+# started long before the driver was ready (the slow path is a 100 s bring-up), so
+# even a permissive allow-list did not help the first WindowServer of a boot.
+# Something had to re-apply the gates once the driver was up. This was that
+# something -- before `nvrmsettle` removed the problem at its source.
 #
 # It is idempotent: safe to re-run by hand at any time.
 

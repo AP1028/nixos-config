@@ -23,10 +23,11 @@ covers the parts that differ in a VM. Read their README first.
 
 ---
 
-## TL;DR — four things must be right
+## TL;DR — five things must be right
 
-If you get these four right, the driver works. Each has a distinctive failure
-signature, so you can tell which one you've got wrong.
+If you get these five right, the driver works end to end: GPU-composited desktop
+**and** Metal 3 for applications. Each has a distinctive failure signature, so you
+can tell which one you've got wrong.
 
 | # | Requirement | If wrong |
 |---|---|---|
@@ -34,9 +35,14 @@ signature, so you can tell which one you've got wrong.
 | 2 | **GPU on guest bus `0x00`** — not behind a PCIe root port | macOS never sees the card at all |
 | 3 | **`<video>` = `none`** | the emulated GPU competes with NVRMFB for display index 0 |
 | 4 | **USB hostdevs on an XHCI controller** | passed-through keyboard/mouse never appear in macOS |
+| 5 | **`nvrmsettle=15000` in boot-args** | driver runs but **no Metal and no GPU compositing** — see below |
 
-Three **runtime gates** then bring the display and Metal up (they are lost on
-every reboot — see [Bring-up](#bring-up-three-runtime-gates)).
+Requirement 5 is the non-obvious one and the subject of the next section. With it
+in place **no runtime steps are needed at all**: no sysctls, no daemon, no
+WindowServer restart. The driver arms the display and the Metal plugin itself
+during boot. (An earlier revision of this document prescribed three runtime gates
+and a boot daemon; both turned out to be workarounds for a race that `nvrmsettle`
+removes.)
 
 ---
 
@@ -238,34 +244,72 @@ disabled only after one.
 
 ---
 
-## Bring-up: three runtime gates
+## Bring-up: one boot-arg
 
-Getting the driver loaded is not enough — macOS still shows no display. Three
-steps fix that, and **all three are runtime-only** (they are gone on reboot).
-They must run **after** the driver is up.
+Getting the driver loaded is not enough — by itself macOS shows **no display and
+no Metal**. One boot-arg fixes both, and nothing needs to run at runtime.
 
-| gate | command | what it does |
-|---|---|---|
-| 1 | `sudo sysctl -w debug.nvrmfb_agdc=1` | activates `NVRMAGDC`, the display-policy shim, which maps the framebuffer. **Necessary but not sufficient** — held `IODisplay` at 0 for a full 60 s on its own. |
-| 2 | `sudo launchctl kickstart -k system/com.apple.WindowServer` | **this is the step that produces the display.** WindowServer re-enumerates and `IODisplay` goes 0 → 1 within ~5 s. |
-| 3 | `sudo sysctl -w debug.nvaccelfb=1` | restores `MetalPluginName`, so **new** processes get a Metal device. |
+Add to `NVRAM → Add → boot-args` (and make sure `boot-args` is in
+`NVRAM → Delete`, or OpenCore will not write it):
 
-**Timing matters.** The driver only reaches `"up"` about **100 s after NVRM
-arms** (`auto-go: go(2) in 100000 ms`, because `placeLargeBar1()` returns false
-at a 256 MB BAR1). Applying the gates at boot, before pass 2 completes, silently
-does nothing — the driver logs `AGDC: no PCI device or no framebuffer yet (pci 0
-fb 0)`. Wait for the driver, not for boot:
-
-```sh
-until ioreg -l -w0 | grep -q '"nvrm-autogo" = "up"'; do sleep 5; done
+```
+nvrmsettle=15000
 ```
 
-Gate 3 has a caveat the driver states itself: only **new** processes see the Metal
-device; already-running ones do not. Re-run your test in a fresh process.
+### Why that is the whole fix
 
-**Not yet tested:** whether gate 1 is a *prerequisite* for gate 2. It was active
-when gate 2 succeeded, but gate 2 with AGDC left off was never tried — so if you
-want the minimum, that experiment is owed.
+NVRM deliberately holds the IORegistry **busy** so that WindowServer's
+`IOKitWaitQuiet` blocks — that is the mechanism which sequences WindowServer to
+start *after* the driver has armed the display. The hold has a **fixed 40 s cap**,
+but the schedule it races is **500 ms, 10 s or 100 s** depending on `bar1Placed`
+(`kexts/NVRM/NVRM.cpp:323`):
+
+```c
+fAutoGoSettleMs = bar1Placed ? 500 : 100000;
+{ uint32_t ms = 0; if (PE_parse_boot_argn("nvrmsettle", &ms, sizeof(ms))) fAutoGoSettleMs = ms; }
+```
+
+| `bar1Placed` | auto-go | vs 40 s cap | result |
+|---|---|---|---|
+| true (8 GB BAR, bare metal) | `+500 ms` | inside | hold outlives bring-up → **Metal desktop** |
+| false, default | `+100 s` | **outside** | cap fires first → WindowServer starts early → no Metal |
+| false, **`nvrmsettle=15000`** | `+15 s` | inside | hold outlives bring-up → **Metal desktop** |
+
+`placeLargeBar1()` is always false here — macOS will not assign a Resizable BAR
+larger than 256 MB — so the default 100 s path always loses the race. Overriding
+the settle time moves the bring-up back inside the window without needing the
+8 GB BAR the README asks for.
+
+### Verified result
+
+```
+auto-go: go(2) in 15000 ms on its own thread (BAR1 not placed); registry held busy until the display is armed (cap 40 s)
+boot hold RELEASED (display armed)        <- not "by the 40 s cap"
+PASS 2 REACHED: the adapter is up
+4 NVRMDisplay nub(s) published
+
+debug.nvaccelfb:   1     <- self-armed by the driver; no sysctl was run
+debug.nvrmfb_agdc: 1     <- likewise
+nvrm-boot-hold:    "display armed"
+MTLCopyAllDevices -> 1   NVIDIA GeForce RTX 5080 Laptop GPU (NVMTL over NVK GB203-B)
+system_profiler:         Metal Support: Metal 3
+```
+
+**The driver does all of it itself.** `onCountGrewLocked()` restores
+`MetalPluginName` and sets `IOGLBundleName=AppleMetalOpenGLRenderer` once the
+display is armed, so `debug.nvaccelfb`, `debug.nvrmfb_agdc` and the WindowServer
+restart are all unnecessary — they were workarounds for a driver that had already
+lost the race.
+
+### About the boot daemon in this directory
+
+`nullmoth-desktop.sh` / `com.nullmoth.desktop.plist` are the old three-gate
+workaround. **They are not needed with `nvrmsettle` and should stay disabled**
+(`com.nullmoth.desktop.plist.disabled`). Worse, running the daemon's WindowServer
+restart is actively harmful now: `nvmtl-allow.txt` lists WindowServer as
+`!WindowServer` (allowed *when armed*), so a restart hands it a Metal path
+mid-session and the UI stops updating. Removing the `-WindowServer` deny is safe
+only because the boot-hold now sequences WindowServer correctly.
 
 ---
 
@@ -311,80 +355,127 @@ BAR1 problem in section 1 — no need to look further.
 
 ---
 
-## Why the desktop is not on Metal — and the allow-list order bug
+## Metal: working now — what the fix actually changed
 
-**The desktop IS supposed to run on Metal.** This is not a design decision on the
-driver's part — the README is explicit: *"your NVIDIA card drives the desktop"*,
-*"NVAccel the accelerator WindowServer composites through"*, and *"the AMFI args
-let WindowServer load the driver bundle"*. It fails here for a specific,
-identifiable reason.
+The desktop is **GPU-composited and Metal 3 is available to applications**, with
+no runtime steps. That is the intended behaviour; getting there needed only
+`nvrmsettle` (above), which moves the driver's bring-up back inside the 40 s
+boot-hold so WindowServer genuinely waits for it.
 
-### Root cause: the 40 s boot-hold loses a race against the 100 s auto-go
+The earlier analysis in this document concluded the desktop was *not* supposed to
+run on Metal. **That was wrong**, and the correction matters: the README is
+explicit that WindowServer is meant to composite through the accelerator —
 
-NVRM deliberately holds the IORegistry busy so WindowServer's `IOKitWaitQuiet`
-blocks, which is what sequences WindowServer to start *after* the driver is
-armed. The hold has a **fixed 40 s cap**, but the schedule it races is **10 s or
-100 s** depending on `bar1Placed` (`kexts/NVRM/NVRM.cpp`, ~line 328):
+> *"Your NVIDIA card drives the desktop, Metal apps, games, Core ML/MPS, and
+> OpenCL — the way an Apple-supported GPU does."*
+> *"NVAccel the accelerator WindowServer composites through"*
+> *"the AMFI args let WindowServer load the driver bundle"*
 
-```c
-clock_interval_to_deadline(40000, kMillisecondScale, &dl);          // fixed 40 s
-setProperty("nvrm-autogo", bar1Placed ? "scheduled +10 s" : "scheduled +100 s");
-```
+So the fix is not a workaround. It restores the sequence NVRM was designed to
+enforce and which the 100 s slow path was defeating.
 
-| `bar1Placed` | auto-go | vs 40 s | outcome |
-|---|---|---|---|
-| true | `+10 s` | 10 < 40 | hold outlives bring-up → WindowServer waits → **Metal desktop** |
-| false (ours) | `+100 s` | 100 > 40 | **cap fires first** → WindowServer starts early → no Metal desktop |
+---
 
-Ours is the second row, because macOS assigns only a **256 MB** BAR1 so
-`placeLargeBar1()` returns false. The driver's own log states the consequence:
+## Performance: what it actually costs
 
-```
-auto-go: go(2) in 100000 ms on its own thread (BAR1 not placed); registry held busy until the display is armed (cap 40 s)
-boot hold RELEASED by the 40 s cap
-```
+Measured on this machine, GPU-composited desktop running:
 
-and `bootHoldCap()` predicts it: *"bring-up not finished, NOT arming"* / *"the
-bring-up will not arm with WindowServer up"*.
-
-**So the same BAR limitation that makes the driver run at all is what keeps the
-desktop off Metal.** Larger BAR sizes fail outright (`kbusVerifyBar2_GB202` /
-`NV_ERR_MEMORY_ERROR`), 256 MB is the only value macOS accepts — and that is
-exactly the case the 40 s cap cannot accommodate. There is no configuration of
-this VM that satisfies the README's `ResizeGpuBars=13` /
-`ResizeAppleGpuBars=-1` requirement.
-
-**Recovery does not work either.** Restarting WindowServer by hand so it picks up
-the driver mid-session hands WindowServer a Metal path it cannot sustain, and the
-UI freezes — the cursor still moves, because that is NVRMFB's hardware plane, not
-WindowServer's. That is the freeze described below.
-
-**The fix belongs upstream** — derive the cap from the schedule, e.g.
-`clock_interval_to_deadline(fAutoGoSettleMs + 40000, ...)`. It is not patchable
-here: there is still no published build path for `NVRM.kext`. Full write-up in
-[UPSTREAM-REPORT.md](UPSTREAM-REPORT.md).
-
-### Consequence, and why the daemon denies WindowServer
-
-`debug.nvaccelfb` is a **global** gate — it decides whether the accelerator
-publishes `MetalPluginName` at all. So it is all-or-nothing:
-
-| | desktop | Metal for apps/games |
+| measurement | value | native 5080 laptop for reference |
 |---|---|---|
-| `nvaccelfb=0` (what we run) | works | **none at all** — `MTLCopyAllDevices() -> 0` |
-| `nvaccelfb=1` | freezes on a WindowServer restart | Metal 3 |
+| GPU fill / copy | **467 GB/s** | ~700-900 GB/s |
+| GPU fma (Metal) | **~5.3 TFLOPs fp32** | ~30-50 TFLOPs |
+| WindowServer CPU | **~98% of one core**, continuously | near-idle |
+| VRAM grant budget | 192 MB, 174 MB mapped | 2-8 GiB with a ≥4 GiB BAR |
 
-Arming is also a **one-way door until a reboot**: `sysctl -w debug.nvaccelfb=0`
-provably does nothing (`1 -> 1`); the driver documents this as *"a reboot takes it
-away again"*. Arming additionally sets `IOGLBundleName=AppleMetalOpenGLRenderer`
-globally, which redirects the GL renderer and which excluding WindowServer from
-the Metal plugin does not necessarily prevent.
+**The window-server cost is not BAR-related.** Four measurements rule it out:
 
-So the daemon leaves Metal **off** by default, and the `-WindowServer` deny is
-what makes its own WindowServer restart safe — without it, that restart is exactly
-the freeze above.
+1. 467 GB/s **exceeds PCIe bandwidth**, which proves the benchmark buffers were in
+   real VRAM — allocations are not being forced into system RAM.
+2. **Zero** `nvAllocVram: REFUSED — BAR1 budget spent` messages in the logs.
+3. The budget sits at 174/192 MB and is **stable** — grants/releases unchanged over
+   10 s, so there is no thrashing.
+4. Most decisively: profiling WindowServer shows its CPU going to **ioctl
+   round-trips and object teardown**, not to copying frames through the aperture.
+   A BAR bandwidth limit would look like ~3.2 GB/s of memcpy
+   (3440x1440x4 x 165 Hz); instead:
 
-### The allow-list order bug (separate, upstream)
+```
+33  mach_msg2_trap
+21  io_connect_method                     (IOKit)
+16  IOConnectCallMethod                   <- user -> kernel round-trips
+12  nvrm_xnu_ioctl    (libvulkan_nouveau) <- the NVIDIA kernel driver
+ 9  CA::OGL::render_layers  (QuartzCore)  <- CoreAnimation over OpenGL
+ 7  nvRmApiFree      (libvulkan_nouveau)
+ 5  nvkmd_nvrm_va_free (libvulkan_nouveau)
+```
+
+So the cost is the **translation chain**, which is inherent and documented:
+
+```
+CoreAnimation (OpenGL) -> Apple GL-on-Metal -> Metal -> AIR -> SPIR-V -> NVK/Vulkan -> nvrm_xnu_ioctl -> GPU
+```
+
+The GL-on-Metal hop is deliberate — `nvrm-accel.cpp` sets
+`IOGLBundleName=AppleMetalOpenGLRenderer` with the ALOG *"NEW GL processes get a
+hardware renderer over Metal"*, i.e. it exists so GL is not software. There is no
+alternative backend to switch to. What is **not** deliberate is the magnitude: the
+README carries no performance caveat, so this cost is unpriced rather than
+designed. See [UPSTREAM-REPORT.md](UPSTREAM-REPORT.md).
+
+**Two things that did not matter:** the dynamic (video) wallpaper — swapping to a
+static one changed WindowServer's CPU by ~1% (9.76 s vs 9.74 s per 10 s), and the
+wallpaper processes sit at 0.0% CPU. And the small BAR budget, per the four
+measurements above.
+
+**What does matter:** the display runs at **3440x1440 @ 165 Hz**
+(`IOFBCurrentPixelClock = 879720000`), so the compositor is driven at 165 fps
+through that chain.
+
+---
+
+## Display modes: 165 Hz at native resolution only
+
+The driver publishes 26 modes, but only **one** at native resolution:
+
+```
+  3440x1440 @ 165.0 Hz        <- the only native-resolution mode
+  1920x804  @ 165.0 Hz  ·  2048x858 @ 165.0 Hz  ·  1720x720 @ 165.0 Hz
+  1280x720  @  60.0 Hz  ·  1280x960 @ 60.0 Hz   ·  1024x768 @ 60.0 Hz ...
+```
+
+NVRMFB builds its modes from the native timing (hence the scaled 165 Hz variants)
+plus a few VESA modes at 60-75 Hz, and **never a lower refresh at native
+resolution**. So "I can only pick 165 Hz" is a driver mode-list limitation, not a
+panel limitation. Testing a lower compositing load is still possible at a
+reduced resolution (e.g. `1920x804 @ 165`, or `1280x720 @ 60`).
+
+## Changing display resolution wedges the display
+
+Selecting another mode leaves a **blank background with a live cursor**.
+WindowServer does **not** crash — the pid is unchanged, there is no crash report,
+and the session stays logged in — but it goes **idle**:
+
+```
+WindowServer cputime  16:07.18 -> 16:07.19 over 6 s     (0.01 s in 6 s = not spinning)
+```
+
+`IOFramebuffer` count rises (8 -> 10), so new framebuffers were created for the
+new mode, but nothing is presented. Recovery is a WindowServer restart, which
+costs a logout:
+
+```sh
+sudo launchctl kickstart -k system/com.apple.WindowServer
+```
+
+The mode itself is fine afterwards — selecting a different resolution and then
+querying it shows the display already back at `3440x1440 @ 165`, so the damage is
+to the presentation path, not the mode. Worth reporting upstream; the same wedge
+is what `nullmoth-desktop.sh` used to recover from, which is one more reason to
+leave that daemon disabled.
+
+---
+
+## The allow-list order bug (fixed here, upstream elsewhere)
 
 **Symptom:** after arming Metal, the desktop **freezes** while the **cursor still
 moves**.
@@ -443,19 +534,23 @@ WindowServer composites through NVAccel, which is the intended behaviour.
 
 ## Known limitations
 
-* **No Metal at all in this configuration — not for apps either.** The desktop is
-  *supposed* to run on Metal (see the section above), but the same 256 MB BAR that
-  makes the driver run forces the 100 s auto-go path, which loses the race against
-  the fixed 40 s boot-hold, so WindowServer starts before the driver is ready. As a
-  result `debug.nvaccelfb` must stay off, and that gate is global:
-  `MTLCopyAllDevices() -> 0` and `MTLCreateSystemDefaultDevice() -> nil` for every
-  process. **Games, Core ML, MPS and OpenCL therefore get no GPU acceleration** —
-  the driver's display path works, its compute path is unreachable. This is a
-  consequence of the VM's BAR constraint, not a maturity stage; the fix is
-  upstream ([UPSTREAM-REPORT.md](UPSTREAM-REPORT.md)).
-* **The dynamic wallpaper cannot render.** macOS 15's stock wallpaper is a
-  *video* (`.wallpapers/Sequoia Sunrise/Sequoia Sunrise.mov`), which needs Metal,
-  so the desktop is plain white. Use a **static** wallpaper instead:
+* **The compositor is CPU-bound.** WindowServer holds ~98% of one core feeding
+  the GL-on-Metal → NVK chain, so the desktop is usable but not snappy. Measured
+  as *not* BAR-related — see [Performance](#performance-what-it-actually-costs).
+  It is the translation chain plus a 165 Hz drive rate, and there is no
+  alternative backend.
+* **Only 165 Hz is offered at native resolution**, because NVRMFB publishes no
+  lower refresh at the native timing. Lower resolutions do offer 60 Hz. See
+  [Display modes](#display-modes-165-hz-at-native-resolution-only).
+* **Changing resolution wedges the display** (blank background, live cursor,
+  WindowServer goes idle but does not crash). Recovery is a WindowServer restart,
+  which logs you out. See [Changing display
+  resolution](#changing-display-resolution-wedges-the-display).
+* **The dynamic wallpaper works** (it renders, GPU-composited), which means the
+  static-wallpaper workaround below is **no longer needed**. Kept for the record
+  because it is the right fix if Metal is ever unavailable — a *dynamic* wallpaper
+  needs Metal, and without it the desktop falls back to plain white, which is the
+  pre-fix symptom we originally chased.
 
   ```sh
   cp "/System/Library/Desktop Pictures/.wallpapers/Sequoia Sunrise/Sequoia Sunrise.heic" \

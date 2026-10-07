@@ -1,4 +1,4 @@
-# Upstream report — two findings in nvidia-macos-driver 1.0.1
+# Upstream report — findings in nvidia-macos-driver 1.0.1
 
 Both found while running the driver in a QEMU/KVM VM (macOS 15.8.1, RTX 5080
 Max-Q `10de:2c59`, mobile Blackwell GB203M). Neither is VM-specific in principle —
@@ -66,6 +66,31 @@ accelerator. Nothing recovers it later: restarting WindowServer by hand to pick
 the driver up mid-session gives WindowServer a Metal path it cannot sustain, and
 the UI freezes (cursor still moves — that is NVRMFB's hardware cursor plane, not
 WindowServer's).
+
+### Workaround, since the cap is not configurable
+
+The cap itself is hardcoded, but the *other* side of the race is not — the driver
+reads an undocumented boot-arg for the settle time:
+
+```c
+fAutoGoSettleMs = bar1Placed ? 500 : 100000;
+{ uint32_t ms = 0; if (PE_parse_boot_argn("nvrmsettle", &ms, sizeof(ms))) fAutoGoSettleMs = ms; }
+```
+
+`nvrmsettle=15000` moves the bring-up back inside the 40 s window and the whole
+designed sequence then works:
+
+```
+auto-go: go(2) in 15000 ms on its own thread (BAR1 not placed); registry held busy until the display is armed (cap 40 s)
+boot hold RELEASED (display armed)          <- not "by the 40 s cap"
+MTLCopyAllDevices -> 1                      <- Metal 3, self-armed by the driver
+```
+
+with no sysctls, no daemon and no WindowServer restart. So finding 1 is
+**workable-around but still a bug**: the default is wrong for every system where
+`placeLargeBar1()` cannot succeed, and `nvrmsettle` is undocumented. Worth either
+deriving the cap from `fAutoGoSettleMs` (the suggested fix) or documenting the
+boot-arg in the README.
 
 **Suggested fix — derive the cap from the schedule**, e.g.
 
@@ -147,6 +172,92 @@ intended, fine; it is worth stating in the README, because it makes the gate
 expensive to experiment with.
 
 ---
+
+## Finding 3 — WindowServer saturates a core to composite
+
+**Severity:** usability. The desktop works but is not responsive; the compositor
+is CPU-bound.
+
+With the desktop GPU-composited and Metal 3 available, WindowServer holds **~98%
+of one CPU core continuously** (cputime 11:28.00 -> 11:37.76 over 10 s wall). A
+compositor should be near-idle when the GPU is doing the work. Sampling it shows
+where the time actually goes:
+
+```
+33  mach_msg2_trap
+21  io_connect_method                      (IOKit)
+16  IOConnectCallMethod                    <- user -> kernel round-trips
+12  nvrm_xnu_ioctl     (libvulkan_nouveau) <- the kernel driver entry point
+ 9  CA::OGL::render_layers  (QuartzCore)   <- CoreAnimation, over OpenGL
+ 7  nvRmApiFree       (libvulkan_nouveau)
+ 5  nvkmd_nvrm_va_free (libvulkan_nouveau)
+```
+
+So the cost is **ioctl round-trips plus RM object / VA teardown**, not GPU work
+and not memory transfers. Two candidate explanations worth the author's attention:
+
+1. **Per-operation syscall overhead.** `nvrm_xnu_ioctl` sitting that high means
+   the user↔kernel channel is on the hot path for every compositing operation.
+2. **Object churn.** `nvRmApiFree` and `nvkmd_nvrm_va_free` appearing in the top
+   ten suggests RM objects and VA ranges are being created and destroyed per frame
+   rather than pooled.
+
+Contributing factor: the display is driven at **165 Hz** at 3440x1440
+(`IOFBCurrentPixelClock = 879720000`), so this chain runs 165 times a second.
+
+**Not** a factor, for the record — these were measured and ruled out:
+
+| measurement | value |
+|---|---|
+| GPU fill / copy | 467 GB/s (exceeds PCIe, so buffers really are in VRAM) |
+| GPU fma | ~5.3 TFLOPs fp32 (card does ~30-50 native) |
+| `nvAllocVram` BAR1 refusals | zero |
+| BAR1 grant budget | 192 MB, 174 MB mapped, **stable** (no thrash over 10 s) |
+| static vs dynamic wallpaper | 9.74 s vs 9.76 s per 10 s — no difference |
+
+## Finding 4 — no lower refresh rate is published at the native resolution
+
+`NVRMNVDAFramebuffer` publishes 26 modes, but only one at the native timing:
+
+```
+  3440x1440 @ 165.0 Hz       <- the only native-resolution mode
+  1920x804  @ 165.0 Hz   ·  2048x858 @ 165.0 Hz  ·  1720x720 @ 165.0 Hz
+  1280x720  @  60.0 Hz   ·  1280x960 @ 60.0 Hz   ·  1024x768 @ 60.0 Hz ...
+```
+
+The 165 Hz variants are clearly derived from the native timing, and the 60-75 Hz
+entries are VESA defaults. There is no way to select, say, 3440x1440 @ 60 Hz, even
+though the panel's EDID range descriptor permits a much wider range.
+
+This matters because 165 Hz is the single largest multiplier on the Finding 3 cost
+— a user who wants a responsive desktop currently has to drop resolution as well
+as refresh. Publishing at least one lower refresh at the native timing would make
+that trade-off avoidable.
+
+## Finding 5 — changing resolution wedges the display permanently
+
+Selecting any other display mode leaves a **blank background with a live cursor**.
+Nothing is presented until WindowServer is restarted, which logs the user out:
+
+```sh
+sudo launchctl kickstart -k system/com.apple.WindowServer
+```
+
+Diagnostics gathered while wedged:
+
+* **WindowServer does not crash.** Same pid, no crash report, session still logged
+  in (`console user` unchanged).
+* **It goes idle, not spinning.** cputime advanced **0.01 s over 6 s** — it has
+  stopped compositing entirely.
+* `IOFramebuffer` count rises (8 -> 10), so new framebuffers were created for the
+  new mode.
+* The **mode itself is not damaged**: querying the display afterwards reports
+  `3440x1440 @ 165`, i.e. it is already back at the original timing. So the damage
+  is to the presentation path, not the mode.
+
+A mode switch that cannot be backed out without a logout is worth fixing on its
+own; it also means any "did the mode change help?" experiment costs the user their
+session.
 
 ## Environment
 
