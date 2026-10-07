@@ -1,0 +1,352 @@
+<domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+  <name>macos</name>
+  <uuid>9b5b38a2-6667-4962-b89f-5ed53a52e499</uuid>
+  <title>macOS (OpenCore)</title>
+  <description>
+    macOS guest for the NullMoth NVIDIA driver work.
+    No PCI passthrough yet: this boots on QEMU's virtual VGA (vmware-svga),
+    which is all the installer needs. The NullMoth kexts cannot bind to a
+    virtual GPU, so the driver is only meaningful once 01:00.0/01:00.1 are
+    passed through (see vms/macos/README.md).
+  </description>
+  <metadata>
+    <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
+      <libosinfo:os id="http://apple.com/macos"/>
+    </libosinfo:libosinfo>
+  </metadata>
+
+  <!-- 16 GiB (larger than OSX-KVM's 4096 default, deliberate). -->
+  <memory unit='KiB'>16777216</memory>
+  <currentMemory unit='KiB'>16777216</currentMemory>
+  <!-- No <memoryBacking><locked/></memoryBacking>: it was here before and only
+       raised the host commit; OSX-KVM does not lock the guest's RAM. -->
+  <!-- 4 cores / 1 socket / 1 thread. The CPU *model* is not set here: it comes
+       from the raw -cpu argument in <qemu:commandline> at the bottom of this
+       file, which mirrors OpenCore-Boot.sh line 37 verbatim. libvirt cannot
+       express that string (kvm=on and vmware-cpuid-freq=on have no XML
+       equivalent), so libvirt must not emit a -cpu of its own. -->
+  <vcpu placement='static'>4</vcpu>
+
+  <os>
+    <type arch='x86_64' machine='pc-q35-10.2'>hvm</type>
+    <loader readonly='yes' type='pflash'>/run/libvirt/nix-ovmf/edk2-x86_64-code.fd</loader>
+    <nvram template='/run/libvirt/nix-ovmf/edk2-i386-vars.fd'>/var/lib/libvirt/qemu/nvram/macos_VARS.fd</nvram>
+    <!-- No <boot dev='hd'/> here: libvirt forbids os/boot together with the
+         per-device <boot order> elements below, and the per-device order is
+         what actually puts OpenCore first. -->
+    <bootmenu enable='no'/>
+  </os>
+
+  <features>
+    <acpi/>
+    <apic/>
+    <vmport state='off'/>
+  </features>
+
+  <!-- No libvirt <cpu> element, on purpose. The complete CPU model is passed
+       verbatim to QEMU as a raw argument in <qemu:commandline> below, copied
+       from OSX-KVM's OpenCore-Boot.sh line 37:
+
+           -cpu Skylake-Client,-hle,-rtm,kvm=on,vendor=GenuineIntel,+invtsc,
+                vmware-cpuid-freq=on,+ssse3,+sse4.2,+popcnt,+avx,+aes,
+                +xsave,+xsaveopt,check
+
+       libvirt has no XML for kvm=on or vmware-cpuid-freq=on, so it cannot
+       express that string; if a cpu element were present libvirt would emit
+       its own -cpu and the two would fight. Their topology
+       (sockets=1 cores=2 threads=4) is not used here: 4 cores/1 thread is a
+       deliberate divergence, set via vcpu above. -->
+
+  <clock offset='utc'>
+    <timer name='rtc' tickpolicy='catchup'/>
+    <timer name='pit' tickpolicy='delay'/>
+    <timer name='hpet' present='no'/>
+  </clock>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <pm>
+    <suspend-to-mem enabled='no'/>
+    <suspend-to-disk enabled='no'/>
+  </pm>
+
+  <devices>
+    <emulator>/run/libvirt/nix-emulators/qemu-system-x86_64</emulator>
+
+    <controller type='pci' index='0' model='pcie-root'/>
+    <controller type='pci' index='1' model='pcie-root-port'>
+      <model name='pcie-root-port'/>
+      <target chassis='1' port='0x10'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x02' function='0x0' multifunction='on'/>
+    </controller>
+    <controller type='pci' index='2' model='pcie-root-port'>
+      <model name='pcie-root-port'/>
+      <target chassis='2' port='0x11'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x02' function='0x1'/>
+    </controller>
+    <controller type='pci' index='3' model='pcie-root-port'>
+      <model name='pcie-root-port'/>
+      <target chassis='3' port='0x12'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x02' function='0x2'/>
+    </controller>
+    <controller type='pci' index='4' model='pcie-root-port'>
+      <model name='pcie-root-port'/>
+      <target chassis='4' port='0x13'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x02' function='0x3'/>
+    </controller>
+    <controller type='pci' index='5' model='pcie-root-port'>
+      <model name='pcie-root-port'/>
+      <target chassis='5' port='0x14'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x02' function='0x4'/>
+    </controller>
+
+    <!-- macOS installs onto SATA/IDE most reliably; AHCI like OSX-KVM. -->
+    <controller type='sata' index='0'>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x1f' function='0x2'/>
+    </controller>
+
+    <!-- Boot order: OpenCore first (it chainloads the macOS volume itself),
+         then the installer, then the target disk. Without this OpenCore lands
+         unordered and OVMF boots the still-empty sda instead, then drops to
+         its built-in UEFI shell. -->
+    <!-- 1 TiB thin volume: the virtual size only, qcow2 grows with guest writes. -->
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='writeback' discard='unmap'/>
+      <source file='/var/lib/libvirt/images/macos.img'/>
+      <target dev='sda' bus='sata'/>
+      <boot order='3'/>
+    </disk>
+
+    <!-- OpenCore bootloader: does the AppleSMC/board-id work the guest needs. -->
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2' cache='writeback'/>
+      <source file='/home/tianyixia/OSX-KVM/OpenCore/OpenCore.qcow2'/>
+      <target dev='sdb' bus='sata'/>
+      <boot order='1'/>
+    </disk>
+
+    <!-- macOS recovery media (BaseSystem.img, raw). Detach after install. -->
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='raw' cache='writeback'/>
+      <source file='/home/tianyixia/OSX-KVM/BaseSystem.img'/>
+      <target dev='sdc' bus='sata'/>
+      <boot order='2'/>
+    </disk>
+
+    <!-- NIC: vmxnet3 ON BUS 0x00. Both halves matter, and the bus is the half
+         that is easy to miss.
+
+         macOS on q35 only enumerates PCI devices sitting directly on the root
+         complex (bus 0). Anything behind a PCIe root port (bus 1, 2, 3...)
+         shows up as "BAR: not mapped", IRQ 0, and is silently ignored. A NIC
+         on bus 0x01 therefore never appears in macOS, Recovery sees no network
+         and reports "an internet connection is required to install macOS".
+         Confirmed here: no DHCP lease ever appeared on virbr0.
+
+         Slot 0x03 is used because the root bus is otherwise full: 0x02.0-0x02.4
+         are pcie-root-ports, 0x1f.2 is the SATA controller, 0x07.0-0x07.7 are
+         the USB controllers the SSDT requires, and 0x00 is q35's host bridge.
+
+         Model: vmxnet3, which has a native driver in macOS
+         (AppleVmxnet3Ethernet.kext, inside IONetworkingFamily). virtio-net is
+         NOT a substitute: macOS x86 has no native driver for non-transitional
+         virtio, which is why an earlier attempt with model='virtio' also gave
+         no network.
+
+         OSX-KVM's macOS-libvirt-Catalina.xml makes the same point in its
+         comment: "Make sure you put your nic in bus 0x0 and slot 0x0y(y is
+         numeric), this will make nic built-in and apple-store work". Bus 0 also
+         gets the device flagged built-in, which iCloud/App Store sign-in wants
+         later. -->
+    <interface type='network'>
+      <mac address='52:54:00:15:0c:0a'/>
+      <source network='default'/>
+      <model type='vmxnet3'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x03' function='0x0'/>
+    </interface>
+
+    <!-- USB, wired exactly as OSX-KVM's own shipped macOS-libvirt-Catalina.xml
+         does. This is load-bearing and not cosmetic.
+
+         OpenCore/EFI/OC/ACPI/SSDT-EHCI.aml declares an ACPI table "QEMUUSB"
+         that binds the USB controllers to FIXED PCI addresses (verified by
+         disassembling the shipped .aml with iasl):
+             EH01  _ADR = 0x00070007   slot 7 function 7   (USB2.0 EHCI)
+             UHC1  _ADR = 0x00070000   slot 7 function 0
+             UHC2  _ADR = 0x00070001   slot 7 function 1
+             UHC3  _ADR = 0x00070002   slot 7 function 2
+         macOS only attaches HID through controllers at those addresses. When
+         the addresses do not match, the kernel reports
+             ACPI Exception: AE_NOT_FOUND, (SSDT: QEMUUSB) while loading table
+         and the guest boots with NO keyboard and NO mouse, while the OpenCore
+         picker still accepts input (that is firmware, not XNU). That was this
+         VM's "boots but no input" bug.
+
+         A previous revision used a single qemu-xhci controller at pci 0x2.0,
+         matching OpenCore-Boot.sh's -device qemu-xhci line. That script is the
+         OUTDATED path: it never places a controller at 00:07.x, so the SSDT's
+         table finds nothing. The shipped libvirt XML is the reference, and it
+         places ich9-ehci1/uhci1/uhci2/uhci3 on slot 0x07 as a multifunction
+         group, which is exactly what the SSDT describes.
+
+         Do not "simplify" this back to a single xHCI controller, and do not
+         change these slot/function numbers: both break guest input. If the
+         SSDT is ever regenerated (trinitronx's write-up recompiles it with
+         iasl and picks different addresses), these addresses must be changed
+         in lockstep with it. -->
+    <controller type='usb' index='0' model='ich9-ehci1'>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x07' function='0x7'/>
+    </controller>
+    <controller type='usb' index='0' model='ich9-uhci1'>
+      <master startport='0'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x07' function='0x0' multifunction='on'/>
+    </controller>
+    <controller type='usb' index='0' model='ich9-uhci2'>
+      <master startport='2'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x07' function='0x1'/>
+    </controller>
+    <controller type='usb' index='0' model='ich9-uhci3'>
+      <master startport='4'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x07' function='0x2'/>
+    </controller>
+    <input type='keyboard' bus='usb'/>
+    <input type='tablet' bus='usb'/>
+    <graphics type='spice' autoport='yes' listen='127.0.0.1'>
+      <listen type='address' address='127.0.0.1'/>
+    </graphics>
+    <video>
+      <model type='vmvga' heads='1' primary='yes'/>
+    </video>
+
+    <sound model='ich9'/>
+    <audio id='1' type='spice'/>
+
+    <serial type='pty'>
+      <target type='isa-serial' port='0'>
+        <model name='isa-serial'/>
+      </target>
+    </serial>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+
+    <!-- NVIDIA RTX 5080 Max-Q passthrough, for the NullMoth driver.
+
+         ON BUS 0x00, and that is the whole point. macOS uses ACPI-based PCIe
+         enumeration (IOPCIHPType = 0x21), and QEMU emits ACPI hot-plug methods
+         for every PCIe root port regardless of hotplug='off'. When macOS sees
+         those methods it defers enumeration to runtime, so a device behind a
+         root port never appears at boot: verified here as
+             Bus 1, device 0, function 0: 10de:2c59
+                IRQ 0, pin A
+                BAR0/BAR1/BAR5: (not mapped)
+         and no 10de vendor-id anywhere in ioreg, while ioreg did show 30 PCI
+         devices. Devices on the root complex are enumerated at boot with no
+         ACPI involvement, which is why the NIC also had to move to bus 0x00
+         (slot 0x03). Same root cause, same fix.
+
+         Slot 0x04 with multifunction='on' on function 0, so macOS sees the
+         audio function 1. Free on the root bus: 0x02.0-0x02.5 are root ports,
+         0x03 is the NIC, 0x07.0-0x07.7 are the SSDT-mandated USB controllers,
+         0x1b is audio, 0x1f is SATA/SMBus.
+
+         NO <rom bar='off'/>: macOS needs the native option ROM here. managed=yes
+         lets libvirt bind vfio itself (the card is already on vfio-pci anyway).
+
+         KEEP THE <video> ELEMENT: the virtual GPU is the console of last resort
+         if the NVIDIA driver wedges the display, and it keeps SSH reachable.
+
+         ============================================================
+         CURRENTLY DISABLED. With this attached, QEMU crashes during domain
+         startup and macOS never boots:
+
+             kvm_set_user_memory_region: KVM_SET_USER_MEMORY_REGION failed,
+               slot=13, start=0x8508000000000000, size=0x400000000: Invalid argument
+             shutting down, reason=crashed
+
+         The card is a 16 GB Resizable-BAR part (BAR 1: current size 16GB,
+         supported down to 64MB), and that start address is the 64-bit BAR base
+         misread as a 64-bit base, i.e. an address placement overflow in QEMU
+         rather than anything macOS does. Neither of these helped:
+             -cpu ...,phys-bits=40          (host is 46-bit; QEMU warned about the mismatch)
+             -global q35-pcihost.pci-hole64-size=137438953472   (confirmed present in QEMU's argv)
+
+         What IS established, and worth keeping: on bus 0x00 the card is
+         enumerated with real BARs. On bus 0x00, slot 0x04:
+             VGA controller: PCI device 10de:2c59  IRQ 10
+               BAR0: 32 bit memory at 0x80000000 [0x83ffffff]
+               BAR1: 64 bit prefetchable memory at 0x800000000 [0xbffffffff]
+         versus behind a root port (bus 0x06), where it was IRQ 0 with every BAR
+         "(not mapped)" and invisible to macOS entirely.
+
+         Re-enable only after addressing the BAR placement. The promising lever
+         is shrinking BAR1 on the host (it supports 64MB..16GB) so the BAR fits
+         the guest's 32-bit space; the alternative is disabling Resizable BAR in
+         BIOS. See DRIVER-INSTALL-NOTES.md.
+
+         The two hostdev elements to restore are recorded in
+         DRIVER-INSTALL-NOTES.md under "Re-enabling passthrough". They were:
+           host 01:00.0 -> guest bus 0x00 slot 0x04 fn 0x0  multifunction='on'
+           host 01:00.1 -> guest bus 0x00 slot 0x04 fn 0x1
+         with managed='yes' and no rom element. -->
+
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <driver name='vfio'/>
+      <source>
+        <address domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
+      </source>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x04' function='0x0' multifunction='on'/>
+    </hostdev>
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <driver name='vfio'/>
+      <source>
+        <address domain='0x0000' bus='0x01' slot='0x00' function='0x1'/>
+      </source>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x04' function='0x1'/>
+    </hostdev>
+    <memballoon model='none'/>
+  </devices>
+
+  <qemu:commandline>
+    <!-- THE 16 GiB BAR WORKAROUND UNDER TEST.
+         QEMU fails to map the GPU's 16 GiB BAR1:
+             vfio_container_dma_map(...) = -22 (Invalid argument)
+             kvm_set_user_memory_region: ... size=0x400000000 (16 GiB): Invalid argument
+         x-no-mmap makes QEMU NOT mmap the BAR and trap MMIO in userspace instead,
+         sidestepping the failing mapping path. Applied with -global (the same
+         mechanism OSX-KVM uses for its x-no-kvm-intx), because -set is processed
+         during early option parsing, before -device instances exist, and so
+         cannot reference them by id. Only vfio-pci devices are affected and this
+         domain has exactly the two GPU functions. -->
+    <!-- The CPU model, from OSX-KVM's OpenCore-Boot.sh line 37:
+             -cpu Skylake-Client,-hle,-rtm,kvm=on,vendor=GenuineIntel,
+                  +invtsc,vmware-cpuid-freq=on,+ssse3,+sse4.2,+popcnt,+avx,
+                  +aes,+xsave,+xsaveopt,check
+         Nothing in this file sets a libvirt cpu element, so this is the only
+         -cpu QEMU receives. The Penryn line (their pre-Sequoia one) wedges
+         this guest with every vCPU spinning; -hle/-rtm disable TSX.
+
+         phys-bits=40 is OUR addition, not OSX-KVM's, and it is required for the
+         GPU passthrough. The RTX 5080 exposes a large 64-bit BAR (QEMU showed a
+         24 GiB window at 0x800000000-0xbffffffff, i.e. Resizable BAR sizing).
+         Without an explicit guest physical address width, QEMU crashed the whole
+         domain on startup:
+             kvm_set_user_memory_region: KVM_SET_USER_MEMORY_REGION failed,
+               slot=13, start=0x8508000000000000, size=0x400000000: Invalid argument
+             shutting down, reason=crashed
+         The win11 dGPU domains on this host pass the same card successfully and
+         carry the equivalent setting: <maxphysaddr mode="passthrough" limit="40"/>
+         We cannot use that element because a libvirt <cpu> block would emit a
+         second, competing -cpu, so the width goes on the raw argument instead.
+         Do not drop phys-bits without re-testing GPU passthrough. -->
+    <qemu:arg value='-cpu'/>
+    <qemu:arg value='Skylake-Client,-hle,-rtm,kvm=on,vendor=GenuineIntel,+invtsc,vmware-cpuid-freq=on,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,check'/>
+    <!-- AppleSMC: OpenCore needs it to expose the SMC keys macOS reads. -->
+    <qemu:arg value='-device'/>
+    <qemu:arg value='isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc'/>
+    <!-- Board identity macOS accepts with a discrete GPU (the model the
+         NullMoth driver was tested on). -->
+    <qemu:arg value='-smbios'/>
+    <qemu:arg value='type=2'/>
+  </qemu:commandline>
+</domain>

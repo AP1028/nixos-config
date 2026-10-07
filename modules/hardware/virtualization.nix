@@ -82,6 +82,12 @@
           definition = ../../vms/win11-virtio-dgpu-nvme.xml;
           active = false;
         }
+        # macOS, for the NullMoth NVIDIA driver work. No passthrough
+        # yet: it boots on QEMU's virtual VGA, which is enough to install.
+        {
+          definition = ../../vms/macos/macos.xml;
+          active = false;
+        }
       ];
       networks = [
         {

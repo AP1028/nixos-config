@@ -21,6 +21,69 @@
     SILENT=false
     case "''${1:-}" in -s) SILENT=true; shift;; esac
 
+    # ── Resizable BAR sizing ─────────────────────────────────────
+    # BAR1 on the dGPU is a Resizable BAR. A large one breaks VM passthrough:
+    # at 8 GiB and above the guest firmware places it on a non-canonical
+    # address (0x8508000000000000 — a 32-bit base written into the high dword
+    # of a 64-bit BAR), which QEMU/KVM reject, so the domain either fails to
+    # start or the guest ends up with no usable aperture. 4 GiB is the largest
+    # size that still places correctly. Shrink for the VM, restore max for host.
+    #
+    # resource1_resize takes a BIT INDEX, not a byte count:
+    #   0=1MB 1=2MB 2=4MB ... 10=1GiB 11=2GiB 12=4GiB 13=8GiB 14=16GiB
+    # so the size in bytes is 2^(idx+20).
+    BAR_IDX_VFIO=12   # 4 GiB — largest size that passes through correctly
+    BAR_IDX_HOST=14   # 16 GiB — the maximum this card advertises
+
+    # BAR1 size in bytes for a BDF (0 if unassigned or no resizable BAR1)
+    bar1_bytes() {
+        local bdf="$1" vals
+        vals=$(sed -n '2p' "/sys/bus/pci/devices/$bdf/resource" 2>/dev/null) || { echo 0; return; }
+        # shellcheck disable=SC2086
+        set -- $vals
+        [ -n "''${1:-}" ] && [ -n "''${2:-}" ] || { echo 0; return; }
+        local n=$(( $2 - $1 + 1 ))
+        [ "$n" -gt 0 ] 2>/dev/null && echo "$n" || echo 0
+    }
+
+    # Program BAR1 to bit-index $2. The device MUST be unbound or this is EBUSY.
+    set_bar1() {
+        local dev="$1" idx="$2" want="$3"
+        local f="/sys/bus/pci/devices/$dev/resource1_resize"
+        [ -e "$f" ] || return 0            # no resizable BAR1 (e.g. audio fn)
+        local want_b=$(( 1 << (idx + 20) ))
+        local before after
+        before=$(bar1_bytes "$dev")
+        if [ "$before" = "$want_b" ]; then
+            ok "$dev BAR1 already $want ($(( before / 1048576 )) MiB)"
+            return 0
+        fi
+        if ! printf '%d\n' "$idx" > "$f" 2>/dev/null; then
+            warn "$dev could not set BAR1 to $want (device must be unbound)"
+            return 0
+        fi
+        after=$(bar1_bytes "$dev")
+        ok "$dev BAR1 $(( before / 1048576 )) MiB -> $(( after / 1048576 )) MiB ($want)"
+    }
+
+    # Ensure BAR1 is at the VM size, releasing the device if it is bound.
+    ensure_bar1_for_vfio() {
+        local dev="$1"
+        local f="/sys/bus/pci/devices/$dev/resource1_resize"
+        [ -e "$f" ] || return 0
+        [ "$(bar1_bytes "$dev")" = "$(( 1 << (BAR_IDX_VFIO + 20) ))" ] && return 0
+        local drv
+        drv=$(readlink "/sys/bus/pci/devices/$dev/driver" 2>/dev/null | xargs basename 2>/dev/null || echo none)
+        echo "" > "/sys/bus/pci/devices/$dev/driver_override" 2>/dev/null || true
+        if [ "$drv" != "none" ]; then
+            echo "$dev" > "/sys/bus/pci/drivers/$drv/unbind" 2>/dev/null || true
+            sleep 0.5
+        fi
+        set_bar1 "$dev" "$BAR_IDX_VFIO" "4 GiB for passthrough"
+        echo "vfio-pci" > "/sys/bus/pci/devices/$dev/driver_override" 2>/dev/null || true
+        echo "$dev" > /sys/bus/pci/drivers_probe 2>/dev/null || true
+    }
+
     # ── Cardwire: pause the GPU manager for the handoff ──────────
     # cardwired holds /dev/nvidia* open for its eBPF LSM hooks, and that LSM
     # answers ENOENT on GPU device/sysfs paths. Left running it both pins the
@@ -158,9 +221,14 @@
         [ "$drv" != "vfio-pci" ] && all_vfio=false
     done
     if $all_vfio; then
+        # Already bound — but BAR1 may still be at the host size (e.g. after a
+        # gpu-to-host that was interrupted), which breaks passthrough. Enforce it.
+        for dev in "''${ALL_DEVS[@]}"; do
+            ensure_bar1_for_vfio "$dev"
+        done
         if $SILENT; then exit 0; fi
         green ""
-        green "All NVIDIA functions are already bound to vfio-pci. Nothing to do."
+        green "All NVIDIA functions are already bound to vfio-pci."
         exit 0
     fi
 
@@ -371,15 +439,15 @@
     for dev in "''${ALL_DEVS[@]}"; do
         info "Processing $dev..."
 
-        # Set driver_override
-        if ! echo "vfio-pci" > "/sys/bus/pci/devices/$dev/driver_override" 2>/dev/null; then
-            fail "Could not set driver_override for $dev"
-            continue
-        fi
+        # Release the device FIRST. driver_override must be cleared before the
+        # unbind: while it names a driver the kernel re-binds the device
+        # immediately, the unbind silently fails, and the BAR resize below then
+        # returns EBUSY.
+        echo "" > "/sys/bus/pci/devices/$dev/driver_override" 2>/dev/null || true
 
         # Unbind from current driver
         cur_drv=$(readlink "/sys/bus/pci/devices/$dev/driver" 2>/dev/null | xargs basename 2>/dev/null || echo "")
-        if [ -n "$cur_drv" ] && [ "$cur_drv" != "vfio-pci" ]; then
+        if [ -n "$cur_drv" ]; then
             # Final safety check: unbinding a busy nvidia driver hangs the kernel
             if [ "$cur_drv" = "nvidia" ]; then
                 remaining=$(gpu_holders)
@@ -394,9 +462,17 @@
                 fi
             fi
             echo "$dev" > "/sys/bus/pci/drivers/$cur_drv/unbind" 2>/dev/null || true
+            sleep 0.5
         fi
 
-        # Trigger re-probe
+        # BAR1 must be programmed while the device is unbound
+        set_bar1 "$dev" "$BAR_IDX_VFIO" "4 GiB for passthrough"
+
+        # Pin to vfio-pci and probe
+        if ! echo "vfio-pci" > "/sys/bus/pci/devices/$dev/driver_override" 2>/dev/null; then
+            fail "Could not set driver_override for $dev"
+            continue
+        fi
         echo "$dev" > /sys/bus/pci/drivers_probe 2>/dev/null || true
     done
 
@@ -566,6 +642,43 @@
         fi
     done
 
+    # ── Resizable BAR sizing (mirror of gpu-to-vfio) ─────────────
+    # gpu-to-vfio shrinks BAR1 to 4 GiB because a larger one breaks guest
+    # passthrough. Restore the maximum here so the host gets the full aperture
+    # back. resource1_resize takes a BIT INDEX: 12=4GiB, 14=16GiB.
+    BAR_IDX_VFIO=12   # 4 GiB
+    BAR_IDX_HOST=14   # 16 GiB — the maximum this card advertises
+
+    bar1_bytes() {
+        local bdf="$1" vals
+        vals=$(sed -n '2p' "/sys/bus/pci/devices/$bdf/resource" 2>/dev/null) || { echo 0; return; }
+        # shellcheck disable=SC2086
+        set -- $vals
+        [ -n "''${1:-}" ] && [ -n "''${2:-}" ] || { echo 0; return; }
+        local n=$(( $2 - $1 + 1 ))
+        [ "$n" -gt 0 ] 2>/dev/null && echo "$n" || echo 0
+    }
+
+    # Program BAR1 to bit-index $2. The device MUST be unbound or this is EBUSY.
+    set_bar1() {
+        local dev="$1" idx="$2" want="$3"
+        local f="/sys/bus/pci/devices/$dev/resource1_resize"
+        [ -e "$f" ] || return 0            # no resizable BAR1 (e.g. audio fn)
+        local want_b=$(( 1 << (idx + 20) ))
+        local before after
+        before=$(bar1_bytes "$dev")
+        if [ "$before" = "$want_b" ]; then
+            ok "$dev BAR1 already $want ($(( before / 1048576 )) MiB)"
+            return 0
+        fi
+        if ! printf '%d\n' "$idx" > "$f" 2>/dev/null; then
+            warn "$dev could not set BAR1 to $want (device must be unbound)"
+            return 0
+        fi
+        after=$(bar1_bytes "$dev")
+        ok "$dev BAR1 $(( before / 1048576 )) MiB -> $(( after / 1048576 )) MiB ($want)"
+    }
+
     # ── Clear driver_override, unbind from vfio-pci, re-probe ────
     info "Returning GPU to the nvidia host driver..."
 
@@ -583,11 +696,15 @@
         # Clear driver_override
         echo "" > "/sys/bus/pci/devices/$dev/driver_override" 2>/dev/null || true
 
-        # Unbind from vfio-pci
+        # Unbind from whatever driver holds it (normally vfio-pci)
         cur_drv=$(readlink "/sys/bus/pci/devices/$dev/driver" 2>/dev/null | xargs basename 2>/dev/null || echo "")
-        if [ "$cur_drv" = "vfio-pci" ]; then
-            echo "$dev" > /sys/bus/pci/drivers/vfio-pci/unbind 2>/dev/null || true
+        if [ -n "$cur_drv" ]; then
+            echo "$dev" > "/sys/bus/pci/drivers/$cur_drv/unbind" 2>/dev/null || true
+            sleep 0.5
         fi
+
+        # Restore BAR1 to the maximum while the device is unbound
+        set_bar1 "$dev" "$BAR_IDX_HOST" "max for host"
 
         # Trigger re-probe
         echo "$dev" > /sys/bus/pci/drivers_probe 2>/dev/null || true
@@ -693,6 +810,27 @@
     cyan "═════════════════════════════════════════════"
     echo ""
 
+    # ── Resizable BAR helper ─────────────────────────────────────
+    # BAR1 is resized for passthrough (4 GiB) and restored for the host
+    # (16 GiB) by gpu-to-vfio / gpu-to-host. Show the current size.
+    # resource1_resize uses a bit index, so size = 2^(idx+20) bytes.
+    bar1_bytes() {
+        local bdf="$1" vals
+        vals=$(sed -n '2p' "/sys/bus/pci/devices/$bdf/resource" 2>/dev/null) || { echo 0; return; }
+        # shellcheck disable=SC2086
+        set -- $vals
+        [ -n "''${1:-}" ] && [ -n "''${2:-}" ] || { echo 0; return; }
+        local n=$(( $2 - $1 + 1 ))
+        [ "$n" -gt 0 ] 2>/dev/null && echo "$n" || echo 0
+    }
+    bar1_human() {
+        local b="$1"
+        if   [ "$b" -ge 1073741824 ]; then echo "$(( b / 1073741824 )) GiB"
+        elif [ "$b" -ge 1048576 ];    then echo "$(( b / 1048576 )) MiB"
+        elif [ "$b" -gt 0 ];          then echo "$(( b / 1024 )) KiB"
+        else echo "unassigned"; fi
+    }
+
     # ── NVIDIA PCI devices ───────────────────────────────────────
     echo "── NVIDIA dGPU PCI Devices ──"
     echo ""
@@ -718,6 +856,16 @@
         printf "    %s\n" "$desc"
         printf "    driver:       ''${drv_color}%s\e[0m\n" "$drv"
         printf "    iommu_group:  %s\n" "$iommu"
+
+        # Resizable BAR1: 4 GiB = passthrough size, 16 GiB = host max
+        if [ -e "/sys/bus/pci/devices/$bdf/resource1_resize" ]; then
+            bar_sz=$(bar1_human "$(bar1_bytes "$bdf")")
+            case "$bar_sz" in
+                "4 GiB")  printf "    BAR1:         \e[35m%s\e[0m  (passthrough size)\n" "$bar_sz" ;;
+                "16 GiB") printf "    BAR1:         \e[32m%s\e[0m  (host maximum)\n" "$bar_sz" ;;
+                *)        printf "    BAR1:         %s\n" "$bar_sz" ;;
+            esac
+        fi
 
         # Check runtime PM status
         pm_status=$(cat "/sys/bus/pci/devices/$bdf/power/runtime_status" 2>/dev/null || echo "unknown")
