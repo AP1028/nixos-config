@@ -459,6 +459,56 @@ without a reboot — currently a reboot is the only reset.
 land on the console/scanout range. Reserving that range in the allocator rather
 than detecting collisions after the fact would avoid the leak entirely.
 
+## Finding 10 — the driver's BAR table depends on IODeviceMemory descriptors, so a >4G BAR silently disables it
+
+**Severity: medium (breaks loudly, but by a non-obvious route).** On a system that
+hands the GPU a large Resizable BAR, the driver maps nothing and fails outright.
+
+macOS assigns large BARs correctly — 2 GiB and 4 GiB both landed at
+`0x1000000000` per QEMU's view of the config space — and the ReBAR capability reads
+back fine (`bar1: Resizable BAR capability @0x134 says BAR1 = 4096 MB`). What
+macOS does **not** do is publish an `IODeviceMemory` descriptor for a BAR placed
+**above 4G**. Below 4G it does; above 4G it does not. The rule is the address, not
+the size.
+
+Both `readBARs()` and `nvrmDiscoverBar1()` derive everything from those
+descriptors:
+
+```c
+unsigned count = fPCI->getDeviceMemoryCount();
+... IODeviceMemory *dm = fPCI->getDeviceMemoryWithIndex(idx); ...
+        nv->bars[curNvBar].cpu_address = phys;
+        nv->bars[curNvBar].size        = size;
+```
+
+```c
+static void nvrmDiscoverBar1(IOService *provider, NvU64 *length, NvU64 *base) {
+    ... if (!memory || memory->getLength() < 0x10000000ull) continue;
+        *length = memory->getLength(); ...
+```
+
+so with no descriptor:
+
+* `bars[NV_GPU_BAR_INDEX_FB]` silently becomes **BAR3** (32 MB, non-VRAM)
+* `rm_init_adapter` fails on `kbusVerifyBar2` and `auto-go` reports `go(2) failed`
+* `fBarLen` is 0, so the grant budget is 0 and Metal exposes **no devices at all**
+* `placeLargeBar1()` does not rescue it — it requires a bridge parent and logs
+  `bar1: parent root port not found` when the GPU is on the root bus (which it must
+  be, per Finding 2's sibling issue: macOS will not enumerate a device behind a
+  PCIe root port)
+
+Net: **a bigger BAR is strictly worse than a small one on this driver**, because a
+small BAR is at least described.
+
+**Suggested hardening, since a driver cannot rely on descriptor publication:** read
+the BAR *size* from the Resizable BAR capability (which works at every size, as the
+log shows) and fall back to probing the BAR registers when no descriptor matches —
+`IOPCIDevice::configRead32(0x10 + 4*bar)` gives the address macOS programmed even
+when no `IODeviceMemory` exists. That would make a >4G BAR work rather than fail.
+
+**For users, meanwhile:** 256 MB is the only value that works. Anything larger
+produces no display and no Metal.
+
 ## Appendix for the author — the full runtime lever inventory
 
 Collected while working on this, in case it saves time. Everything below is

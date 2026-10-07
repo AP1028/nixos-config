@@ -51,10 +51,12 @@ removes.)
 
 This is the single most important finding, and the least obvious.
 
-macOS's `IOPCIFamily` will **not assign** a Resizable BAR larger than 256 MB. At
-1 GiB or 4 GiB it lists BAR1 in the device's `reg` property (so it knows the BAR
-exists) but never in `assigned-addresses`, so **no `IODeviceMemory` descriptor is
-created**:
+macOS's `IOPCIFamily` will not publish an `IODeviceMemory` **descriptor** for a
+Resizable BAR placed **above 4G**, and the driver's BAR table is built from those
+descriptors. (An earlier revision said macOS "will not assign" a large BAR — that
+was wrong, see *Why a large BAR cannot work here* below: it assigns them fine.)
+At 1 GiB or 4 GiB it lists BAR1 in the device's `reg` property (so it knows the BAR
+exists) but never in `assigned-addresses`, so **no descriptor is created**:
 
 ```
 reg            : ... 14200004 20000000 ...     <- BAR1 is present
@@ -548,6 +550,91 @@ means **no process gets Metal at all** — not games, Core ML or OpenCL either. 
 is an awkward all-or-nothing: working desktop XOR GPU compute. On a machine where
 macOS grants the large BAR the README asks for, the boot-hold wins its race and
 WindowServer composites through NVAccel, which is the intended behaviour.
+
+## Why a large BAR cannot work here — measured, and correcting an earlier claim
+
+**An earlier revision of this document said macOS "will not assign a Resizable BAR
+larger than 256 MB". That is wrong.** macOS *does* assign large BARs — it just
+never publishes a descriptor for them, and the driver's entire BAR table is built
+from those descriptors.
+
+### macOS assigns a big BAR happily
+
+Host BAR1 raised, VM booted, guest checked (QEMU's `info pci`, i.e. the config
+space macOS programmed):
+
+| host BAR1 | macOS assigned | where |
+|---|---|---|
+| 256 MB | ✅ `0x90000000` | **below 4G** |
+| 2 GiB | ✅ `0x1000000000` | above 4G |
+| 4 GiB | ✅ `0x1000000000` | above 4G |
+
+The ReBAR capability is also read correctly at every size
+(`bar1: Resizable BAR capability @0x134 says BAR1 = 2048 MB` / `4096 MB`).
+
+### But no descriptor is published for a BAR placed above 4G
+
+`readBARs()` builds the driver's whole table from `getDeviceMemoryWithIndex()`
+descriptors, and it logs every descriptor it cannot match. At 2 GiB and 4 GiB the
+list contains no large aperture at all:
+
+```
+aperture idx 1 phys 0x10 size 0x4: no BAR register matches        (config-space residue)
+aperture idx 3 phys 0x6000 size 0x80: no BAR register matches     (I/O BAR5)
+aperture idx 4 phys 0x84000000 size 0x80000: no BAR register matches  (audio function)
+BARS bar0@0x10:0x80000000+0x4000000 bar1@0x1c:0xf0000000+0x2000000
+                                                  ^ BAR3 again, BAR1 absent
+```
+
+The rule is **address, not size**: below-4G placement yields a descriptor, above-4G
+placement does not. Consequences chain immediately:
+
+* `bars[NV_GPU_BAR_INDEX_FB]` falls back to **BAR3** (a 32 MB non-VRAM window)
+* the RM is handed that as its VRAM aperture → `kbusVerifyBar2` → `go(2) failed`
+* `nvrmDiscoverBar1()` also reads descriptors, so **`fBarLen` is 0** → `budget: 0`
+* the result is **worse than 256 MB**: no display, no Metal, `Metal devices: 0`
+
+`placeLargeBar1()` also failed at both sizes with `bar1: parent root port not
+found` — we are on bus 0 by necessity (section 2), and that function requires a
+bridge parent. So the driver cannot place it itself either.
+
+### The budget therefore cannot be raised
+
+```c
+const SInt64 budget = (fBarLen >= (4ull << 30) ? fBarLen / 2 : NVRM_VRAM_BAR1_BUDGET);
+```
+
+`fBarLen` comes from a descriptor, descriptors do not appear above 4G, and a
+≥4 GiB BAR cannot be placed below 4G. **192 MB is a hard ceiling here**, and the
+gate threshold (4 GiB) sits exactly where macOS stops publishing.
+
+### What the QEMU side is *not* to blame for
+
+Measured from the running domain — the room above 4G already exists and is ample:
+
+```
+dev: q35-pcihost
+    pci-hole64-size   = 34359738368 (32 GiB)
+    below-4g-mem-size =  2147483648 (2 GiB)
+    above-4g-mem-size = 32212254720 (30 GiB)
+```
+
+So patching QEMU's hole size would fix nothing — the BAR is assigned, in the hole,
+and the missing piece is macOS's descriptor. Likewise OpenCore's `ResizeGpuBars`
+only affects the **host** firmware and has no effect on a passed-through device
+(section 1).
+
+### The one avenue that could still work
+
+If macOS could be made to publish descriptors for above-4G BARs, a large BAR would
+work and the budget would jump to `fBarLen/2` (2 GiB at a 4 GiB BAR, 4 GiB at 8).
+The plausible lever is **ACPI**: macOS learns its MMIO windows from the host
+bridge's `_CRS`, so an **OpenCore ACPI patch/SSDT that declares the above-4G window
+explicitly** might make IOPCIFamily publish the descriptor. That is untested, and
+it is the only remaining path — everything on the QEMU side is already correct.
+
+**Until then: keep BAR1 at 256 MB.** Larger values do not degrade gracefully, they
+break the driver completely (no display, no Metal).
 
 ## Testing methodology (so results are comparable)
 
