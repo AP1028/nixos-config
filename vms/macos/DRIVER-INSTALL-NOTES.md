@@ -311,11 +311,83 @@ BAR1 problem in section 1 — no need to look further.
 
 ---
 
-## WindowServer must NOT be given Metal — and the allow-list order bug
+## Why the desktop is not on Metal — and the allow-list order bug
+
+**The desktop IS supposed to run on Metal.** This is not a design decision on the
+driver's part — the README is explicit: *"your NVIDIA card drives the desktop"*,
+*"NVAccel the accelerator WindowServer composites through"*, and *"the AMFI args
+let WindowServer load the driver bundle"*. It fails here for a specific,
+identifiable reason.
+
+### Root cause: the 40 s boot-hold loses a race against the 100 s auto-go
+
+NVRM deliberately holds the IORegistry busy so WindowServer's `IOKitWaitQuiet`
+blocks, which is what sequences WindowServer to start *after* the driver is
+armed. The hold has a **fixed 40 s cap**, but the schedule it races is **10 s or
+100 s** depending on `bar1Placed` (`kexts/NVRM/NVRM.cpp`, ~line 328):
+
+```c
+clock_interval_to_deadline(40000, kMillisecondScale, &dl);          // fixed 40 s
+setProperty("nvrm-autogo", bar1Placed ? "scheduled +10 s" : "scheduled +100 s");
+```
+
+| `bar1Placed` | auto-go | vs 40 s | outcome |
+|---|---|---|---|
+| true | `+10 s` | 10 < 40 | hold outlives bring-up → WindowServer waits → **Metal desktop** |
+| false (ours) | `+100 s` | 100 > 40 | **cap fires first** → WindowServer starts early → no Metal desktop |
+
+Ours is the second row, because macOS assigns only a **256 MB** BAR1 so
+`placeLargeBar1()` returns false. The driver's own log states the consequence:
+
+```
+auto-go: go(2) in 100000 ms on its own thread (BAR1 not placed); registry held busy until the display is armed (cap 40 s)
+boot hold RELEASED by the 40 s cap
+```
+
+and `bootHoldCap()` predicts it: *"bring-up not finished, NOT arming"* / *"the
+bring-up will not arm with WindowServer up"*.
+
+**So the same BAR limitation that makes the driver run at all is what keeps the
+desktop off Metal.** Larger BAR sizes fail outright (`kbusVerifyBar2_GB202` /
+`NV_ERR_MEMORY_ERROR`), 256 MB is the only value macOS accepts — and that is
+exactly the case the 40 s cap cannot accommodate. There is no configuration of
+this VM that satisfies the README's `ResizeGpuBars=13` /
+`ResizeAppleGpuBars=-1` requirement.
+
+**Recovery does not work either.** Restarting WindowServer by hand so it picks up
+the driver mid-session hands WindowServer a Metal path it cannot sustain, and the
+UI freezes — the cursor still moves, because that is NVRMFB's hardware plane, not
+WindowServer's. That is the freeze described below.
+
+**The fix belongs upstream** — derive the cap from the schedule, e.g.
+`clock_interval_to_deadline(fAutoGoSettleMs + 40000, ...)`. It is not patchable
+here: there is still no published build path for `NVRM.kext`. Full write-up in
+[UPSTREAM-REPORT.md](UPSTREAM-REPORT.md).
+
+### Consequence, and why the daemon denies WindowServer
+
+`debug.nvaccelfb` is a **global** gate — it decides whether the accelerator
+publishes `MetalPluginName` at all. So it is all-or-nothing:
+
+| | desktop | Metal for apps/games |
+|---|---|---|
+| `nvaccelfb=0` (what we run) | works | **none at all** — `MTLCopyAllDevices() -> 0` |
+| `nvaccelfb=1` | freezes on a WindowServer restart | Metal 3 |
+
+Arming is also a **one-way door until a reboot**: `sysctl -w debug.nvaccelfb=0`
+provably does nothing (`1 -> 1`); the driver documents this as *"a reboot takes it
+away again"*. Arming additionally sets `IOGLBundleName=AppleMetalOpenGLRenderer`
+globally, which redirects the GL renderer and which excluding WindowServer from
+the Metal plugin does not necessarily prevent.
+
+So the daemon leaves Metal **off** by default, and the `-WindowServer` deny is
+what makes its own WindowServer restart safe — without it, that restart is exactly
+the freeze above.
+
+### The allow-list order bug (separate, upstream)
 
 **Symptom:** after arming Metal, the desktop **freezes** while the **cursor still
-moves**. The cursor moves because it is NVRMFB's hardware plane, not
-WindowServer's: the compositor has stopped updating, the cursor has not.
+moves**.
 
 **Cause — the shipped `nvmtl-allow.txt` makes its own WindowServer rule dead
 code.** `nvmtl_allowed()` in `plugin/NVMTLDevice.m` stops at the **first matching
@@ -369,11 +441,16 @@ not there yet.
 
 ## Known limitations
 
-* **WindowServer does not get Metal.** `/Library/GPUBundles/nvmtl-allow.txt` is a
-  process allow-list that reads `# rung 3: everyone; -Name denies` / `*` /
-  `!WindowServer`. Applications, games and compute get Metal 3; **desktop
-  compositing does not**. The driver's own label suggests this is an incremental
-  maturity stage rather than a permanent restriction.
+* **No Metal at all in this configuration — not for apps either.** The desktop is
+  *supposed* to run on Metal (see the section above), but the same 256 MB BAR that
+  makes the driver run forces the 100 s auto-go path, which loses the race against
+  the fixed 40 s boot-hold, so WindowServer starts before the driver is ready. As a
+  result `debug.nvaccelfb` must stay off, and that gate is global:
+  `MTLCopyAllDevices() -> 0` and `MTLCreateSystemDefaultDevice() -> nil` for every
+  process. **Games, Core ML, MPS and OpenCL therefore get no GPU acceleration** —
+  the driver's display path works, its compute path is unreachable. This is a
+  consequence of the VM's BAR constraint, not a maturity stage; the fix is
+  upstream ([UPSTREAM-REPORT.md](UPSTREAM-REPORT.md)).
 * **The dynamic wallpaper cannot render.** macOS 15's stock wallpaper is a
   *video* (`.wallpapers/Sequoia Sunrise/Sequoia Sunrise.mov`), which needs Metal,
   so the desktop is plain white. Use a **static** wallpaper instead:
