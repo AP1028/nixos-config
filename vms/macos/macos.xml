@@ -16,8 +16,8 @@
   </metadata>
 
   <!-- 16 GiB (larger than OSX-KVM's 4096 default, deliberate). -->
-  <memory unit='KiB'>16777216</memory>
-  <currentMemory unit='KiB'>16777216</currentMemory>
+  <memory unit='KiB'>33554432</memory>
+  <currentMemory unit='KiB'>33554432</currentMemory>
   <!-- No <memoryBacking><locked/></memoryBacking>: it was here before and only
        raised the host commit; OSX-KVM does not lock the guest's RAM. -->
   <!-- 4 cores / 1 socket / 1 thread. The CPU *model* is not set here: it comes
@@ -25,7 +25,7 @@
        file, which mirrors OpenCore-Boot.sh line 37 verbatim. libvirt cannot
        express that string (kvm=on and vmware-cpuid-freq=on have no XML
        equivalent), so libvirt must not emit a -cpu of its own. -->
-  <vcpu placement='static'>4</vcpu>
+  <vcpu placement='static'>12</vcpu>
 
   <os>
     <type arch='x86_64' machine='pc-q35-10.2'>hvm</type>
@@ -106,15 +106,15 @@
     </controller>
 
     <!-- Boot order: OpenCore first (it chainloads the macOS volume itself),
-         then the installer, then the target disk. Without this OpenCore lands
-         unordered and OVMF boots the still-empty sda instead, then drops to
-         its built-in UEFI shell. -->
+         then the target disk. Without this OpenCore lands unordered and OVMF
+         boots the disk with the lowest index, then drops to its built-in UEFI
+         shell. -->
     <!-- 1 TiB thin volume: the virtual size only, qcow2 grows with guest writes. -->
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='writeback' discard='unmap'/>
       <source file='/var/lib/libvirt/images/macos.img'/>
       <target dev='sda' bus='sata'/>
-      <boot order='3'/>
+      <boot order='2'/>
     </disk>
 
     <!-- OpenCore bootloader: does the AppleSMC/board-id work the guest needs. -->
@@ -125,13 +125,11 @@
       <boot order='1'/>
     </disk>
 
-    <!-- macOS recovery media (BaseSystem.img, raw). Detach after install. -->
-    <disk type='file' device='disk'>
-      <driver name='qemu' type='raw' cache='writeback'/>
-      <source file='/home/tianyixia/OSX-KVM/BaseSystem.img'/>
-      <target dev='sdc' bus='sata'/>
-      <boot order='2'/>
-    </disk>
+    <!-- The macOS recovery media (BaseSystem.img) was attached here as sdc.
+         It is DETACHED now that macOS is installed: it was the "macOS Base
+         System" entry in the OpenCore picker. The image is untouched at
+         /home/tianyixia/OSX-KVM/BaseSystem.img if it is ever needed again
+         (re-add as a raw disk on bus='sata' and give it a boot order). -->
 
     <!-- NIC: vmxnet3 ON BUS 0x00. Both halves matter, and the bus is the half
          that is easy to miss.
@@ -194,6 +192,18 @@
          SSDT is ever regenerated (trinitronx's write-up recompiles it with
          iasl and picks different addresses), these addresses must be changed
          in lockstep with it. -->
+    <!-- USB 3 (XHCI) controller. macOS 15 has no UHCI driver, so the
+         ich9-uhci* companions below never get driven and any full/low-speed
+         passed-through device is invisible (the emulated QEMU keyboard works
+         only because it is high-speed on the EHCI). XHCI handles all speeds
+         with no companion controller, so passed-through devices go here.
+         Note: USBPorts.kext in the OpenCore ESP matches ACPI names
+         EH01/UHC1-3, which this guest's ACPI does not declare, so that map
+         matches nothing. -->
+    <controller type='usb' index='1' model='qemu-xhci'>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x06' function='0x0'/>
+    </controller>
+
     <controller type='usb' index='0' model='ich9-ehci1'>
       <address type='pci' domain='0x0000' bus='0x00' slot='0x07' function='0x7'/>
     </controller>
@@ -211,24 +221,50 @@
     </controller>
     <input type='keyboard' bus='usb'/>
     <input type='tablet' bus='usb'/>
+
+    <!-- Host USB keyboard passed through (JZ-2.4G wireless, 3151:4011).
+         Needed because <video> is type='none', so the SPICE console has no
+         display and cannot deliver keystrokes. This gives the guest a real
+         keyboard for the OpenCore picker.
+         NOTE: the HOST loses this keyboard while the VM holds it; the laptop's
+         built-in PS/2 keyboard is unaffected (PS/2 cannot be passed through).
+         Remove this hostdev (or `virsh detach-device`) to give it back. -->
+    <hostdev mode='subsystem' type='usb' managed='yes'>
+      <source>
+        <vendor id='0x3151'/>
+        <product id='0x4011'/>
+      </source>
+      <address type='usb' bus='1' port='1'/>
+    </hostdev>
+    <!-- Logitech G502 SE HERO gaming mouse -->
+    <hostdev mode='subsystem' type='usb' managed='yes'>
+      <source>
+        <vendor id='0x046d'/>
+        <product id='0xc08b'/>
+      </source>
+      <address type='usb' bus='1' port='2'/>
+    </hostdev>
     <graphics type='spice' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
     </graphics>
     <video>
-      <model type='vmvga' heads='1' primary='yes'/>
+      <model type='none'/>
     </video>
 
     <sound model='ich9'/>
     <audio id='1' type='spice'/>
 
-    <serial type='pty'>
+    <!-- TEMPORARY, for capturing the kernel kprintf trace (the NullMoth driver
+         logs with kprintf, which never reaches the unified log). QEMU writes the
+         guest's COM1 to a file so it can be read from the host without guest
+         sudo. Requires debug=0x8 serial=1 in the guest boot-args.
+         Restore type='pty' (and the <console>) when finished. -->
+    <serial type='file'>
+      <source path='/tmp/macos-serial.log' append='off'/>
       <target type='isa-serial' port='0'>
         <model name='isa-serial'/>
       </target>
     </serial>
-    <console type='pty'>
-      <target type='serial' port='0'/>
-    </console>
 
     <!-- NVIDIA RTX 5080 Max-Q passthrough, for the NullMoth driver.
 
@@ -253,12 +289,23 @@
          NO <rom bar='off'/>: macOS needs the native option ROM here. managed=yes
          lets libvirt bind vfio itself (the card is already on vfio-pci anyway).
 
-         KEEP THE <video> ELEMENT: the virtual GPU is the console of last resort
-         if the NVIDIA driver wedges the display, and it keeps SSH reachable.
+         <video> IS DISABLED (type='none'). The emulated GPU stopped being a
+         usable console as soon as the NullMoth driver loaded: the guest ends up
+         with ZERO IOFramebuffer/IODisplay instances and the screen freezes on
+         the boot frame. It was also competing with NVRMFB for display index 0,
+         which is what the driver's Kernel->Block of IONDRVSupport is meant to
+         prevent. Removing the emulated GPU leaves the NVIDIA as the only
+         display device, so NVRMFB can own index 0.
+         SSH is unaffected, so the guest stays reachable either way.
+         Restore by setting <model type='vmvga' heads='1' primary='yes'/>.
+
+         The 16 GiB BAR crash below is FIXED and no longer applies: the host
+         BAR is resized to 4 GiB by gpu-to-vfio before the VM starts, so the
+         card now passes through with a clean, canonical BAR.
 
          ============================================================
-         CURRENTLY DISABLED. With this attached, QEMU crashes during domain
-         startup and macOS never boots:
+         HISTORICAL, kept for the record. With a 16 GiB BAR attached, QEMU
+         crashed during domain startup and macOS never booted:
 
              kvm_set_user_memory_region: KVM_SET_USER_MEMORY_REGION failed,
                slot=13, start=0x8508000000000000, size=0x400000000: Invalid argument

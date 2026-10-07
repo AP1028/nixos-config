@@ -191,22 +191,298 @@ enumerates the card (`vendor-id de100000`, `device-id 0x2c59`).
 
 Kept: `/run/libvirt/nix-ovmf/edk2-x86_64-code.fd` + `edk2-i386-vars.fd`.
 
+## RESOLVED — the NullMoth driver now runs
+
+**The single requirement is that BAR1 be 256 MB.** Not a compromise — the value
+macOS forces. `gpu-to-vfio` now sets `BAR_IDX_VFIO=8` (256 MB); do not raise it
+"for bandwidth".
+
+### Why 256 MB, and why every larger size failed
+
+macOS's `IOPCIFamily` will **not assign** a Resizable BAR larger than that. It
+lists BAR1 in the device's `reg` property (it knows the BAR exists) but never in
+`assigned-addresses`, so no `IODeviceMemory` descriptor is created. Measured,
+identical at 1 GiB and 4 GiB:
+
+```
+reg            : ... 14200004 20000000 ...     <- BAR1 present
+assigned-addrs : BAR0, BAR3, BAR5, ROM         <- BAR1 absent
+nvrm-bars      : bar0@0x10:... bar1@0x1c:...   <- PCI BAR3, not BAR1
+```
+
+The NullMoth driver's `readBARs()` fills `bars[]` from the assigned apertures, so
+`bars[NV_GPU_BAR_INDEX_FB]` became **PCI BAR3 (32 MB @ 0xf0000000)** — a non-VRAM
+window. The driver hands that to the RM as `fb_address`/`fb_size`, and RM's own
+assertion fires (captured over the serial console):
+
+```
+NVRM: GPU0 kbusVerifyBar2_GB202: MMUTest BAR0 window offset 0x70e000 returned garbage 0x0
+NVRM: GPU0 nvAssertOkFailedNoLog: Assertion failed: Generic memory error
+      [NV_ERR_MEMORY_ERROR] (0x00000072) returned from kbusVerifyBar2_HAL(...)
+      @ kern_bus_gm107.c:362
+NVRM-xnu: rm_init_adapter -> FAILED
+NVRM-xnu: auto-go: go(2) -> 0xe00002bc (fPassDone 1)
+```
+
+→ no `NVRMDisplay` → no `IOFramebuffer` → no display, no signal.
+
+At **256 MB macOS assigns it**, and the whole chain succeeds:
+
+```
+nvrm-bars      : bar0@0x10:0x80000000+0x4000000
+                 bar1@0x14:0x90000000+0x10000000     <- PCI BAR1, the real VRAM aperture
+                 bar2@0x1c:0x86000000+0x2000000
+kbusVerifyBar2 : count 0 (assertion gone)
+rm_init_adapter -> OK
+PASS 2 REACHED: the adapter is up
+4 NVRMDisplay nub(s) published (nvfbheads=4)
+auto-go: go(2) -> 0x0 (fPassDone 2)
+IOFramebuffer  : 0 -> 5      VRAM,totalsize published (16 GB)      nvrm-autogo = "up"
+```
+
+256 MB is NVIDIA's **default non-Resizable-BAR aperture**, which is why macOS
+accepts it. Note `placeLargeBar1()` returns false at this size (its guard is
+`if (bar1Size < 4 GiB) return false;`), which only affects auto-go timing
+(100 s instead of 500 ms) — the BAR does not need the driver to place it,
+because macOS assigned it.
+
+### AVENUES CLOSED — do not retry these
+
+* **Move the GPU to a PCIe root port.** macOS defers enumeration behind
+  `pcie-root-port` (ACPI hot-plug, `IOPCIHPType 0x21`). Retested with **both**
+  `pcie-root-port.hotplug=off` **and**
+  `pcie-root-port.x-do-not-expose-native-hotplug-cap=on`; still invisible
+  (`10de nodes: 0`). Independently confirmed by the AMD passthrough guide at
+  <https://forums.unraid.net/topic/197921-macos-ventura-kvm-amd-radeon-pro-wx-7100-gpu-passthrough-complete-fix-guide/>.
+* **Conventional PCI bridge** (`dmi-to-pci-bridge` / `i82801b11-bridge`). macOS
+  *does* enumerate the GPU behind it (`pcidebug 1:1:0`) — a genuine improvement
+  — but conventional PCI has only a 256-byte config space, so the **Resizable
+  BAR capability at extended offset 0x134 is invisible** and the driver bails at
+  `"bar1: no Resizable BAR capability"`. Note also that on a PCI bus slot 0 is
+  the bridge, so devices need `slot >= 1` (libvirt: *"slot must be >= 1"*).
+  Net: the two requirements are mutually exclusive in QEMU — a PCIe port gives
+  extended config but macOS won't enumerate it; a conventional bridge is
+  enumerated but gives no extended config.
+* **`ResizeAppleGpuBars`** (`-1`, `8`, `0`) — no effect whatsoever; the guest
+  OpenCore does not touch this passed-through GPU's BAR, so the README's
+  `ResizeGpuBars=13` (8 GB) requirement is not met in a VM either way.
+* **Patching the driver.** Blocked: the repo publishes **no build path for
+  `NVRM.kext`/`NVRMFB.kext`**. `build/accel_build.sh` builds only `NVAccel`;
+  `kexts/NVRM/rmcc.py` references a `build-nvrm.sh` that is absent, and needs
+  `$OGKM/src/nvidia/_out/Darwin_x86_64/compile_cmds.sh` plus `libnvkernel.a`
+  (a Darwin build of NVIDIA's RM) which are not published. Moot now.
+
+### Capturing the driver's log
+
+The driver logs with `kprintf` (never the unified log; `dmesg` shows 0 NVRM
+lines because `debug=0x8` routes it to serial). Working recipe:
+
+1. guest boot-args `+debug=0x8 serial=1`
+2. `<serial type='file'><source path='/tmp/macos-serial.log'/></serial>`
+3. `tr -d '\0' < /tmp/macos-serial.log | strings > /tmp/serial-clean.txt`
+
 ### Still outstanding
 
 1. **BAR sizing is now automatic — no boot service needed.** `gpu-to-vfio` and
-   `gpu-to-host` in `packages/gpu-vfio-scripts.nix` now program BAR1 (4 GiB on
-   vfio, 16 GiB back on the host), and `gpu-vfio-status` shows the current size.
-   Since `vfio-pci.ids=` is commented out (`virtualization.nix:137`), the GPU
-   does **not** bind to vfio at boot — `gpu-to-vfio` is the entry point, so it
-   is the natural place for the resize and there is nothing to run at boot.
+   `gpu-to-host` in `packages/gpu-vfio-scripts.nix` program BAR1 (**256 MB on
+   vfio**, 16 GiB back on the host), and `gpu-vfio-status` shows the current
+   size. Since `vfio-pci.ids=` is commented out (`virtualization.nix:137`), the
+   GPU does **not** bind to vfio at boot — `gpu-to-vfio` is the entry point, so
+   it is the natural place for the resize and there is nothing to run at boot.
    *Caveat:* if `vfio-pci.ids=10de:2c59,10de:22e9` is ever uncommented for
    boot-time binding, the BAR would come up at the firmware size (16 GiB) and a
    boot-time resize would then be required.
-2. **SMBIOS is `iMac19,1`**; the driver specifies `iMacPro1,1`.
-3. **OpenCore patch** still required: `csr-active-config`, `boot-args`,
-   `Kernel → Block IONDRVSupport`, `SecureBootModel Disabled`.
+2. **No `IODisplay` yet.** The driver is up and `IOFramebuffer` = 5, but
+   `IODisplay`/`IODisplayConnect` are 0, so no head is driving an output and the
+   external monitor still gets no signal. This is now a display-output question
+   (NVKMS heads / output detection), not a BAR or RM-initialisation one.
+3. **SMBIOS is `iMac19,1`**; the driver specifies `iMacPro1,1`.
 4. `WhateverGreen.kext` is loaded; the driver README says to remove its NVIDIA
    patches and `agdpmod=pikera`.
+
+## Desktop bring-up — two runtime steps, and only the second is decisive
+
+Once the driver is up (`nvrm-autogo = "up"`, `IOFramebuffer = 5`), macOS still
+shows no display. Two steps, tested **one at a time** for attribution:
+
+| step | action | result |
+|---|---|---|
+| 1 | `sudo sysctl -w debug.nvrmfb_agdc=1` | NVRMAGDC activates (`debug.nvrmfb_agdc_fbmap` goes `never scanned` -> `n=1 [0]id ...`, `cmds` 0 -> 9), but **`IODisplay` stays 0, held for 60 s**. Necessary to map the framebuffer, **not sufficient**. |
+| 2 | `sudo launchctl kickstart -k system/com.apple.WindowServer` | WindowServer respawns (pid changes) and within **5 s** `IODisplay` 0 -> 1, `IODisplayConnect` 0 -> 2 -> **this is the step that produces the display** |
+
+Resulting desktop (verified):
+
+```
+Sceptre O34:  3440 x 1440 @ 165.00Hz, 24-Bit Color (ARGB8888)
+              Main Display: Yes  Mirror: Off  Online: Yes
+IOFBCurrentPixelClock = 879720000
+```
+
+Both steps are **runtime-only** and vanish on reboot: the sysctl resets, and
+WindowServer starts before the driver is ready so it never sees the display.
+Something must re-apply them after every boot. Also note the driver only reaches
+`"up"` about **100 s after NVRM arms** (`auto-go: go(2) in 100000 ms`, because
+`placeLargeBar1()` returns false at a 256 MB BAR1) — so anything that applies
+these steps must wait for that, not just for boot.
+
+**Not yet tested:** whether step 1 is a *prerequisite* for step 2. It was active
+when step 2 succeeded, but "step 2 with AGDC left off" was never tried, so if
+you only want one action at boot, that experiment is still owed.
+
+**Worth reporting upstream:** the driver ships `NVRMAGDC` idle by default
+(*"loaded; idle until `sysctl debug.nvrmfb_agdc=1`"*), and relies on a
+WindowServer restart to pick the display up. Arguably the driver should arm the
+display policy itself and trigger the takeover when the framebuffer is ready,
+rather than needing two manual steps — a legitimate bug report independent of
+the BAR finding.
+
+## USB passthrough — devices MUST go on an XHCI controller
+
+**Symptom:** a passed-through USB device never appears in macOS, even though
+QEMU shows it attached (`info usb` lists it with its real product name).
+
+**Cause:** macOS 15 has **no UHCI driver** (`kmutil showloaded` shows
+`AppleUSBEHCI`/`AppleUSBEHCIPCI` but zero UHCI). QEMU routes any full-speed
+(12 Mb/s) or low-speed device to a **UHCI companion** of the `ich9-ehci1`
+controller, and macOS never drives those ports, so the device is invisible.
+Emulated `usb-kbd`/`usb-tablet` work only because they are *high-speed*
+(480 Mb/s) and enumerate on the EHCI itself.
+
+**Fix:** add a USB 3 controller and attach hostdevs to it. XHCI has no
+companion-controller concept, so full/low-speed devices are handled natively.
+
+```xml
+<controller type='usb' index='1' model='qemu-xhci'>
+  <address type='pci' domain='0x0000' bus='0x00' slot='0x06' function='0x0'/>
+</controller>
+
+<hostdev mode='subsystem' type='usb' managed='yes'>
+  <source><vendor id='0x3151'/><product id='0x4011'/></source>
+  <address type='usb' bus='1' port='1'/>      <!-- bus 1 == the XHCI controller index -->
+</hostdev>
+```
+
+Verified result — macOS then reports a second bus and both devices:
+
+```
+USB 3.0 Bus (PCI 1b36:000d)
+    G502 HERO Gaming Mouse   046d:c08b  Logitech
+    JZ-2.4G keyboard         3151:4011
+loaded: com.apple.driver.usb.AppleUSBXHCI + AppleUSBXHCIPCI
+```
+
+### The `USBPorts.kext` in the OpenCore ESP does nothing here
+
+`EFI/OC/Kexts/USBPorts.kext` carries personalities matching ACPI names
+`EH01`, `UHC1`, `UHC2`, `UHC3` (providers `AppleUSBEHCIPCI`/`AppleUSBUHCIPCI`,
+mapping HS11-16 and LS01-06). **This guest's ACPI declares none of those names**
+(0 nodes each), so the map matches nothing and is inert. It is not needed for
+the XHCI path above. Note it is a *different* map from the one the 1401 app's
+own USB section writes (`UTBMap.kext` + `USBToolBox.kext`) — that flow was
+never used here, and neither map is required for XHCI passthrough.
+
+## Metal is withheld by design — needs a third runtime gate
+
+**Symptom:** the GPU drives the display and `system_profiler` lists it, but there
+is **no `Metal Support` line**, and a compiled test shows zero devices:
+
+```
+MTLCopyAllDevices()            -> 0 device(s)
+MTLCreateSystemDefaultDevice() -> (nil)
+lsof | grep -c NVMTLDriver     -> 0        (plugin installed but never loaded)
+```
+
+**Cause — deliberate.** `kexts/NVRM/accel/Info.plist` declares
+`MetalPluginName = ../../../Library/GPUBundles/NVMTLDriver`, but
+`nvrm-accel.cpp` **removes that property at start**:
+
+```c
+fMetalPlugin = mp;
+removeProperty("MetalPluginName");
+ALOG("MetalPluginName withheld -- nothing will load the Metal plugin until "
+     "`sysctl -w debug.nvaccelfb=1` puts it back, and a reboot takes it away again");
+```
+
+`onCountGrewLocked()` restores it once the gate is opened. So this is a safety
+gate, not a failure.
+
+**Open it:**
+
+```sh
+sudo sysctl -w debug.nvaccelfb=1
+```
+
+Verified result — `MetalPluginName` reappears (3 nodes), and a **brand new**
+process then gets a device (already-running ones will not):
+
+```
+MTLCopyAllDevices -> 1 device(s)
+  NVIDIA GeForce RTX 5080 Laptop GPU (NVMTL over ... (NVK GB203-B))
+system_profiler ... Metal Support: Metal 3
+nvrm: b80 LOCAL+mapped memory -> system RAM (b79 placement) (BAR1 256 MB, VRAM 16303 MB, default)
+```
+
+**Important:** `nvmtl-allow.txt` still denies `WindowServer`, so **WindowServer
+does not get Metal** — which is why the *dynamic* wallpaper still cannot render
+and the static-wallpaper fix above remains necessary. Applications, games and
+compute can use Metal 3; desktop compositing cannot yet. That matches the file's
+own label, `rung 3`, i.e. an incremental enablement stage.
+
+### All three runtime gates, for the boot daemon
+
+| gate | command | why |
+|---|---|---|
+| AGDC display policy | `sysctl -w debug.nvrmfb_agdc=1` | maps the framebuffer so a display can be created |
+| WindowServer re-enumeration | `launchctl kickstart -k system/com.apple.WindowServer` | actually creates the `IODisplay` |
+| Metal plugin | `sysctl -w debug.nvaccelfb=1` | restores `MetalPluginName` for new processes |
+
+All three are runtime-only and are lost on reboot. Any boot daemon must wait for
+`"nvrm-autogo" = "up"` (≈100 s after NVRM arms) before applying them.
+
+## White desktop / no wallpaper (pre-dates the GPU work)
+
+**Symptom:** the desktop background is plain white. Present since the initial
+install, i.e. also with the emulated VMware GPU — not caused by the NVIDIA driver.
+
+**Cause:** the configured wallpaper is the **Dynamic** (animated/video) variant.
+macOS 15's stock wallpaper is `/System/Library/Desktop Pictures/.wallpapers/Sequoia Sunrise/`
+containing `Sequoia Sunrise.mov` **plus** a `Sequoia Sunrise.heic` still, and the
+wallpaper store has `style = 0`, which selects the **dynamic** variant. Rendering
+that needs Metal, and **no GPU in this VM reports Metal support**:
+
+* the emulated VMware GPU never had it (hence "since the beginning"), and
+* the NullMoth driver still denies WindowServer (see `nvmtl-allow.txt`), so
+  `system_profiler SPDisplaysDataType` lists the chipset but **no "Metal Support" line**.
+  `IOVideoDecoder` instances = 0, so there is no hardware video decode either.
+
+**Fix:** use a **static** wallpaper. Verified working provider:
+
+```
+provider: com.apple.wallpaper.choice.image
+files   : [{'relative': 'file:///Users/tianyixia/Pictures/Sequoia%20Still.heic'}]
+```
+
+**The catch:** pointing the desktop at a file that *belongs to* a dynamic
+provider re-resolves to that provider and stays dynamic. Setting
+`/System/Library/Desktop Pictures/Sonoma.heic` produced
+`provider = com.apple.wallpaper.choice.sonoma` with `style = 0` — still dynamic.
+Copy the image **out** of `/System/Library/Desktop Pictures/` first (e.g. into
+`~/Pictures/`); then `com.apple.wallpaper.choice.image` is used and the still renders.
+
+Recipe:
+
+```sh
+cp "/System/Library/Desktop Pictures/.wallpapers/Sequoia Sunrise/Sequoia Sunrise.heic" \
+   "$HOME/Pictures/Sequoia Still.heic"
+sudo launchctl asuser "$(id -u)" osascript -e \
+  'tell application "System Events" to set picture of every desktop to "'"$HOME"'/Pictures/Sequoia Still.heic"'
+```
+
+`launchctl asuser` is required — the AppleScript has to run inside the logged-in
+GUI session, not the SSH session.
+
+**If the driver ever exposes Metal to WindowServer,** the dynamic wallpaper can be
+restored by pointing at the `.mov` again (or System Settings > Wallpaper > Dynamic).
 
 ## Superseded analysis (kept for the record)
 

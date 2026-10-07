@@ -32,7 +32,23 @@
     # resource1_resize takes a BIT INDEX, not a byte count:
     #   0=1MB 1=2MB 2=4MB ... 10=1GiB 11=2GiB 12=4GiB 13=8GiB 14=16GiB
     # so the size in bytes is 2^(idx+20).
-    BAR_IDX_VFIO=12   # 4 GiB — largest size that passes through correctly
+    # 256 MB (index 8) is NOT a compromise — it is the value macOS requires.
+    # MEASURED on macOS 15.8.1 + NullMoth 1.0.1 (RTX 5080 Max-Q):
+    #   * at 1 GiB and 4 GiB, IOPCIFamily lists BAR1 in the device's `reg` but
+    #     never in `assigned-addresses`, so no IODeviceMemory descriptor exists.
+    #     The NullMoth driver's readBARs() then fills bars[FB] with PCI BAR3
+    #     (32 MB), the RM is handed that as its VRAM aperture, and
+    #     rm_init_adapter() fails with
+    #       kbusVerifyBar2_GB202: MMUTest ... returned garbage 0x0
+    #       nvAssertOkFailedNoLog: NV_ERR_MEMORY_ERROR @ kern_bus_gm107.c:362
+    #   * at 256 MB macOS DOES assign it (bar1@0x14:0x90000000+0x10000000) and
+    #     the driver comes up: rm_init_adapter -> OK, PASS 2 REACHED,
+    #     4 NVRMDisplay nubs published, VRAM,totalsize published, IOFramebuffer
+    #     goes 0 -> 5.
+    # 256 MB is NVIDIA's default non-Resizable-BAR aperture, which is why macOS
+    # accepts it. Do not raise this "for bandwidth": a larger BAR makes macOS
+    # refuse the assignment and the driver fails outright.
+    BAR_IDX_VFIO=8    # 256 MB — the largest size macOS will actually assign
     BAR_IDX_HOST=14   # 16 GiB — the maximum this card advertises
 
     # BAR1 size in bytes for a BDF (0 if unassigned or no resizable BAR1)
@@ -643,10 +659,11 @@
     done
 
     # ── Resizable BAR sizing (mirror of gpu-to-vfio) ─────────────
-    # gpu-to-vfio shrinks BAR1 to 4 GiB because a larger one breaks guest
-    # passthrough. Restore the maximum here so the host gets the full aperture
-    # back. resource1_resize takes a BIT INDEX: 12=4GiB, 14=16GiB.
-    BAR_IDX_VFIO=12   # 4 GiB
+    # gpu-to-vfio shrinks BAR1 to 256 MB because macOS will not assign a larger
+    # Resizable BAR (see the note there for the measurements). Restore the
+    # maximum here so the host gets the full aperture back. resource1_resize
+    # takes a BIT INDEX: 8=256MiB, 12=4GiB, 14=16GiB.
+    BAR_IDX_VFIO=8    # 256 MB — must match gpu-to-vfio; see the note there
     BAR_IDX_HOST=14   # 16 GiB — the maximum this card advertises
 
     bar1_bytes() {
