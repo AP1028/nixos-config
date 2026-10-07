@@ -205,7 +205,10 @@ and not memory transfers. Two candidate explanations worth the author's attentio
 Contributing factor: the display is driven at **165 Hz** at 3440x1440
 (`IOFBCurrentPixelClock = 879720000`), so this chain runs 165 times a second.
 
-**Not** a factor, for the record — these were measured and ruled out:
+**Update after further work:** the magnitude was largely self-inflicted by the
+shipped `nvrm610.conf` — see Finding 6, which recovers 3-4x. What remains after
+that is bounded by the 192 MB surface budget the 256 MB BAR imposes. The
+measurements below still stand as refutations of the *bandwidth* theory:
 
 | measurement | value |
 |---|---|
@@ -234,10 +237,11 @@ This matters because 165 Hz is the single largest multiplier on the Finding 3 co
 as refresh. Publishing at least one lower refresh at the native timing would make
 that trade-off avoidable.
 
-## Finding 5 — changing resolution wedges the display permanently
+## Finding 5 — changing resolution wedges the display, and is the context of a KERNEL PANIC
 
-Selecting any other display mode leaves a **blank background with a live cursor**.
-Nothing is presented until WindowServer is restarted, which logs the user out:
+**Two severities here.** Selecting any other display mode leaves a **blank
+background with a live cursor**. Nothing is presented until WindowServer is
+restarted, which logs the user out:
 
 ```sh
 sudo launchctl kickstart -k system/com.apple.WindowServer
@@ -255,9 +259,203 @@ Diagnostics gathered while wedged:
   `3440x1440 @ 165`, i.e. it is already back at the original timing. So the damage
   is to the presentation path, not the mode.
 
+### And the same code path panics
+
+Separately, a **kernel panic** occurred with a display mode change in flight. The
+serial console shows the sequence immediately before it:
+
+```
+NVAccel: DM displayModeWillChange
+NVAccel: DM displayModeWillChange
+NVRM-xnu: MSI #35000 -> work loop (handled so far 31823)
+NVRM-fb: setAttribute 'spwr' value 3758097168 -> 0xe00002c7
+Debugger called: <panic>
+Nested panic detected - entry count: 2 panic_caller: 0xffffff80109d360e
+Nested panic string:
+Ticket lock 0xffffff8010f3d480 is unexpectedly owned by thread 0xffffff9037973b30 @lock_ticket.c:143
+```
+
+The resulting report contains **no stackshot at all**:
+
+```json
+{"macOSProcessedStackshotData":"bm8gb24gZGlzayBvciBzbGVlcC93YWtlIGZhaWx1cmUgcGFuaWNrc3Rhc2hvdCBmb3VuZA==",
+ "macOSPanicString":"Nested panic detected - entry count: 2 panic_caller: 0xffffff80109d360e"}
+```
+
+which decodes to *"no on disk or sleep/wake failure panic stackshot found"* — the
+panic handler panicked before capturing anything, so there is no backtrace to work
+from. Two `Kernel-*.panic` reports exist on this machine.
+
+The lock is a `lock_ticket` ticket lock held by another thread, i.e. a lost
+unlock or a lock taken on a path that then panicked — consistent with a
+re-entrancy problem around the accelerator's display-pipe transaction path, which
+is what a mode change drives (`performTransaction`) and which also does the
+`spwr` power-attribute write seen just before.
+
+**This makes mode changes a crash-risk operation on this driver, not merely an
+inconvenience.** If the author wants a reproducer, changing resolution in System
+Settings on a 256 MB-BAR system should reach it.
+
 A mode switch that cannot be backed out without a logout is worth fixing on its
 own; it also means any "did the mode change help?" experiment costs the user their
-session.
+session — and may cost them the machine.
+
+---
+
+## Finding 6 — the shipped `nvrm610.conf` throttles the compositor by 3-4x
+
+**Severity:** high and trivially fixable. This is the difference between a desktop
+that is unusable and one that is fine.
+
+`/Library/GPUBundles/nvmtl/nvrm610.conf` ships in the tarball with values far more
+conservative than the driver's own code defaults:
+
+| knob | shipped | code default |
+|---|---|---|
+| `NVMTL_VRAM_WS_NONIMAGE_MB` | `0` | `NVMTL_VRAM_NONIMAGE` = `2655` (`plugin/nvmtl_vk.c:121`) |
+| `NVMTL_VRAM_HEADROOM_MB` | `256` | `NVMTL_VRAM_HEADROOM_DEFAULT` = `1024` (`plugin/nvmtl_vk.c:122`) |
+| `NVMTL_RES2_WS` | `0` | enabled (`plugin/nvmtl_vk.c:1501`) |
+
+`NVMTL_RES2_WS=0` is the significant one. In `nvmtl_vk_working_set()`:
+
+```c
+static int res2 = -1; ... const char *w = getenv("NVMTL_RES2_WS");
+    res2 = !(w && w[0] == '0') && g_sparse && ...;
+if (res2 && nvmtl_vk_vram_bytes()) return nvmtl_vk_vram_bytes();   // whole card
+```
+
+Setting it to `0` disables the branch that returns the card's full VRAM, leaving a
+budget-derived working set instead. `NVMTL_VRAM_WS_NONIMAGE_MB=0` additionally
+gives non-image allocations no VRAM at all.
+
+**Measured effect** (RTX 5080 Max-Q, 3440x1440 @165, macOS 15.8.1):
+
+| | shipped conf | code defaults |
+|---|---|---|
+| dragging a window | **16-21 fps** | **58-80 fps** |
+| idle | ~137 fps continuously | **0 fps** (correctly idle) |
+| VRAM mapped | 175/192 MB | 175/192 MB (**unchanged**) |
+| refusals | none | none |
+
+Worth noting the mapped figure does **not** change — the gain is not from using
+more memory but from the plugin no longer thrashing its allocation decisions
+against a working set it believes is tiny. That suggests the shipped values were
+chosen for a much smaller/older configuration and are counter-productive on a
+16 GB card.
+
+**Suggested fix:** ship the code defaults, or at least drop the explicit
+`NVMTL_RES2_WS=0` / `NVMTL_VRAM_WS_NONIMAGE_MB=0` overrides so the compiled
+defaults apply. Documenting that a WindowServer restart is needed to pick up conf
+changes would also help — the knobs are read once at plugin load
+(`plugin/NVMTLObjects.m:100`), so editing the file appears to do nothing until the
+next logout.
+
+**Residual, after this fix:** the surface budget is still 192 MB and sits ~93% full
+(179 MB), so a GPU-composited heavyweight like Steam regresses the compositor and
+closing it recovers. That is Finding 7's territory — the small-BAR ceiling — not
+something the conf can address.
+
+## Finding 7 — a 256 MB BAR leaves the compositor ~13 MB of headroom
+
+When macOS will not assign a Resizable BAR above 256 MB (see the host-side notes),
+`NVRM_VRAM_BAR1_BUDGET` caps the framebuffer's VRAM grants at **192 MB**
+(`kexts/NVRM/nvrm_vram_abi.h:15`), and the budget is normally ~93% occupied:
+
+```
+debug.nvrmfb_vram_mapped_bytes: 179 MB of 192 MB
+debug.nvrmfb_vram_grants: 76 / 66 releases
+```
+
+With ~13 MB free, any additional GPU-composited client crowds the compositor out —
+observed with Steam, which regresses window dragging from ~60-80 fps back toward
+the teens, and closing it recovers immediately. No `nvAllocVram: REFUSED` messages
+appear, so this is crowding rather than clean exhaustion.
+
+Because the budget only grows when `fBarLen >= 4 GiB` (`fBarLen / 2`), there is no
+way to raise it on a system where macOS assigns only the default aperture. Two
+suggestions:
+
+1. `vramGrant` could **reclaim** parked/released grants more aggressively when
+   `before + want > budget` rather than refusing, since the counters show 76 grants
+   against 66 releases — there is churn to reclaim.
+2. A small-BAR system would benefit from the framebuffer reserving less for itself,
+   or from surfacing the budget pressure to the client (e.g. an `IOSurface`
+   allocation failure rather than a silent slowdown).
+
+## Finding 8 — `NVMTL_HWPOOL=1` installs private pool classes and correlates with a panic
+
+`plugin/NVMTLDevice.m:319` reaches for Apple's private pool machinery:
+
+```c
+Class POOL = objc_getClass("MTLIOAccelResourcePool");
+Class RES  = objc_getClass("MTLIOAccelPooledResource");
+...
+pools[i] = mk([POOL alloc], init, dev, RES, args[i], 2440, 0);
+set(dev, NSSelectorFromString(@"setHwResourcePool:count:"), pools, 3);
+```
+
+with a hand-built 2440-byte `resourceArgs` blob. Setting `NVMTL_HWPOOL=1` in the
+conf correlated with the kernel panic in Finding 5 on the boot where it was
+enabled, and a benchmark run under it produced **10 fps** (which may itself have
+been the crash rather than a slowdown). There is no backtrace to prove causation,
+so this is reported as a correlation, not a diagnosis — but it is private-API
+plumbing behind an undocumented flag with **no measured benefit**, and it is
+reverted in our configuration. Flagging it in the README as experimental would be
+enough to stop others losing a machine to it.
+
+
+
+## Appendix for the author — the full runtime lever inventory
+
+Collected while working on this, in case it saves time. Everything below is
+already in the source; it is listed here as a map of what can be tuned without a
+rebuild.
+
+**Boot-args read by the kexts**
+
+```
+nvfb  nvfbheads  nvaccel  nvcursor  nvfbsample  nvhud  nvhwvbl  nvrmsettle
+-nvfbsurvey  -nvkmsnosmooth  -nvoff  -nvrmnobootscreen  -nvrmnoflip  -nvrmnogo
+```
+
+**Driver sysctls** (`debug.` prefix)
+
+```
+nvaccel_iop  nvaccel_iop_async  nvaccel_iop_flip  nvaccelfb  nvaccel_crc[_head]
+nvrmfb_flip_interval  nvrmfb_flip_latch  nvrmfb_flip_lean
+nvrmfb_flip_n  nvrmfb_flip_us_sum  nvrmfb_flip_us_max
+nvrmfb_flip_latch_waits  nvrmfb_flip_latch_timeouts  nvrmfb_flip_latch_max_us
+nvrmfb_agdc  nvrmfb_agdc_cmds  nvrmfb_agdc_refused  nvrmfb_agdc_fbmap  nvrmfb_agdc_maxfb
+nvrmfb_vram_grants  nvrmfb_vram_grant_bytes  nvrmfb_vram_releases
+nvrmfb_vram_release_bytes  nvrmfb_vram_mapped_bytes  nvrmfb_vram_budget_bytes
+nvrmfb_vramtest  nvrmfb_vramtest_mode
+nvrm_kms_timer_depth  nvrm_kms_timer_executed  nvrm_kms_timer_max_depth
+nvrm_pageoff_coalesced  nvrm_pageoff_pages  nvrm_pageoff_perpage  nvrm_pageoff_runs
+nvrm_physmap  nvrm_pvchain  nvrm_pvsentinel  nvrm_watchpage  nvrm_winraw  nvrm_winwhy
+```
+
+**Plugin env knobs** (`/Library/GPUBundles/nvmtl/nvrm610.conf`; read once at plugin
+load, so a WindowServer restart is needed to pick up a change)
+
+```
+VRAM / placement : NVMTL_VRAM_WS_NONIMAGE_MB  NVMTL_VRAM_HEADROOM_MB  NVMTL_WS_FILL_PCT
+                   NVMTL_RES2_WS  NVMTL_RES2_HOT  NVMTL_RES2_COLD  NVMTL_RES2_MARGIN_MB
+                   NVMTL_NO_RES2  NVMTL_NO_RES2_EVICT  NVMTL_SHARED_VRAM
+                   NVMTL_SHARED_VRAM_BUDGET_MB  NVMTL_SHARED_POOL_VRAM
+pools / reuse    : NVMTL_HWPOOL (!)  NVMTL_POOL_REUSE  NVMTL_NO_POOL_REUSE
+                   NVMTL_NO_BUFREUSE  NVMTL_NO_HEAPTEX_RECYCLE  NVMTL_NO_HEAPTEX_PLACE
+                   NVMTL_TSPOOL_KEEP  NVMTL_NO_HEAP_ALIAS  NVMTL_NO_SURFACE_PAGEOFF
+caches           : NVMTL_AIRCACHE  NVMTL_SPVCACHE_OFF  NVMTL_SPVCACHE_MAX_MB
+                   NVMTL_SPVCACHE_TARGET_PCT  NVMTL_LINKCACHE_OFF  NVMTL_IDXCACHE_OFF
+                   NVMTL_FCCACHE_OFF  NVMTL_REFLECT  NVMTL_REFLCCACHE  NVMTL_NO_LAZYAIR
+submission       : NVMTL_ASYNC_COMMIT  NVMTL_DESC_BATCH  NVMTL_PRESUBMIT_PROLOGUE
+                   NVMTL_NO_DIRTYONLY  NVMTL_NO_NOCOPY  NVMTL_NO_PURGE_RECLAIM
+fills / clears   : NVMTL_ZERO_FILL  NVMTL_MANAGED_EAGER_ZERO  NVMTL_DONTCARE_CLEARS
+```
+
+Defaults worth knowing (verified in the source, not assumed): **dirty-only bindings
+are ON** (`on = !(e && *e && *e != '0')`), **pool reuse is ON**, **buffer reuse is
+ON**, and **`NVMTL_HWPOOL` is OFF** — see Finding 8.
 
 ## Environment
 

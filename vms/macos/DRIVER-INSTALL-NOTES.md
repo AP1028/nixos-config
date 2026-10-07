@@ -23,11 +23,11 @@ covers the parts that differ in a VM. Read their README first.
 
 ---
 
-## TL;DR — five things must be right
+## TL;DR — six things must be right
 
-If you get these five right, the driver works end to end: GPU-composited desktop
-**and** Metal 3 for applications. Each has a distinctive failure signature, so you
-can tell which one you've got wrong.
+If you get these six right, the driver works end to end: GPU-composited desktop
+**and** Metal 3 for applications, at usable speed. Each has a distinctive failure
+signature, so you can tell which one you've got wrong.
 
 | # | Requirement | If wrong |
 |---|---|---|
@@ -36,6 +36,7 @@ can tell which one you've got wrong.
 | 3 | **`<video>` = `none`** | the emulated GPU competes with NVRMFB for display index 0 |
 | 4 | **USB hostdevs on an XHCI controller** | passed-through keyboard/mouse never appear in macOS |
 | 5 | **`nvrmsettle=15000` in boot-args** | driver runs but **no Metal and no GPU compositing** — see below |
+| 6 | **`nvrm610.conf` at the code defaults** | desktop works but dragging windows runs at **16-21 fps** instead of 58-80 |
 
 Requirement 5 is the non-obvious one and the subject of the next section. With it
 in place **no runtime steps are needed at all**: no sysctls, no daemon, no
@@ -376,62 +377,70 @@ enforce and which the 100 s slow path was defeating.
 
 ---
 
-## Performance: what it actually costs
+## Performance: the compositor is squeezed into a 192 MB window
 
-Measured on this machine, GPU-composited desktop running:
+**Fixed first by the conf (3-4x), then bounded by the BAR.** Two findings, in the
+order they matter.
 
-| measurement | value | native 5080 laptop for reference |
+### The shipped `nvrm610.conf` throttles the compositor
+
+`/Library/GPUBundles/nvmtl/nvrm610.conf` ships from the tarball with very
+conservative VRAM values, against the driver's own code defaults:
+
+| knob | shipped | code default (`plugin/nvmtl_vk.c`) |
 |---|---|---|
-| GPU fill / copy | **467 GB/s** | ~700-900 GB/s |
-| GPU fma (Metal) | **~5.3 TFLOPs fp32** | ~30-50 TFLOPs |
-| WindowServer CPU | **~98% of one core**, continuously | near-idle |
-| VRAM grant budget | 192 MB, 174 MB mapped | 2-8 GiB with a ≥4 GiB BAR |
+| `NVMTL_VRAM_WS_NONIMAGE_MB` | **0** | `NVMTL_VRAM_NONIMAGE` = **2655** |
+| `NVMTL_VRAM_HEADROOM_MB` | **256** | `NVMTL_VRAM_HEADROOM_DEFAULT` = **1024** |
+| `NVMTL_RES2_WS` | **0** | enabled — returns the full VRAM |
 
-**The window-server cost is not BAR-related.** Four measurements rule it out:
+`NVMTL_RES2_WS=0` is the important one: it disables the branch in
+`nvmtl_vk_working_set()` that short-circuits to `nvmtl_vk_vram_bytes()` (the whole
+card), leaving a budget-derived working set instead. With the defaults restored:
 
-1. 467 GB/s **exceeds PCIe bandwidth**, which proves the benchmark buffers were in
-   real VRAM — allocations are not being forced into system RAM.
-2. **Zero** `nvAllocVram: REFUSED — BAR1 budget spent` messages in the logs.
-3. The budget sits at 174/192 MB and is **stable** — grants/releases unchanged over
-   10 s, so there is no thrashing.
-4. Most decisively: profiling WindowServer shows its CPU going to **ioctl
-   round-trips and object teardown**, not to copying frames through the aperture.
-   A BAR bandwidth limit would look like ~3.2 GB/s of memcpy
-   (3440x1440x4 x 165 Hz); instead:
+| | shipped conf | code defaults |
+|---|---|---|
+| dragging a window | **16-21 fps** | **58-80 fps** |
+| idle | ~137 fps (never idles) | **0 fps** (correctly idle) |
+| refusals | none | none |
 
-```
-33  mach_msg2_trap
-21  io_connect_method                     (IOKit)
-16  IOConnectCallMethod                   <- user -> kernel round-trips
-12  nvrm_xnu_ioctl    (libvulkan_nouveau) <- the NVIDIA kernel driver
- 9  CA::OGL::render_layers  (QuartzCore)  <- CoreAnimation over OpenGL
- 7  nvRmApiFree      (libvulkan_nouveau)
- 5  nvkmd_nvrm_va_free (libvulkan_nouveau)
-```
+Note mapped VRAM was **unchanged** (175/192 MB) — the win is not from using more
+memory, it is from the plugin no longer thrashing its allocation decisions. To
+apply it, edit the conf and **restart WindowServer** (the knobs are read at plugin
+load, `plugin/NVMTLObjects.m:100`), which costs a logout.
 
-So the cost is the **translation chain**, which is inherent and documented:
+### The remaining ceiling is the 256 MB BAR
 
-```
-CoreAnimation (OpenGL) -> Apple GL-on-Metal -> Metal -> AIR -> SPIR-V -> NVK/Vulkan -> nvrm_xnu_ioctl -> GPU
-```
+With the conf fixed the desktop is usable, but the surface budget is still 192 MB
+and it sits at **179 MB used — 93% full, ~13 MB free**. That has a visible
+consequence: **Steam regresses it**, and closing Steam recovers it. Steam's UI is
+Chromium-based and GPU-composited, so it competes for the same VRAM grants, and
+13 MB of headroom is not enough. There are no `REFUSED` messages — the budget is
+*crowded*, not exhausted.
 
-The GL-on-Metal hop is deliberate — `nvrm-accel.cpp` sets
-`IOGLBundleName=AppleMetalOpenGLRenderer` with the ALOG *"NEW GL processes get a
-hardware renderer over Metal"*, i.e. it exists so GL is not software. There is no
-alternative backend to switch to. What is **not** deliberate is the magnitude: the
-README carries no performance caveat, so this cost is unpriced rather than
-designed. See [UPSTREAM-REPORT.md](UPSTREAM-REPORT.md).
+So the ordering of causes is:
 
-**Two things that did not matter:** the dynamic (video) wallpaper — swapping to a
-static one changed WindowServer's CPU by ~1% (9.76 s vs 9.74 s per 10 s), and the
-wallpaper processes sit at 0.0% CPU. And the small BAR budget, per the four
-measurements above.
+1. **conf policy** — self-inflicted, fixed above, worth 3-4x
+2. **the 192 MB budget** — imposed by the 256 MB BAR that macOS will not exceed;
+   not fixable here (see [Appendix C](#appendix-c--why-256-mb-and-how-it-was-found))
+3. **the Metal→NVK translation** — inherent to the driver; the residual CPU cost
 
-**What does matter:** the display runs at **3440x1440 @ 165 Hz**
-(`IOFBCurrentPixelClock = 879720000`), so the compositor is driven at 165 fps
-through that chain.
+Measured along the way, for reference:
 
----
+| measurement | value | native 5080 laptop |
+|---|---|---|
+| GPU copy, `Private` (VRAM) | 423-467 GB/s | ~700-900 GB/s |
+| GPU copy, `Shared` (system RAM) | 7.8 GB/s | *(normal for a dGPU — Shared is system RAM by definition)* |
+| GPU fma (Metal) | ~5.3 TFLOPs fp32 | ~30-50 TFLOPs |
+| Geekbench 7 Metal | ~100,000 | — |
+
+**Corrections this section went through**, since the reasoning matters more than
+the conclusion: an earlier revision claimed the desktop was *not* BAR-related. That
+was based on benchmarking only `MTLResourceStorageModePrivate` buffers, which
+bypass the placement policy entirely. A later revision then over-read the slow
+`Shared` number as a smoking gun — but `Shared` on a discrete GPU is system RAM by
+definition and would measure the same on real hardware. The BAR link is real, but
+it comes from the **192 MB grant budget and its 93% occupancy**, not from
+bandwidth.
 
 ## Display modes: 165 Hz at native resolution only
 
@@ -449,7 +458,15 @@ resolution**. So "I can only pick 165 Hz" is a driver mode-list limitation, not 
 panel limitation. Testing a lower compositing load is still possible at a
 reduced resolution (e.g. `1920x804 @ 165`, or `1280x720 @ 60`).
 
-## Changing display resolution wedges the display
+## Changing display resolution wedges the display — and can panic the kernel
+
+> ⚠️ **Treat mode changes as crash-risk, not just inconvenient.** A display mode
+> change was in flight immediately before a **kernel panic** on this machine
+> (`NVAccel: DM displayModeWillChange` → `NVRM-fb: setAttribute 'spwr'` →
+> `Ticket lock ... unexpectedly owned @lock_ticket.c:143`). No backtrace survived
+> (the panic handler nested), so causation is unproven — but see
+> [UPSTREAM-REPORT.md](UPSTREAM-REPORT.md) Finding 5. Two `Kernel-*.panic` reports
+> exist in `/Library/Logs/DiagnosticReports/`.
 
 Selecting another mode leaves a **blank background with a live cursor**.
 WindowServer does **not** crash — the pid is unchanged, there is no crash report,
@@ -532,13 +549,89 @@ is an awkward all-or-nothing: working desktop XOR GPU compute. On a machine wher
 macOS grants the large BAR the README asks for, the boot-hold wins its race and
 WindowServer composites through NVAccel, which is the intended behaviour.
 
+## Testing methodology (so results are comparable)
+
+Everything below was measured with a repeatable harness, in `vms/macos/`:
+
+| file | what it does |
+|---|---|
+| `dragload.m` | opens a Metal-backed window and **moves it continuously**, reproducing the compositing load of a window drag without a human. Reports moves/s and compositor flips/s. |
+| `bench.sh` | the one procedure per test: check the session is ready, run `dragload`, report **flips, WindowServer CPU per flip**, and the grant/park/refusal deltas |
+| `surfbench.m` | times IOSurface + Metal-texture creation (the surface path) |
+| `shaderbench.m` | times first-use shader compilation through the translator |
+
+Two methodology traps that produced **wrong answers** before being fixed — both
+worth knowing:
+
+1. **`console user == <you>` is not "a session exists".** WindowServer restarts
+   leave it set while the desktop is still coming up, and a load then measures a
+   half-initialised session: **~10 fps and ~114 MB mapped** instead of ~108-133 fps
+   and ~152-175 MB. `bench.sh` now requires the console user **and** the Dock **and**
+   session-sized VRAM, and aborts rather than reporting a bogus number.
+2. **Auto-login is a boot-time behaviour only.** A WindowServer restart drops to the
+   login window and it does **not** come back; a **reboot** does (session up in
+   ~40 s). So conf/plugin changes are tested by editing the conf and **rebooting**,
+   not by restarting WindowServer. Auto-login needs **both**
+   `defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser <user>`
+   **and** `/etc/kcpassword` — the latter only the System Settings route writes
+   (System Settings → Users & Groups → "Automatically log in as"), because it needs
+   the password.
+
+Baseline on this machine (post-reboot, code-default conf, 20 s load):
+
+```
+flips ~2160,  WindowServer ~4.26 ms CPU per flip,  ~108-133 fps
+grants +3,  parks +0,  refusals +0,  mapped 157/192 MB
+```
+
+## What was verified, and what it rules out
+
+| claim | evidence | verdict |
+|---|---|---|
+| Frames reach the panel **zero-copy** | `nvaccel_iop_flips` 3160, `iop_flip_hit` 3154, `iop_flip_novram/refused/stale` all **0**, `nvrm-flip: "on"` | ✅ optimal |
+| The **copy** path (with its visible flip-home) is in use | `nvaccel_iop_flip_home: 0` | ❌ never used |
+| Shader caches are cold, so first use recompiles | WindowServer has **70 MB / 2047 files** in `nvmtl/aircache`, plus `spvcache` and `nvmtl-mesa`; 128 MB total | ❌ caches warm |
+| First-use compilation is expensive anyway | `shaderbench`: **median 17.7 ms, p90 32 ms, max 203 ms** per distinct shader — so a drag needing several new variants can plausibly total ~0.5 s | ✅ plausible cause of the drag stall |
+| Surface allocation is the drag stall | `surfbench`: ~8 ms per surface, but the grant counters **did not move** and the import failed with `NVRM_SS_NO_VRAM` (`0x80000005`) — it exercised a *CPU-backed* path, not the compositor's | ⚠️ inconclusive |
+| The 192 MB grant budget is exhausted | `budget spent: 0` — the budget check **never fired**; the failures are `OVERLAPS THE CONSOLE` → park → retry | ❌ wrong theory |
+| Allocation thrash happens | **3779** `parking it and rolling again`, **474** `REFUSED` (in one VM boot, before the conf fix) | ✅ real |
+| The stale/blinking image is a driver bug | it is the compositor correctly not re-presenting when idle; the panel keeps the last buffer flipped. It appears after a **WindowServer restart** because new content is only presented on change | ❌ benign |
+| `debug.nvrmfb_flip_latch` / `flip_interval` are worth tuning | tested live under a real drag: **16-21 fps with them, 16-21 without** | ❌ no effect |
+
+### ⚠️ `NVMTL_HWPOOL=1` — do not enable
+
+Setting `NVMTL_HWPOOL=1` in the conf correlates with a **kernel panic**. It installs
+Apple's private `MTLIOAccelResourcePool` / `setHwResourcePool:count:` via
+`objc_msgSend` (`plugin/NVMTLDevice.m:319`), and on the boot where it was enabled
+the guest panicked:
+
+```
+NVAccel: DM displayModeWillChange
+NVRM-fb: setAttribute 'spwr' value 3758097168 -> 0xe00002c7
+Debugger called: <panic>
+Nested panic detected - entry count: 2
+Ticket lock 0xffffff8010f3d480 is unexpectedly owned by thread ... @lock_ticket.c:143
+```
+
+The panic report is **empty of any stackshot** — *"no on disk or sleep/wake failure
+panic stackshot found"* — because the panic handler itself panicked (nested panic).
+Two `Kernel-*.panic` reports exist, and the log shows a **display mode change** in
+flight immediately before the panic. Causation is not proven (no backtrace), but
+the flag is private-API plumbing with no measured benefit, so the recommendation
+stands: leave it unset. It is reverted here.
+
+**Corollary, and it matters more than HWPOOL:** display mode changes are not merely
+the "wedges the display" bug documented earlier — they are the context of a
+**kernel panic**. Treat changing resolution as a crash-risk operation on this driver.
+
 ## Known limitations
 
-* **The compositor is CPU-bound.** WindowServer holds ~98% of one core feeding
-  the GL-on-Metal → NVK chain, so the desktop is usable but not snappy. Measured
-  as *not* BAR-related — see [Performance](#performance-what-it-actually-costs).
-  It is the translation chain plus a 165 Hz drive rate, and there is no
-  alternative backend.
+* **Heavy GPU consumers regress the compositor.** The compositor's surface budget
+  is 192 MB and normally sits ~93% full, so launching Steam (a GPU-composited
+  Chromium UI) leaves too little headroom and dragging drops back toward the teens.
+  Closing Steam recovers. See
+  [Performance](#performance-the-compositor-is-squeezed-into-a-192-mb-window) —
+  this is the 256 MB BAR's ceiling, and the only real fix is upstream.
 * **Only 165 Hz is offered at native resolution**, because NVRMFB publishes no
   lower refresh at the native timing. Lower resolutions do offer 60 Hz. See
   [Display modes](#display-modes-165-hz-at-native-resolution-only).
