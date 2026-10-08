@@ -883,6 +883,65 @@ bridge it requires.
 4. `ResizeGpuBars = -1`, `ResizeAppleGpuBars = -1` unchanged; no driver patch, no
    OpenCore change, no OVMF rebuild
 
+## Stuck display: the display link stops, and how to recover without rebooting
+
+Observed after running No Man's Sky: **the screen freezes on the last frame the
+display received, while the mouse cursor still moves.** It looks like a hang and is
+not one.
+
+### Diagnosis
+
+The WindowServer is **alive and completely idle**, not blocked:
+
+```
+2507 Thread_699: ws_main_thread
+  + SLXServer (SkyLight) -> server_loop -> CGXRunOneServicesPass -> mach_msg
+2507 Thread_2164: com.apple.coreanimation.render-server
+  + CA::Render::Server::server_thread -> mach_msg
+```
+
+Both threads sit in `mach_msg`, the normal idle state, and its **CPU time is frozen**
+(`2:00.50` unchanged across 5 s). The Dock's CPU time is frozen too. The driver is
+loaded and healthy in the WindowServer (`com.nullmoth.NVMTLDriver`,
+`libvulkan_nouveau`, `libnvmtl_translate`), `IODisplay = 1`, `IOFramebuffer = 9`, and
+the driver reports `nvrm-display = "heads 0x1 accel 4 agdc 1 k5 1 iop 1"`,
+`nvrm-boot-raster = "head0 165.000Hz"`.
+
+**So nothing is broken — nothing is asking the WindowServer to draw.** The display
+link (vblank) has stopped firing, so no compositing is scheduled, the last frame stays
+on screen, and **the cursor keeps moving because it is a hardware overlay that needs
+no compositing.** That combination is the signature.
+
+### Recovery (no reboot, no logout)
+
+```bash
+sudo pmset displaysleepnow      # then send a wake event
+```
+
+The sleep/wake cycle rebuilds the display link. Verified: WindowServer CPU time
+resumed (`2:00.50` -> `2:05.45` -> `2:07.21`, ~30% CPU, actively compositing) and the
+desktop returned with the session, apps and VRAM budget intact.
+
+**This is a driver bug worth reporting upstream:** the display link stops and does not
+self-recover, and it was triggered by a game that was itself misbehaving (NMS). It is
+distinct from the memory-pressure family and from the root-port work.
+
+### Note on NMS itself (for whoever picks this up)
+
+NMS is **not hung**: its main thread shows frame pacing
+(`cTkClock::WaitForMinFrameTime()`), its menu rendering
+(`cGcApplicationGameModeSelectorState::Render()`), and real calls into the driver
+(`-[NVMTLRenderCommandEncoder drawPrimitives:]` -> `nvmtl_vk_cmd_bind_set` ->
+`nvk_AllocateDescriptorSets`), plus `nvmtl_vk_submit_begin_at` and `nvmtl_translate`.
+Its Metal shader caches were written. It is a visible foreground app. It renders,
+submits, and never gets a frame onto the display — and it used only ~30 MB of VRAM
+across its whole lifetime, so it never reached real rendering.
+
+**Tooling trap, recorded:** check the guest has `Quartz`/`AppKit` before trusting an
+empty window-list result. `/usr/bin/python3` on macOS 15 does NOT have them, so
+`CGWindowListCopyWindowInfo` fails with `ModuleNotFoundError` and looks like "no
+window" — which is how a false "NMS has no on-screen window" conclusion got made here.
+
 ## FINAL CONFIGURATION: 16 GiB BAR, 8 GiB budget, no workarounds
 
 With the root cause fixed, every accumulated workaround turned out to be
