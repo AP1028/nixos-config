@@ -7,6 +7,37 @@ reproduce it, how to verify it, what is broken, and how to recover. Self-contain
 **Status: working.** GPU-composited desktop, Metal 3 for applications, driver-placed
 **16 GiB BAR**, **8 GiB VRAM budget**. (The starting point for this work was 192 MB.)
 
+## ⚠️ READ THIS FIRST — three traps that look exactly like driver failure
+
+> **Each of these gives a macOS that boots, serves SSH, loads all four kexts, places BAR1 at
+> 16 GiB with the full 8 GiB budget, reports `applyModeSetConfig -> 1` — and has no display
+> at all.** They are *upstream* of the driver, so no amount of driver debugging finds them.
+
+**1. A wrong or placeholder `osk` = no display, and nothing says so.** macOS starts and looks
+healthy from the inside. The cursor you can move on the black screen belongs to your
+**viewer**, not the guest. `screencapture` fails with *"could not create image from display
+0"*, `system_profiler` lists no display, `virsh screenshot` returns a black frame. **It
+survives an FLR, a GPU reset, a WindowServer restart and every `<video>` model.** →
+**Substitute a real OSK before testing anything.** This is why a redacted copy of the domain
+XML, kept for sharing, will not boot a working display — and it cost most of a day.
+
+**2. SIP must be off *before* `install.sh` runs.** Otherwise: *"back up kernel collection /
+Operation not permitted"*, which reads as a corrupt package or a bad download. It is neither
+— the kernel collection carries the SIP `restricted` flag and root cannot read it with SIP
+on. → **Set `csr-active-config`, reboot, confirm `csrutil status` says `disabled`, then
+install.**
+
+**3. Reset the GPU before a driver-phase boot.** With vfio the guest programs the physical
+card and **a guest reboot does not reset it**, so booting several images in one session
+leaves state that silently stops `applyModeSetConfig` — frames generated, panel dark. →
+**FLR between boots.**
+
+**And the two installers are not equivalent:** the tar ships `install.sh` (129 lines, files
+plus kernel collection). **1401.app carries `nullmoth-setup.sh` (639 lines) that the tar does
+not contain** — OpenCore config, recovery daemon, display-head publication. A tar-only
+install gives four loaded kexts and no desktop. See *Installing the driver — two ways*.
+
+
 **Contents** — [Quick start](#quick-start) · [Configuration](#the-configuration) ·
 [Host setup](#host-setup) · [Guest setup](#guest-setup) · [Verification](#verification) ·
 [Performance](#performance-and-how-to-measure-it) · [Known bugs](#known-bugs-and-limitations) ·
