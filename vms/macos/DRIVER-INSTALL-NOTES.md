@@ -911,6 +911,40 @@ tag `610.57.04`, the repo's headers, and a rebuild of the affected kext plus the
 auxiliary kernel collection. That is a real project — but it is a *build*, not a
 reverse-engineering exercise, which is a very different thing.
 
+## Answering "so it's the driver's job now, and macOS doesn't matter?"
+
+**Half right.** The fix must be driver-side — macOS cannot be patched. But macOS
+still *constrains what the driver is able to do*, in three ways that are now all
+measured and all unchangeable:
+
+1. **macOS enumerates only bus-0 devices here.** A device behind a root port is
+   invisible (IRQ 0, no BARs, zero `10de` nodes in `ioreg`). Re-tested after
+   `hotplug='off'` was applied to all five root ports: **still zero `10de` nodes.**
+   So there is no root-port parent, and `placeLargeBar1()` can *never* succeed in
+   this VM.
+2. **macOS corrupts any BAR address above 4 GiB** — it writes a low 32-bit value
+   into the high dword.
+3. **macOS publishes no `IODeviceMemory` descriptor above 4G**, so the driver's
+   `readBARs()` falls back to BAR3 even when the address is fine.
+
+So the driver's job is precisely: **work with what macOS can actually provide** — a
+BAR at or below 4 GiB, at a sane address, with or without a descriptor.
+
+### The concrete target
+
+| step | value | status |
+|---|---|---|
+| host BAR1 | **4 GiB** | macOS places it at `0x1000000000` — sane (measured) |
+| driver reads size from | **Resizable BAR capability** | reads correctly at every size already |
+| driver reads address from | **BAR registers** (`configRead32(0x10 + 4*bar)`) when no descriptor matches | to implement |
+| resulting `fBarLen` | 4 GiB | `fBarLen >= 4 GiB` gate passes |
+| resulting budget | **2 GiB** | 10x the current 192 MB |
+
+Note what this does *not* need: `placeLargeBar1()`, a root port, a large BAR, or any
+change to macOS, QEMU or OpenCore. It is purely the **reading** path — exactly the
+two open-source functions in Findings 10/11, in a tree that builds with
+`build/accel_build.sh` and NVIDIA's `open-gpu-kernel-modules@610.57.04`.
+
 ## Why the driver wants a large BAR — and who is supposed to place it
 
 This resolves an apparent contradiction between the NullMoth installer and the
