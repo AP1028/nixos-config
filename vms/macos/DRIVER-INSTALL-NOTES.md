@@ -883,6 +883,84 @@ bridge it requires.
 4. `ResizeGpuBars = -1`, `ResizeAppleGpuBars = -1` unchanged; no driver patch, no
    OpenCore change, no OVMF rebuild
 
+## NMS flash: PROVEN to be a driver scanout-binding bug
+
+Symptom: after running No Man's Sky, the panel alternates between the desktop and the
+game's last frame. The rate tracks compositing activity — dragging a window makes it
+fast and regular, because the WindowServer then composites continuously. It persists
+with the game exited, and it survives guest reboots.
+
+### The proof: capture the composite, compare with what is displayed
+
+`screencapture` reads what the **WindowServer composited**. Eight rapid captures came
+back byte-identical in pairs, all within 63 bytes of each other (the variation is the
+menu-bar clock):
+
+```
+9056926  shot1.png     9056980  shot3.png     9056978  shot5.png
+9056926  shot2.png     9056968  shot4.png     9056978  shot6.png
+```
+
+**A stable, correct desktop.** But the panel alternates. Therefore:
+
+| layer | state |
+|---|---|
+| WindowServer composite (what screencapture reads) | **correct** |
+| what the display actually scans out | **wrong** — alternates with the dead game's frame |
+
+**It is a driver bug**, in the **scanout surface binding**, not in the flip path.
+
+### Why every flip counter reads clean
+
+```
+debug.nvaccel_iop_flips        : 16766
+debug.nvaccel_iop_ok           : 16863      every flip succeeded
+debug.nvaccel_iop_fail         : 0
+debug.nvaccel_iop_flip_stale   : 0          <- no stale flips, by the driver's own accounting
+debug.nvaccel_iop_flip_refused : 0
+debug.nvaccel_iop_ok_h0        : 16863      head 0 only
+```
+
+`flip_stale = 0` because the driver sincerely believes the surface it scans out is
+current. The staleness is invisible to its own accounting — which is why the counters
+cleared the flip path and the screen capture convicted the binding instead.
+
+**Mechanism:** when the client that owned the scanned-out surface exited, the driver
+never rebound the head to the WindowServer's live surface. It keeps flipping —
+successfully — to a surface nobody updates any more.
+
+### Hypotheses falsified by data (do not re-tread these)
+
+1. **Memory pressure** — fixed (8 GiB budget, parks/refusals 0); the drag stall is gone.
+2. **Async flip recycling the scanout buffer** — `iop_async_flips 15419`, `refused 0`,
+   `drop 0` while flashing. Setting `debug.nvaccel_iop_async=0` changed nothing.
+3. **Orphaned surface left in the flip chain** — `iop_flip_stale 0`, `iop_fail 0`.
+4. **The game's own buffering** (`VsyncEx=Triple`, exclusive fullscreen) — switching to
+   `Single` + borderless changed the flash from *steady between splash and frame* to
+   *bursts between frame and desktop*, but did not remove it.
+5. **WindowServer-side staleness** — screencapture shows a correct composite.
+
+### Recovery, and the absence of a userspace lever
+
+* **Host-side FLR reset** (`echo 1 > .../reset` after unbinding vfio-pci) — verified to
+  restore the display. Guest reboots do **not** help: with vfio passthrough the guest
+  driver programs the physical GPU and a guest reboot never resets it.
+* **`nvrmctl` cannot help** — its only subcommands are `go`, `good`, `state`. There is
+  no surface or display reset, and no sysctl exposes one.
+
+### Draggable levers found (recorded for whoever builds the driver)
+
+* The driver has a real runtime property interface via `callPlatformFunction`:
+  `NVRMBootRaster`, `NVRMBootScreen`, **`NVRMBootScreenDone`** (releases the boot-screen
+  buffer: "boot screen: buffer released after the takeover"), `nvFlipToSurfacePure`,
+  `nvNewAccelClient`.
+* Flip-path sysctls: `debug.nvaccel_iop_async`, `_async_flips`, `_async_refused`,
+  `_async_drop`, `_iop_flip_hit/_miss/_stale/_refused`, `_iop_blank`, `_iop_ok_h0..h3`.
+* `destroyScanoutResource` / `setupScanout` are declared in
+  `kexts/NVRM/accel/iofam/IOAccelLegacyDisplayMachine.h` — **headers only; the
+  implementation is not in the public source**, which is why no driver-side fix is
+  possible here.
+
 ## Stuck display: the display link stops, and how to recover without rebooting
 
 Observed after running No Man's Sky: **the screen freezes on the last frame the
