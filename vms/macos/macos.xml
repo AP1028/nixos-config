@@ -410,15 +410,5 @@
          PCIe bridges, which is what sets macOS's IOPCIHPType. -->
     <qemu:arg value='-global'/>
     <qemu:arg value='ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.hotplug=off'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.x-do-not-expose-native-hotplug-cap=on'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.pref64-reserve=17179869184'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.mem-reserve=536870912'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.power_controller_present=off'/>
   </qemu:commandline>
 </domain>

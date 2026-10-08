@@ -883,7 +883,50 @@ bridge it requires.
 4. `ResizeGpuBars = -1`, `ResizeAppleGpuBars = -1` unchanged; no driver patch, no
    OpenCore change, no OVMF rebuild
 
-## Measured result (final)
+## FINAL CONFIGURATION: 16 GiB BAR, 8 GiB budget, no workarounds
+
+With the root cause fixed, every accumulated workaround turned out to be
+unnecessary — exactly as expected if the driver's shipped defaults are right for a
+large-BAR system.
+
+### What the configuration now is
+
+| item | value |
+|---|---|
+| QEMU | `-global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off` — **the only fix** |
+| GPU | behind a PCIe root port (guest bus `0x01`) |
+| host BAR1 | **16 GiB** (`resource1_resize` bit index 14) |
+| `nvrm610.conf` | **shipped values, untouched** (workaround removed) |
+| boot-args | `nvrmsettle` removed |
+| other qemu args | all experimental `-global` levers removed; only `-cpu`, `isa-applesmc`, `-smbios` remain |
+
+### Result
+
+```
+bar1: Resizable BAR capability @0x134 says BAR1 = 16384 MB (sizes supported mask 0x4000)
+bar1: host bridge 64-bit window 0x1000000000-0x17ffffffff (ACPI _CRS), CPU reaches 40 bits
+bar1: placing BAR1 16384 MB @0x1000000000, BAR3 32 MB @0x1400000000 ... PLACED
+
+autogo "up"   IODisplay 1   Dock running
+budget 8192 MB        <- 42x the original 192 MB
+bars   bar1@0x14:0x1000000000+0x400000000   (16 GiB)
+
+bench.sh 18 s:
+  flips 1647   WindowServer 9.10 s -> 5.53 ms/flip
+  grants +0   parks +0   refusals +0
+  mapped 160 / 8192 MB
+```
+
+**`parks +0, refusals +0`** with a 42x budget against the original — the vramGrant
+park/retry pressure that this whole investigation started from is simply gone.
+
+**Note on the fps figure:** it varies between runs (91 fps here, 135 fps at the 8 GiB
+BAR with identical zero-thrash counters), so the stable indicators are **parks,
+refusals, and ms/flip** rather than raw fps. `/home/tianyixia/nvmtltest/bench.sh`
+gates on session readiness, but a freshly booted machine can still slip through and
+report `flips 0` — which happened twice and is a false alarm both times.
+
+## Measured result (8 GiB BAR, for comparison)
 
 ```
 uptime 2 min    console tianyixia    Dock running    WindowServer running
