@@ -488,6 +488,45 @@ destructive.
 
 ---
 
+## Shutting down panics the guest — use reboot, or force it off
+
+**Clicking Shut Down in macOS does not shut the guest down. It panics, recursively, and
+hangs.** From the serial log:
+
+```
+Debugger called: <panic>
+SMCWDT::setWatchdogTimer ERROR: smcWriteKey failed (kSMCBadCommand)
+Nested panic detected - entry count: 2
+Ticket lock 0xffffff800c13d480 is unexpectedly owned by thread ... @lock_ticket.c:143
+RECURSIVE DEBUGGER ENTRY DETECTED
+```
+
+**The trigger is the emulated SMC, not the driver.** The shutdown path sets the SMC watchdog
+timer; QEMU's AppleSMC emulates the keys macOS *reads* and rejects that write with
+`kSMCBadCommand`. The failure then deadlocks on a ticket lock inside the panic path, so the
+panic handler panics again and the machine never completes the shutdown. Nothing is
+spinning — it is stuck in a nested panic loop, which looks identical from the console.
+
+**This is why reboots have always worked and shutdown never has.** A reboot tears the kernel
+down by a different path and never reaches the watchdog setup.
+
+What to do:
+
+```bash
+# preferred — a reboot exercises the same driver teardown without the watchdog path
+ssh <guest> sudo shutdown -r now
+# then stop the domain from the host
+virsh -c qemu:///system destroy macos
+
+# if you already clicked Shut Down and it is wedged, it will not recover
+virsh -c qemu:///system destroy macos
+```
+
+A hard destroy is safe here: the panic has already stopped all writers, and APFS is
+journaled. The GPU is left bound to `vfio-pci` afterwards, so run `gpu-to-host` to give it
+back to the host.
+
+---
 ## Recovery
 
 Cheapest first.
