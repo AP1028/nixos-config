@@ -247,12 +247,8 @@
     <graphics type='spice' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
     </graphics>
-    <!-- Temporary: an emulated display so the boot can be SEEN (QEMU screendump)
-         while diagnosing. With type='none' there is no console at all, and the
-         pre-driver guest produces no serial output either, leaving no way to
-         observe it. Restore type='none' once the driver is back. -->
     <video>
-      <model type='vmvga' heads='1' primary='yes'/>
+      <model type='none'/>
     </video>
 
     <sound model='ich9'/>
