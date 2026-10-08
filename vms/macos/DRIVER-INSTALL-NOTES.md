@@ -804,6 +804,62 @@ parked entries under pressure (they are rejects — the retry may succeed once o
 grants are released) would fix it. See
 [UPSTREAM-REPORT.md](UPSTREAM-REPORT.md) Finding 9.
 
+## ISOLATED: OpenCore is what writes the garbage BAR address
+
+Four-way isolation with the SAME hardware (machine `pc-q35-10.2`, same OVMF
+`edk2-x86_64-code.fd`, same `-cpu` args, same 32 GiB RAM, same GPU hostdevs, same
+8 GiB host BAR1):
+
+| guest | BAR1 address | QEMU |
+|---|---|---|
+| **Linux** (Alpine, twin XML) | `0x1000000000` | ✅ runs |
+| **Windows** (`win11-stealthy-dgpu`) | `0xe000000000` | ✅ runs |
+| **macOS with OpenCore disk removed** | — | ✅ runs, **no crash** |
+| **macOS with OpenCore** | `0x8408400000000000` | ❌ crash |
+
+**So it is not QEMU, not vfio, and not OVMF** — OVMF places the BAR correctly (the
+Linux and no-OpenCore runs prove it). OpenCore, or something it loads, overwrites
+BAR1 with a non-canonical address, and QEMU then dies trying to map it.
+
+**And it is not a kext:** with *every* entry in `Kernel -> Add` disabled, the macOS
+guest still crashes. So it is OpenCore's own EFI-side code, not Lilu /
+WhateverGreen / VirtualSMC.
+
+Ruled out as the trigger:
+
+* `ResizeGpuBars = -1` — still crashes, so it is not the ReBAR *write* path
+* `ResizeGpuBars = 13` — same
+* `DevirtualiseMmio = true` — same
+* `phys-bits=40` added to the `-cpu` argument — same
+* `q35-pcihost.pci-hole64-size = 256 GiB` — same
+
+Remaining OpenCore-side suspects to bisect (in `EFI/OC/`):
+
+* `Drivers/OpenRuntime.efi` — the runtime driver that owns the memory map; the
+  most likely place for MMIO/PCI resource handling
+* `ACPI/SSDT-DTGP.aml` — GPU/device-tree helper
+* OpenCore itself (version-specific) — an older or newer build may differ
+
+### How AMD macOS passthrough handles this: it does not — it avoids it
+
+Per the AMD OS X administrator, the standard AMD Resizable-BAR recipe is:
+
+```
+Booter -> Quirks -> ResizeAppleGpuBars = 0     # macOS is given a SMALL BAR (1 MB)
+UEFI   -> Quirks -> ResizeGpuBars      = -1
+Remove npci=0x2000 / npci=0x3000 — "it'll conflict with Above 4G decoding"
+```
+
+Even with ReBAR enabled in the BIOS, **macOS is deliberately given a small BAR**,
+because macOS's own PCI resource allocation cannot be trusted with a large one.
+This is a **macOS limitation, not an NVIDIA one** — and our boot-args contain no
+`npci=`, so that specific conflict does not apply here.
+
+It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
+`ResizeAppleGpuBars = -1` (macOS sees the full BAR), which works on real hardware
+because the motherboard firmware has already assigned the BAR and macOS leaves it
+alone. In a VM, macOS re-derives the assignment and gets it wrong.
+
 ## Definitive BAR conclusion (host-resize-only, no OpenCore code patch)
 
 **You cannot get a usable BAR larger than 256 MB on this setup. 192 MB is the
