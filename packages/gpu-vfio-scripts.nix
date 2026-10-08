@@ -22,34 +22,40 @@
     case "''${1:-}" in -s) SILENT=true; shift;; esac
 
     # ── Resizable BAR sizing ─────────────────────────────────────
-    # BAR1 on the dGPU is a Resizable BAR. A large one breaks VM passthrough:
-    # at 8 GiB and above the guest firmware places it on a non-canonical
-    # address (0x8508000000000000 — a 32-bit base written into the high dword
-    # of a 64-bit BAR), which QEMU/KVM reject, so the domain either fails to
-    # start or the guest ends up with no usable aperture. 4 GiB is the largest
-    # size that still places correctly. Shrink for the VM, restore max for host.
+    # BAR1 on the dGPU is a Resizable BAR, and its SIZE decides the NullMoth
+    # driver's VRAM budget:
+    #
+    #     budget = (fBarLen >= 4 GiB) ? fBarLen / 2 : 192 MB      (nvrm-fb.cpp)
+    #
+    # so a small BAR caps the driver at 192 MB no matter how much VRAM the card
+    # has. Set it as large as the card advertises: 16 GiB gives an 8 GiB budget.
     #
     # resource1_resize takes a BIT INDEX, not a byte count:
     #   0=1MB 1=2MB 2=4MB ... 10=1GiB 11=2GiB 12=4GiB 13=8GiB 14=16GiB
     # so the size in bytes is 2^(idx+20).
-    # 256 MB (index 8) is NOT a compromise — it is the value macOS requires.
-    # MEASURED on macOS 15.8.1 + NullMoth 1.0.1 (RTX 5080 Max-Q):
-    #   * at 1 GiB and 4 GiB, IOPCIFamily lists BAR1 in the device's `reg` but
-    #     never in `assigned-addresses`, so no IODeviceMemory descriptor exists.
-    #     The NullMoth driver's readBARs() then fills bars[FB] with PCI BAR3
-    #     (32 MB), the RM is handed that as its VRAM aperture, and
-    #     rm_init_adapter() fails with
-    #       kbusVerifyBar2_GB202: MMUTest ... returned garbage 0x0
-    #       nvAssertOkFailedNoLog: NV_ERR_MEMORY_ERROR @ kern_bus_gm107.c:362
-    #   * at 256 MB macOS DOES assign it (bar1@0x14:0x90000000+0x10000000) and
-    #     the driver comes up: rm_init_adapter -> OK, PASS 2 REACHED,
-    #     4 NVRMDisplay nubs published, VRAM,totalsize published, IOFramebuffer
-    #     goes 0 -> 5.
-    # 256 MB is NVIDIA's default non-Resizable-BAR aperture, which is why macOS
-    # accepts it. Do not raise this "for bandwidth": a larger BAR makes macOS
-    # refuse the assignment and the driver fails outright.
-    BAR_IDX_VFIO=8    # 256 MB — the largest size macOS will actually assign
-    BAR_IDX_HOST=14   # 16 GiB — the maximum this card advertises
+    #
+    # HISTORY — this used to be 8 (256 MB), with a long comment claiming 256 MB
+    # was "the value macOS requires" and that a larger BAR made macOS refuse the
+    # assignment and the driver fail outright. Those measurements were real but
+    # they were a SYMPTOM, not a requirement: they were taken with the GPU on
+    # guest bus 0x00, where placeLargeBar1() has no parent bridge to reprogram
+    # and logs "bar1: parent root port not found", leaving macOS's own (small)
+    # assignment as the only option.
+    #
+    # The fix is to put the GPU BEHIND A PCIE ROOT PORT (guest bus 0x01) and stop
+    # QEMU advertising ACPI hotplug for PCI bridges:
+    #
+    #     -global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off
+    #
+    # Without that property macOS assigns a root-port device no resources at all
+    # (the root ports advertise zero-size `ranges`). With it, macOS resources the
+    # card, the driver places its own 16 GiB BAR, and the budget goes 192 MB ->
+    # 8 GiB. MEASURED: bar1@0x14:0x1000000000+0x400000000, budget 8589934592.
+    #
+    # Do not lower this back to 256 MB. A small BAR is not "what macOS requires";
+    # it is what a VM that cannot present the normal Mac topology is stuck with.
+    BAR_IDX_VFIO=14   # 16 GiB — maximum this card advertises; gives an 8 GiB budget
+    BAR_IDX_HOST=14   # 16 GiB — the same; kept separate as they need not match
 
     # BAR1 size in bytes for a BDF (0 if unassigned or no resizable BAR1)
     bar1_bytes() {
@@ -95,7 +101,7 @@
             echo "$dev" > "/sys/bus/pci/drivers/$drv/unbind" 2>/dev/null || true
             sleep 0.5
         fi
-        set_bar1 "$dev" "$BAR_IDX_VFIO" "4 GiB for passthrough"
+        set_bar1 "$dev" "$BAR_IDX_VFIO" "16 GiB for passthrough"
         echo "vfio-pci" > "/sys/bus/pci/devices/$dev/driver_override" 2>/dev/null || true
         echo "$dev" > /sys/bus/pci/drivers_probe 2>/dev/null || true
     }
@@ -482,7 +488,7 @@
         fi
 
         # BAR1 must be programmed while the device is unbound
-        set_bar1 "$dev" "$BAR_IDX_VFIO" "4 GiB for passthrough"
+        set_bar1 "$dev" "$BAR_IDX_VFIO" "16 GiB for passthrough"
 
         # Pin to vfio-pci and probe
         if ! echo "vfio-pci" > "/sys/bus/pci/devices/$dev/driver_override" 2>/dev/null; then
@@ -659,11 +665,17 @@
     done
 
     # ── Resizable BAR sizing (mirror of gpu-to-vfio) ─────────────
-    # gpu-to-vfio shrinks BAR1 to 256 MB because macOS will not assign a larger
-    # Resizable BAR (see the note there for the measurements). Restore the
-    # maximum here so the host gets the full aperture back. resource1_resize
-    # takes a BIT INDEX: 8=256MiB, 12=4GiB, 14=16GiB.
-    BAR_IDX_VFIO=8    # 256 MB — must match gpu-to-vfio; see the note there
+    # Keep BAR1 as large as the card advertises for passthrough: the NullMoth
+    # driver's VRAM budget is fBarLen/2, so a big BAR is the point (16 GiB ->
+    # 8 GiB budget). resource1_resize takes a BIT INDEX:
+    # 8=256MiB, 12=4GiB, 13=8GiB, 14=16GiB.
+    #
+    # HISTORY: this used to be 8 (256 MB), on the belief that macOS would not
+    # assign a larger Resizable BAR. That was a symptom of the GPU being on bus
+    # 0x00 where the driver had no parent root port; with the GPU behind a PCIe
+    # root port and -global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off,
+    # a 16 GiB BAR is assigned and placed by the driver itself.
+    BAR_IDX_VFIO=14   # 16 GiB — must match gpu-to-vfio; see the note there
     BAR_IDX_HOST=14   # 16 GiB — the maximum this card advertises
 
     bar1_bytes() {
