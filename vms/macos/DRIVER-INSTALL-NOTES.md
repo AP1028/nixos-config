@@ -897,7 +897,25 @@ trusting the firmware. For the port carrying the GPU:
 `iasl` and `acpidump` are both installed on the host, and `acpidump` can run against
 a guest's tables. QEMU is 11.1.1.
 
-### Next steps, in order
+### Attempted: dumping the guest ACPI via QEMU's monitor — does not work
+
+Tried to extract the tables host-side with no guest cooperation, using QEMU's
+`pmemsave` to read guest physical memory:
+
+```bash
+pmemsave 0xE0000 0x20000 "/root/acpiwalk/ebda.bin"     # RSDP lives in this range
+```
+
+**`pmemsave` reads 0xFF for this guest's memory** — 131,072 bytes dumped with 130,142
+non-zero, all `0xff`, and no `RSD PTR `, `FACPI`, `DSDT` or `XSDT` signature anywhere in
+the low 1 MB. So the guest's low memory is not readable this way (KVM/vfio), and the
+host-side extraction route is closed.
+
+**Lesson recorded:** HMP parses the filename argument as an expression — `pmemsave
+0xe0000 0x1000 /home/...` fails with `invalid char 'h'`. The filename must be quoted:
+`pmemsave 0xE0000 0x20000 "/root/x.bin"`. Worth knowing before anyone repeats it.
+
+### Next steps, in order### Next steps, in order
 
 1. **Dump the guest's ACPI and disassemble the DSDT with `iasl`**, then read the root
    ports' `_CRS` to confirm it is empty/zero.
