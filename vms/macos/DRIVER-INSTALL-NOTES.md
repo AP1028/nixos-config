@@ -860,6 +860,65 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## INDEPENDENT VERIFICATION: NVRM.kext cannot be built from public sources
+
+A separate agent, given only the repo and no knowledge of our conclusions, was asked
+to establish whether `NVRM.kext` is buildable. It reached the same answer by a
+different route and with harder evidence. Its three independent gaps, each
+sufficient on its own:
+
+**1. No script compiles the BAR code.** The symbols are located precisely:
+`placeLargeBar1` declared `kexts/NVRM/NVRM.cpp:120`, defined `:679`, called `:304`;
+`readBARs` declared `:119`, defined `:818`, called `:305`;
+`nvrmDiscoverBar1` at `kexts/NVRMFB/fb/nvrm-fb.cpp:1123`. **Every `.sh` in the repo
+was checked: zero compile `NVRM.cpp` or `nvrm-fb.cpp`.** `build/` produces only
+`NVAccel.kext`, `NVRMAGDC.kext`, the Metal plugin, the translator and Mesa NVK. The
+only NVRM/NVRMFB mentions in any script are kext-name lists in install/uninstall
+scripts. Nothing in `build/` ever references the `kexts/` tree.
+
+**2. NVIDIA's public ogkm has no Darwin target at all.** `grep -ri darwin` over the
+whole tree = **0 hits**; `README.md:1` calls it "NVIDIA **Linux** Open GPU Kernel
+Module Source"; `utils.mk:123-137` branches only for Linux/FreeBSD/SunOS;
+`nvport/debug.h:277-293` ends in `#error "Unsupported target OS"`. Vestigial Apple
+code exists (`cpuopsys.h:108` `NV_MACINTOSH`) but is inert — its only consumer in
+the tree is a log buffer size.
+
+> **Hard proof it is not a port:** `make TARGET_OS=Darwin -C src/nvidia` **exits 0**
+> and writes `_out/Darwin_x86_64/nv-kernel.o` (18 MB) — whose magic bytes are
+> `7f 45 4c 46` = **ELF, a Linux object, not Mach-O**. `TARGET_OS` only renames the
+> output directory; the flags remain Linux kernel flags. A false positive.
+
+**3. The scripts depend on unpublished private artifacts.** `accel_build.sh:15`
+reads `$NV/_out/Darwin_x86_64/compile_cmds.sh`; run on a clean macOS guest against a
+clean stock ogkm clone it **exits 1** (`head: ... No such file or directory` then
+`RMDEFS[@]: unbound variable`) before reaching any compiler. **`compile_cmds` has 0
+hits in the entire ogkm tree** — stock ogkm produces `nv-kernel.o`, never that file.
+The same path is required by `kexts/NVRM/rmcc.py:7`.
+
+**The decisive artefact:** `kexts/NVRM/rmcc.py:6` says *"`build-nvrm.sh` runs with
+HOME=<its home>; OGKM names the RM tree"* and `:3` mentions *"The kext links it
+beside **libnvkernel.a**"*. **Neither `build-nvrm.sh` nor `libnvkernel.a` exists in
+the repo or in ogkm, and `rmcc.py` is referenced by no build script.** The NVRM kext
+is produced by a private script, linking a private static library, and neither is
+published.
+
+Also: five build scripts hardcode private `$HOME/nvmtl-build/...` paths;
+`build_agdc.sh` is not even listed in the README; and `git ls-files` shows 495 files
+with **zero** `.kext`/`.dylib`/`.o`/`.a` — prebuilt kexts exist only as release
+binaries, which is a download, not a build.
+
+**Verdict: `NVRM.kext` is obtainable publicly only as a prebuilt binary.** The
+README's "Build from source" is accurate about the four user-space components and
+silent about the kernel extension that is the core of the driver.
+
+### Consequence
+
+The root-port gate at `kexts/NVRM/NVRM.cpp:746` remains a precise, well-specified
+three-line patch — and it **cannot be built by anyone outside the project today**.
+The only actionable route is upstream: report the gate, and separately request that
+`build-nvrm.sh`, `libnvkernel.a` (or the equivalent) and the Darwin ogkm port be
+published, or that the placement tolerate a root-complex parent.
+
 ## SMOKE TEST RESULT: the published build recipe is INCOMPLETE
 
 I claimed earlier (correcting an earlier still) that the driver is buildable from
