@@ -818,9 +818,39 @@ resizing (`ResizeGpuBars = -1`):
 | 8 GiB | **crash** | — | — |
 | 16 GiB | **crash** | — | — |
 
-### Why >= 8 GiB crashes — and why it is NOT OpenCore
+### CORRECTION: it is NOT a QEMU bug — it is the macOS-side PCI placement
 
-`ResizeGpuBars` was already `-1`, so OpenCore issued no resize, and it still died:
+The decisive experiment: boot **`win11-stealthy-dgpu` with the same 8 GiB host
+BAR**. Windows works perfectly:
+
+```
+win VM state: running     crashed? 0
+BAR1: 64 bit prefetchable memory at 0xe000000000 [0xe1ffffffff]   <- 8 GiB, sane
+BAR3: 64 bit prefetchable memory at 0xe200000000 [0xe201ffffff]
+```
+
+**QEMU and vfio map an 8 GiB BAR cleanly.** The macOS guest is the one producing
+`0x8408400000000000`, and QEMU only crashes because it then tries to map that
+garbage. The difference between the guests:
+
+* **Windows re-assigns PCI resources itself** and placed the BAR at 896 GiB —
+  outside QEMU's declared 32 GiB hole entirely, and perfectly valid.
+* **macOS does not; it inherits/derives a 32-bit-limited placement**, taking a low
+  MMIO value (`0x84084000`, from BAR0's neighbourhood) and writing it into the high
+  dword of the 64-bit BAR.
+
+So the blocker is in the guest-visible PCI resource map, not in vfio.
+
+### Approaches tried for it, all failed
+
+| attempt | result |
+|---|---|
+| `ResizeGpuBars = -1` (guest must not resize) | ❌ still crashes — OpenCore was never the cause |
+| `x-no-mmap=on` | ❌ crash avoided but the address is **byte-identical**; it is a DEBUG option ("Allows to trace MMIO accesses") that traps all MMIO in userspace |
+| `DevirtualiseMmio = true` at 4 GiB | ❌ no difference |
+| `-global q35-pcihost.pci-hole64-size=274877906944` (256 GiB) | ❌ identical garbage address — OVMF's 64-bit window is a **build-time PCD**, not this |
+
+### Why >= 8 GiB crashes — the mechanism (kept for the record)
 
 ```
 kvm_set_user_memory_region: failed, slot=10,
@@ -868,11 +898,13 @@ Two things rule OpenCore out as the fix:
 
 ### Where a real fix would have to go
 
-1. **QEMU/OVMF-side** — the large-BAR address computation. The value `0x84084000`
-   is a 32-bit MMIO address from the guest's low region, so the truncation happens
-   while placing a 64-bit BAR. OVMF's 64-bit MMIO window sizing
-   (`PcdPciMmio64Size`) is the lead worth chasing; the QEMU `q35-pcihost`
-   `pci-hole64-size` is already a roomy 32 GiB and is NOT the limit.
+1. **Guest-firmware / ACPI side** — make the 64-bit MMIO window the guest sees big
+   enough, or make macOS re-assign resources. Concretely, the leads are: compare
+   the host bridge `_CRS` macOS sees against what Windows sees; and rebuild OVMF
+   with a larger `PcdPciMmio64Size` (build-time, which is why the QEMU
+   `pci-hole64-size` override did nothing). A small Linux VM with passthrough is
+   a cheap third data point: Linux re-assigns resources like Windows, so it should
+   also succeed, confirming this is macOS-specific.
 2. **Driver-side** — Finding 10: read the BAR size from the Resizable BAR
    capability (which reads correctly at *every* size) and probe the BAR registers
    via `configRead32` when no descriptor matches.
