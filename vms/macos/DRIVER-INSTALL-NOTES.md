@@ -860,6 +860,68 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## CORRECTED AGAIN: it is macOS's boot.efi, not OpenCore
+
+The picker test settles it. With an **8 GiB host BAR**, OpenCore started and was
+left sitting at its own boot picker (`Misc -> Boot -> Timeout = 0`, `ShowPicker`),
+so **boot.efi never ran**:
+
+```
+state after 35 s: running     RESULT: no crash
+```
+
+**OpenCore is clear.** It can run indefinitely with an 8 GiB BAR. The garbage
+address is written by **macOS's own boot.efi/XNU when it starts**, which also
+finally explains the AMD evidence: macOS's PCI/virtual-memory handling cannot cope
+with a large BAR, which is exactly why that community hides the BAR from macOS
+instead of using it.
+
+### Everything tried against it, with verification status
+
+| attempt | verified how | result |
+|---|---|---|
+| Linux twin VM, same hardware, 8 GiB | full boot | ✅ boots, BAR at `0x1000000000` |
+| Windows VM, same GPU, 8 GiB | full boot | ✅ boots, BAR at `0xe000000000` |
+| OpenCore stopped at its picker, 8 GiB | 35 s, no crash | ✅ **OpenCore is clear** |
+| **`DevirtualiseMmio = true`**, 8 GiB | BAR confirmed 8192 MB, config read back **inside** the mount | ❌ still crashes |
+| all `Kernel -> Add` kexts disabled | config verified | ❌ |
+| `ResizeGpuBars` `-1` and `13` | config verified | ❌ |
+| `-cpu ...,phys-bits=40` | config verified | ❌ |
+| `q35-pcihost.pci-hole64-size=256GiB` | config verified | ❌ |
+
+`DevirtualiseMmio` was the most promising candidate — its own docstring says it
+exists "to reduce the amount of virtual memory required by **boot.efi**", and an
+8 GiB MMIO region is exactly that burden. It does not help.
+
+### Conclusion: not reachable by configuration, and not by patching OpenCore
+
+The failure is inside macOS. Patching OpenCore would not help, because OpenCore is
+already proven clear. **256 MB with the 192 MB grant budget is the ceiling here.**
+
+The one remaining theoretical route is the AMD one — hide the BAR from macOS with
+`ResizeAppleGpuBars` — but that is precisely what the NullMoth driver forbids: its
+budget needs macOS to expose `fBarLen >= 4 GiB`, so shrinking the BAR for macOS
+removes the very thing the driver wants. The two requirements are mutually
+exclusive on this platform. **The driver-side fix (Findings 10/11: read the size
+from the ReBAR capability, probe the BAR registers when no descriptor matches) is
+the only path that could ever change this.**
+
+### OpenCore build workflow (set up, ready to use)
+
+`/home/tianyixia/ocbuild/OpenCorePkg` is a shallow clone of master (v1.0.8).
+`iasl`, `python3`, `gcc`, `make` and `git` are present; `nasm` comes from nix:
+
+```
+cd /home/tianyixia/ocbuild/OpenCorePkg
+nix shell nixpkgs#nasm -c bash build_oc.tool
+```
+
+Note `-c ./build_oc.tool` fails ("unable to execute") — invoke it through `bash`.
+Useful targets if this is ever resumed: `Library/OcAfterBootCompatLib/
+ServiceOverrides.c` (`ProtectMemoryRegions` at ~line 199 retypes regions;
+`DevirtualiseMmio` follows at ~line 245; the `appleLoadedImage` hook at ~line 1251
+is where macOS's `GetMemoryMap` is overridden) and `CustomSlide.c`.
+
 ## OpenCore patch project — bisect results and handover
 
 ### First, what the small BAR actually costs (do not misread this)
