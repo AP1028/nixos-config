@@ -404,6 +404,12 @@
          NullMoth driver was tested on). -->
     <qemu:arg value='-smbios'/>
     <qemu:arg value='type=2'/>
+    <!-- The bridge-level ACPI hotplug switch. OSX-KVM carries exactly this line
+         (OpenCore-Boot.sh:47) commented out; per-root-port hotplug=off could not
+         reach it. This is what governs whether QEMU emits ACPI hotplug slots for
+         PCIe bridges, which is what sets macOS's IOPCIHPType. -->
+    <qemu:arg value='-global'/>
+    <qemu:arg value='ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off'/>
     <qemu:arg value='-global'/>
     <qemu:arg value='pcie-root-port.hotplug=off'/>
     <qemu:arg value='-global'/>

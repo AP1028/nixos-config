@@ -860,6 +860,92 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+# SOLVED: the budget ceiling is gone (192 MB -> 4096 MB)
+
+**One QEMU property was the whole problem.** OSX-KVM carries it in its own boot
+script, commented out:
+
+```
+OpenCore-Boot.sh:47:  # -global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off
+```
+
+With it enabled, **macOS resources a passed-through device behind a PCIe root port**.
+Everything downstream then works, because `placeLargeBar1()` finally gets the parent
+bridge it requires.
+
+## The complete working configuration
+
+1. **`-global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off`** — the fix
+2. **GPU behind a PCIe root port** (guest bus `0x01`) — so `placeLargeBar1()` has a
+   parent bridge
+3. **Host BAR1 resized large** (`resource1_resize`, bit index 13 = 8 GiB) — so the card
+   offers a large size to take
+4. `ResizeGpuBars = -1`, `ResizeAppleGpuBars = -1` unchanged; no driver patch, no
+   OpenCore change, no OVMF rebuild
+
+## Evidence
+
+With the GPU behind a root port and the property applied:
+
+```
+gpu nodes       : 1        all four nullmoth kexts loaded
+IOFramebuffer   : 9        IODisplay : 1        Dock : running
+root port ranges: non-zero windows (was three zero-size entries)
+```
+
+With the host BAR at 8 GiB, the driver's own log — the log that was previously
+unreachable because the device was never resourced:
+
+```
+bar1: Resizable BAR capability @0x134 says BAR1 = 8192 MB (sizes supported mask 0x2000)
+bar1: host bridge 64-bit window 0x1000000000-0x17ffffffff (ACPI _CRS), CPU reaches 40 bits
+bar1: placing BAR1 8192 MB @0x1400000000, BAR3 32 MB @0x1600000000, root port window ...
+bar1: dropping stale aperture 0x84004000+0x10
+bar1: dropping stale aperture 0xf0000000+0x2000000
+bar1: PLACED
+```
+
+And the result:
+
+```
+autogo   : up
+bars     : bar0@0x10:0x80000000+0x4000000
+           bar1@0x14:0x1400000000+0x200000000     <- 8 GiB
+           bar2@0x1c:0x1600000000+0x2000000
+BUDGET   : 4096 MB                                 <- was 192 MB, 21x
+mapped   : 133 MB
+IODisplay: 1
+```
+
+**No QEMU crash** — the earlier `0x8408400000000000` crash happened *because* macOS
+could not resource the device and produced a garbage address. With the device resourced
+normally, macOS never generates it.
+
+## Why the whole investigation had been stuck
+
+The chain, now closed at its first link:
+
+```
+ICH9-LPC.acpi-pci-hotplug-with-bridge-support=on   (QEMU default)
+  -> macOS sets IOPCIHPType=0x21 and will not resource root-port devices
+    -> root ports advertise zero-size ranges
+      -> GPU forced onto bus 0
+        -> placeLargeBar1() has no parent bridge ("parent root port not found")
+          -> the driver cannot place its own BAR
+            -> dependence on macOS's own placement
+              -> corrupted addresses above 4 GiB
+                -> 192 MB budget ceiling
+```
+
+## What was tried that did not work, and why it matters
+
+Per-root-port `hotplug=off`, `x-do-not-expose-native-hotplug-cap=on`,
+`pref64-reserve`, `mem-reserve`, `power_controller_present=off`, an explicit option
+ROM, `ResizeGpuBars`, `DevirtualiseMmio`, `phys-bits=40`, `pci-hole64-size`, and an
+OpenCore `DeviceProperties` injection of `ranges` — **all verified applied at QEMU, all
+without effect.** The lever was never per-port; it was the **bridge-level** ACPI
+hotplug switch on `ICH9-LPC`.
+
 ## THE OVMF/QEMU ROUTE — what is established, and the exact next steps
 
 This is the only route left, it is fully open source, and a QEMU build was
