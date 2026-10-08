@@ -4,8 +4,16 @@ A working configuration for passing an NVIDIA GPU through to a macOS 15 guest an
 running the [NullMoth nvidia-macos-driver](https://github.com/nullmoth/nvidia-macos-driver)
 on it. Written from a machine where it now works end to end.
 
-**Status:** working. The driver comes up, the GPU drives its own output, and Metal 3
-is available to applications.
+**Status:** working, and better than when this file was first written — see
+[WORKING-RECIPE.md](WORKING-RECIPE.md) for the current configuration. The driver comes
+up, places its own 16 GiB BAR, drives its own output, and Metal 3 is available to
+applications, with an **8 GiB VRAM budget** instead of the 192 MB this file originally
+documented as a ceiling.
+
+> **This file is the investigation history.** It is preserved because the reasoning and
+> the falsified hypotheses are worth more than the conclusion. It is **not** the setup
+> instructions — several of its early requirements were later disproved. Start with
+> [WORKING-RECIPE.md](WORKING-RECIPE.md).
 
 **Tested environment**
 
@@ -14,7 +22,7 @@ is available to applications.
 | Host | ASUS ROG laptop, Intel Core Ultra 9 285H, NixOS, QEMU 11.1.1 / libvirt |
 | Host display GPU | Intel Arc iGPU (stays on the host) |
 | Passed-through GPU | NVIDIA RTX 5080 Max-Q, `10de:2c59`, mobile Blackwell GB203M |
-| Guest | macOS 15.8.1 (24H32), OpenCore, NullMoth driver 1.0.1 |
+| Guest | macOS 15.8.1 (24H32), OpenCore, NullMoth driver **1.0.9** (release v1.0.13) |
 | Machine type | `pc-q35-10.2`, 12 vCPU, 32 GiB |
 | Monitor | Sceptre O34, 3440x1440 @ 165 Hz, on the GPU's DP-1 |
 
@@ -23,27 +31,37 @@ covers the parts that differ in a VM. Read their README first.
 
 ---
 
-## TL;DR — six things must be right
+## ⚠️ THE TL;DR THAT USED TO BE HERE WAS WRONG — READ `WORKING-RECIPE.md` INSTEAD
 
-If you get these six right, the driver works end to end: GPU-composited desktop
-**and** Metal 3 for applications, at usable speed. Each has a distinctive failure
-signature, so you can tell which one you've got wrong.
+**→ [WORKING-RECIPE.md](WORKING-RECIPE.md) is the current, verified recipe.** This file
+is the investigation history and is kept for the reasoning and the dead ends.
 
-| # | Requirement | If wrong |
-|---|---|---|
-| 1 | **BAR1 must be 256 MB** (set on the *host*) | driver loads but `rm_init_adapter` fails; no display |
-| 2 | **GPU on guest bus `0x00`** — not behind a PCIe root port | macOS never sees the card at all |
-| 3 | **`<video>` = `none`** | the emulated GPU competes with NVRMFB for display index 0 |
-| 4 | **USB hostdevs on an XHCI controller** | passed-through keyboard/mouse never appear in macOS |
-| 5 | **`nvrmsettle=15000` in boot-args** | driver runs but **no Metal and no GPU compositing** — see below |
-| 6 | **`nvrm610.conf` at the code defaults** | desktop works but dragging windows runs at **16-21 fps** instead of 58-80 |
+The old TL;DR listed six requirements. **Two of them were actively wrong and a third
+became unnecessary**, and they were wrong in the direction that blocked the whole
+problem for most of this investigation:
 
-Requirement 5 is the non-obvious one and the subject of the next section. With it
-in place **no runtime steps are needed at all**: no sysctls, no daemon, no
-WindowServer restart. The driver arms the display and the Metal plugin itself
-during boot. (An earlier revision of this document prescribed three runtime gates
-and a boot daemon; both turned out to be workarounds for a race that `nvrmsettle`
-removes.)
+| old requirement | reality |
+|---|---|
+| "BAR1 must be 256 MB" | **16 GiB works** — and the large BAR is the goal, not the hazard |
+| "GPU on guest bus `0x00`, not behind a PCIe root port" | **behind a root port is required** for `placeLargeBar1()` to have a parent bridge |
+| "`nvrmsettle=15000` is required" | not needed — remove it |
+
+The reason bus `0x00` was believed necessary is that macOS refused to resource a
+root-port device — which turned out to be caused by **QEMU advertising ACPI hotplug for
+PCI bridges**, fixable with one QEMU property:
+
+```
+-global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off
+```
+
+With that in place the GPU goes behind a root port, macOS resources it, the driver places
+its own 16 GiB BAR, and the VRAM budget goes from **192 MB to 8 GiB**. Every "hard
+ceiling" recorded further down this file — the 256 MB BAR, the missing descriptor above
+4G, the garbage address, the park-exhaustion stall — either disappeared or changed
+character once the device was presented normally.
+
+**Treat the sections below as a record of what was tried and what it proved, not as
+instructions.** Where they conflict with `WORKING-RECIPE.md`, the recipe wins.
 
 ---
 

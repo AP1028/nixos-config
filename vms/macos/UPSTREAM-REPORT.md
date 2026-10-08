@@ -1,8 +1,31 @@
-# Upstream report — findings in nvidia-macos-driver 1.0.1
+# Upstream report — findings in nvidia-macos-driver (1.0.1 → 1.0.9)
 
-Both found while running the driver in a QEMU/KVM VM (macOS 15.8.1, RTX 5080
-Max-Q `10de:2c59`, mobile Blackwell GB203M). Neither is VM-specific in principle —
-the first is a timing collision, the second is a dead line of config.
+Written while running the driver in a QEMU/KVM VM (macOS 15.8.1, RTX 5080 Max-Q
+`10de:2c59`, mobile Blackwell GB203M). Findings 1-11 are from driver 1.0.1; 12-15 were
+found on 1.0.9 with the configuration finally working.
+
+> **Status update — read this first.** The environment these findings came from has since
+> been fixed, and the fix changes the severity of several of them. One QEMU property:
+>
+> ```
+> -global ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off
+> ```
+>
+> lets macOS resource a passed-through device **behind a PCIe root port**, so
+> `placeLargeBar1()` finds the parent bridge it requires and places a **16 GiB BAR**, with
+> an **8 GiB VRAM budget** instead of 192 MB.
+>
+> Consequences:
+>
+> * **Finding 11 is superseded** — a ≥4 GiB BAR *does* work in a VM. Corrected in place.
+> * **Findings 1, 6, 7 and 10** were symptoms of the GPU being forced onto bus 0. They
+>   may no longer reproduce now the device is presented normally, and should be
+>   re-checked before acting on them.
+> * **Findings 12-15 are new.** **Finding 12 is the most serious** — it is the only one
+>   that breaks a running session, and the only one that needs a workaround to use the
+>   machine at all.
+>
+> Configuration: `WORKING-RECIPE.md` in this directory.
 
 ---
 
@@ -506,10 +529,22 @@ log shows) and fall back to probing the BAR registers when no descriptor matches
 `IOPCIDevice::configRead32(0x10 + 4*bar)` gives the address macOS programmed even
 when no `IODeviceMemory` exists. That would make a >4G BAR work rather than fail.
 
-**For users, meanwhile:** 256 MB is the only value that works. Anything larger
-produces no display and no Metal.
+**For users, meanwhile:** ~~256 MB is the only value that works~~ — **superseded.** With
+the root-port fix (see the status note at the top) a 16 GiB BAR works and the driver
+places it itself. This finding was a symptom of the GPU being forced onto bus 0, where
+`placeLargeBar1()` had no parent bridge; the descriptor dependency it describes may still
+be real, but it no longer blocks a large BAR.
 
 ## Finding 11 — a >= 4 GiB BAR is unusable in a VM, though it works on bare metal
+
+> **SUPERSEDED — a large BAR works in a VM.** The blocker was never the BAR size: it was
+> that macOS would not resource the device behind a root port, so the GPU sat on bus 0 and
+> `placeLargeBar1()` failed with `bar1: parent root port not found`. Fix that (one QEMU
+> property) and a 16 GiB BAR is placed successfully, budget 8 GiB. The measurements below
+> are still accurate *for a GPU on bus 0* and are kept as a record of the failure mode.
+> The 8 GiB "QEMU dies with a non-canonical address" case also no longer occurs, because
+> macOS now programs a sane address instead of garbage — it never generates one when the
+> device is resourced normally.
 
 **Context for the author:** `app/Resources/nullmoth-setup.sh` configures an
 installed system with `ResizeGpuBars = 13` (8 GB) and `ResizeAppleGpuBars = -1`,
@@ -532,6 +567,147 @@ users reach the same configuration the installer sets on bare metal.
 
 Also worth a line in the docs: host-set BAR sizes above 4 GiB are only viable if
 the address assignment works, so a VM user should be told to keep a small BAR.
+
+## Finding 12 — the scanout binding survives a display-mode transition (breaks the session)
+
+**Severity: highest in this report.** It is the only defect that makes the machine
+unusable, and the only one needing a workaround to use at all.
+
+After a fullscreen app runs — or any display-mode transition — the panel alternates
+between live content and a dead client's last frame. Progression observed in one session:
+
+| event | result |
+|---|---|
+| game in exclusive fullscreen | steady flash: splash ↔ game frame |
+| switched to borderless, vsync Single | bursty flash: game frame ↔ desktop |
+| left alone | partner degraded to a dark screen |
+| **WindowServer restart** | **stable — flash gone** |
+| game switched borderless → fullscreen | **wedged again** |
+
+### What it is not (each falsified by measurement, not argument)
+
+* **Not the flip path.** `nvaccel_iop_flips 16766`, `iop_ok 16863`, `iop_fail 0`,
+  `iop_flip_stale 0`, `iop_flip_refused 0` — every flip succeeds, by the driver's own
+  accounting. `flip_stale = 0` because the driver sincerely believes the surface it scans
+  out is current; the staleness is invisible to its counters.
+* **Not the composite.** `screencapture` (which reads the WindowServer's composite)
+  returns a stable, correct desktop across eight rapid captures, byte-identical in pairs,
+  while the panel alternates.
+  *(Corollary worth stating: games present through the driver's zero-copy direct scanout,
+  so they never appear in that composite at all.)*
+* **Not async flip recycling.** `debug.nvaccel_iop_async=0` changes nothing.
+* **Not a late-published framebuffer.** Writing `debug.nvaccelfb=3` does not take (the
+  value stays 1) and only one framebuffer is registered (`agdc_maxfb 1`).
+
+### The mechanism, and the author's own comment
+
+`kexts/NVRM/accel/nvrm-accel.cpp` documents the required remedy:
+
+> *"it gets a pipe only when `debug.nvaccelfb=3` is written again, **and WindowServer
+> composites it only after a WindowServer restart**"*
+
+So: the composite source changes underneath a running WindowServer, which keeps
+presenting to a surface bound before the change. Only a fresh WindowServer re-binds it.
+
+### Recovery, and what does not work
+
+* **`sudo killall -9 WindowServer`, then log in** — re-binds the scanout. ~30 s.
+  **Verified.** Keeps the VM, the BAR and the config.
+* **Host-side FLR** (unbind vfio-pci, `echo 1 > .../reset`, rebind) — **verified.**
+* **Guest reboot does not help** — with vfio the guest driver programs the physical GPU
+  and a guest reboot never resets it.
+* **No effect** (all tested): Metal shader cache clear, `killall Dock`, wallpaper change,
+  display sleep/wake, `debug.nvaccelfb=3`, `debug.nvaccel_iop_async=0`, and
+  `nvrmctl` (only `go`/`good`/`state` — no surface or display reset).
+
+**Request:** a way to re-bind the scanout without restarting the WindowServer — an
+`nvrmctl` subcommand, or a sysctl that forces a re-bind — would turn a session-breaking
+bug into a recoverable one.
+
+## Finding 13 — the park leak eventually consumes the entire budget (quantified)
+
+Finding 9 identified `gParkedForever` as a permanent leak. With a working 8 GiB budget the
+consequences are now measurable, and the leak is what causes a specific, reproducible
+symptom: **continuous window dragging is smooth, but the first drag after switching
+windows stalls.**
+
+`kexts/NVRM/fb/nvrm-fb.cpp:1261`:
+
+```c
+SInt64 before = OSAddAtomic64(want, &gVramMappedBytes) + gVramParkedBytes;
+if (before + want > budget) { ...refuse... }
+```
+
+Measured by activating apps (a real window switch) and reading the counters:
+
+```
+after Finder : res_new=95   res_free=66   refused=163
+after Safari : res_new=102  res_free=73   refused=177     +14
+after Finder : res_new=105  res_free=76   refused=185     +8
+after Safari : res_new=112  res_free=83   refused=198     +13
+after Finder : res_new=119  res_free=89   refused=214     +16
+after Safari : res_new=125  res_free=96   refused=230     +16
+```
+
+**8-16 refusals per window switch, climbing** — while `mapped` is 120 MB of an 8 GiB
+budget. For the test to fail, `gVramParkedBytes` must be ~7.9 GiB: the parked
+allocations have consumed essentially the whole budget. They are never released, so the
+condition is monotonic within a boot, and running a game accelerates it because games
+cycle many surfaces.
+
+**Two requests:**
+
+1. **Expose `gVramParkedBytes` as a sysctl.** There is no way to read it today; the
+   figure above is *inferred* from the refusal condition. Diagnosing this needs the
+   counter.
+2. **Release parked allocations** when the console/scanout surface they overlap is gone,
+   or stop charging them against every later grant.
+
+**Note for anyone benchmarking this driver:** continuous-drag fps does not expose this.
+The same session reported its best-ever figures (139.9 fps, 3.58 ms/flip, parks 0,
+refusals 0) while window switching was failing. **Refusals-per-window-switch is the
+metric that shows it.**
+
+## Finding 14 — Metal → SPIR-V translation dominates runtime
+
+`libnvmtl_translate.dylib` is the bottleneck, not the GPU. Sampling a running game:
+
+```
+2338  nvmtl_translate        ← essentially all of it
+  85  Render
+   2  air-
+```
+
+Entering a game world stalls for several seconds while pipelines compile, then recovers —
+so it is throughput, not correctness. The same dominance appears in the WindowServer
+during startup (`nvmtl_vk_pipeline_create_rt`, 1508 of 1558 samples in one sample).
+
+**Request:** a persistent on-disk pipeline cache. The stall is the visible symptom, but
+the steady-state cost is what keeps frame rates low.
+
+## Finding 15 — `NVRM.kext` cannot be built from public sources
+
+Reported because it blocks third-party fixes for Findings 12-14. Three independent gaps,
+each verified:
+
+1. **No build script compiles the kexts.** `build/` emits only NVAccel, NVRMAGDC, the
+   plugin, the translator and NVK. `kexts/NVRM/rmcc.py:6` references `build-nvrm.sh`,
+   which is not in the tree.
+2. **The public `open-gpu-kernel-modules` 610.57.04 has no Darwin support.** `grep -ri
+   darwin` returns zero hits; `nvport/debug.h` reaches `#error "Unsupported target OS"`;
+   and `make TARGET_OS=Darwin` exits 0 while writing an **ELF** object (magic
+   `7f 45 4c 46`).
+3. **Unpublished artifacts are required** — `build-nvrm.sh`, `libnvkernel.a`, and
+   `$NV/_out/Darwin_x86_64/compile_cmds.sh`. `accel_build.sh` exits 1 against a clean
+   clone; `grep -r compile_cmds` in the public tree returns nothing.
+
+**Additionally:** `destroyScanoutResource` and `setupScanout` are declared in
+`kexts/NVRM/accel/iofam/IOAccelLegacyDisplayMachine.h` but **are headers only** — the
+implementation is not in the public tree. So the display bugs in Finding 12 cannot be
+patched from outside even in principle.
+
+**Request:** publish `build-nvrm.sh`, or the Darwin port of the kernel modules, or
+`libnvkernel.a`. Any of the three would let this be worked on.
 
 ## Appendix for the author — the full runtime lever inventory
 

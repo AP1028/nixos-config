@@ -1,14 +1,30 @@
-# macOS guest (asusg16)
+# macOS guest
 
-A QEMU/KVM macOS guest, tracked in nix like the Windows VMs: the domain XML
-lives at `vms/macos/macos.xml` and is registered through
+A QEMU/KVM macOS 15 guest tracked in nix like the Windows VMs: the domain XML lives at
+`vms/macos/macos.xml` and is registered through
 `modules/hardware/virtualization.nix`.
 
-Nothing here is pinned to a macOS release. The installer media currently holds
-one Apple recovery build (`082-33203`), and the NullMoth driver targets the
-release in its README "for now" — but neither this domain nor the guest is tied
-to that: swapping `BaseSystem.img` for a newer recovery image is the only step a
-newer release would need.
+**The NullMoth NVIDIA driver works in this guest.** GPU passthrough is configured, the
+driver places its own 16 GiB BAR, and the VRAM budget is 8 GiB. For the current setup
+recipe see **[WORKING-RECIPE.md](WORKING-RECIPE.md)**.
+
+Nothing here is pinned to a macOS release. The installer media currently holds one Apple
+recovery build (`082-33203`), and swapping `BaseSystem.img` for a newer recovery image is
+the only step a newer release would need.
+
+## Documentation in this directory
+
+| file | what it is |
+|---|---|
+| **[WORKING-RECIPE.md](WORKING-RECIPE.md)** | **the current, verified setup recipe — start here** |
+| [DRIVER-INSTALL-NOTES.md](DRIVER-INSTALL-NOTES.md) | investigation history: reasoning, measurements, falsified hypotheses, dead ends |
+| [UPSTREAM-REPORT.md](UPSTREAM-REPORT.md) | findings written for the driver author |
+| [RECOVERY-STATE.md](RECOVERY-STATE.md) | pre-reboot state snapshot and recovery notes |
+| [DEBUG-HISTORY.md](DEBUG-HISTORY.md) | earlier debugging log |
+
+`bench.sh`, `dragload.m`, `surfbench.m`, `shaderbench.m` are the measurement harness
+(guest copies live in `~/nvmtltest/`). `nullmoth-desktop.sh`, `setup-macos.sh` and
+`shrink-gpu-bar.sh` are helpers.
 
 ## What is provisioned
 
@@ -27,65 +43,44 @@ sudo ./vms/macos/setup-macos.sh     # idempotent; creates the disk, defines the 
 virsh -c qemu:///system start macos --console
 ```
 
-Then in the OpenCore picker: Disk Utility -> erase the large "sata" disk as
-**APFS** -> install macOS. Several reboots; OpenCore auto-selects the
-installer then the installed volume.
+Then in the OpenCore picker: Disk Utility -> erase the large "sata" disk as **APFS** ->
+install macOS. Several reboots; OpenCore auto-selects the installer then the installed
+volume.
 
-## Important: the NullMoth driver cannot run here yet
+## GPU passthrough — configured, with one non-obvious requirement
 
-`nvidia-macos-driver` is a driver for **physical NVIDIA GSP-generation GPUs**.
-It cannot do anything in this VM as configured:
+The RTX 5080 Max-Q (`10de:2c59`, mobile GB203M) is passed through, and
+`intel_iommu=on iommu=pt` is set in `modules/hardware/virtualization.nix`.
 
-- Its kexts match a real NVIDIA PCI device (`IOPCIPrimaryMatch` = vendor
-  `0x10de`). QEMU's `vmware-svga` / `virtio-gpu` are VMware/virtio devices, so
-  `NVRM.kext` never probes and no `IOAccelerator` is created.
-- The Metal plugin is only reachable through that accelerator. On a virtual GPU,
-  macOS uses `AppleParavirtGPU`/`vmwgfx` instead; `NVMTLDriver.bundle` is never
-  loaded.
-- `NVRM`'s GSP firmware boot (`rm_init_adapter`) needs the card's BARs and
-  firmware load path; there is no pass-through equivalent.
-
-So use this guest to get macOS running, map the OpenCore settings the driver
-wants (`csr-active-config`, `boot-args`, `SecureBootModel Disabled`), and stage
-the driver package. Actually exercising Metal requires PCI passthrough.
-
-## Adding passthrough later
-
-The hardware is already prepared: `0000:01:00.0` (RTX 5080 Max-Q) and
-`0000:01:00.1` (HDMI audio) are bound to `vfio-pci`, and `intel_iommu=on
-iommu=pt` is set in `modules/hardware/virtualization.nix`.
-
-To pass the GPU through, add to `macos.xml` (mirroring the win11 dGPU VMs)
-and **remove the `<video>` element**, since the passed-through card becomes the
-display:
+**The GPU must sit behind a PCIe root port, and QEMU must not advertise ACPI hotplug for
+PCI bridges.** Without this, macOS sees the card in config space and then assigns it no
+resources at all — roots ports publish zero-size `ranges`:
 
 ```xml
-<hostdev mode='subsystem' type='pci' managed='no'>
-  <driver name='vfio'/>
-  <source>
-    <address domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
-  </source>
-  <rom bar='off'/>
-</hostdev>
-<hostdev mode='subsystem' type='pci' managed='no'>
-  <driver name='vfio'/>
-  <source>
-    <address domain='0x0000' bus='0x01' slot='0x00' function='0x1'/>
-  </source>
-  <rom bar='off'/>
-</hostdev>
+<qemu:arg value='-global'/>
+<qemu:arg value='ICH9-LPC.acpi-pci-hotplug-with-bridge-support=off'/>
 ```
 
-Two things to verify before expecting the driver to work on the card:
+With it, macOS resources the device, the driver's `placeLargeBar1()` gets the parent
+bridge it requires, and the guest GPU becomes usable. See
+[WORKING-RECIPE.md](WORKING-RECIPE.md) for the full set of steps, including resizing the
+host BAR to 16 GiB.
 
-1. **Laptop MUX.** On this ASUS the dGPU is wired to the internal panel through
-   a MUX. Confirm the panel and the dGPU share a path, or use an external
-   output, before chasing driver bugs.
-2. **RTX 5080 Max-Q is `10de:2c59` (GB203M).** The NullMoth package was tested
-   only on an RTX 5060 (`2d05`); its NVRM maps the GB20X family to
-   `gsp_ga10x.bin`, but mobile Blackwell is not a tested target.
+`<video>` must be `none`, and USB hostdevs belong on an XHCI controller.
 
-None of the NullMoth driver's own OpenCore requirements are set in this VM yet —
-they come from *its* install, not from OSX-KVM: `ResizeGpuBars=13`,
-`ResizeAppleGpuBars=-1`, `Kernel -> Block com.apple.iokit.IONDRVSupport`, and
-`SecureBootModel Disabled`.
+## Caveats worth knowing before chasing bugs
+
+1. **Laptop MUX.** On this ASUS the dGPU is wired to the internal panel through a MUX.
+   The external monitor on the card's DP-1 works; confirm the display path before
+   concluding a driver bug.
+2. **RTX 5080 Max-Q (`10de:2c59`) is not a target the NullMoth package was tested on** —
+   upstream tested an RTX 5060 (`2d05`). It works here regardless.
+3. **`NVRM.kext` cannot be built from public sources.** Verified three ways: `build/`
+   emits only NVAccel/NVRMAGDC/plugin/translator/NVK; the public
+   `open-gpu-kernel-modules` has no Darwin support; and the scripts require unpublished
+   artifacts (`build-nvrm.sh`, `libnvkernel.a`, `$NV/_out/Darwin_x86_64/compile_cmds.sh`).
+   `destroyScanoutResource`/`setupScanout` are headers only in the public tree.
+   **So the display bugs documented in the recipe cannot be patched from outside** and
+   have to go upstream.
+4. **Run games windowed/borderless.** A fullscreen display-mode transition wedges the
+   scanout; recovery is `sudo killall -9 WindowServer` (see the recipe's recovery ladder).
