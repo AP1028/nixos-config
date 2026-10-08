@@ -913,7 +913,48 @@ reverse-engineering exercise, which is a very different thing.
 
 ## FINAL SUMMARY: what is wrong, and what could actually fix it
 
-### What is wrong (all measured, not inferred)
+### Address study: host vs Linux guest vs macOS guest
+
+The same physical card, the same 256 MB baseline unless noted:
+
+| where | BAR1 address | how it got there |
+|---|---|---|
+| **HOST** (the real card) | `0x6000000000` (384 GiB) | host kernel/BIOS assignment |
+| **Linux guest** | `0x1000000000` (64 GiB) | Linux re-assigned resources itself |
+| **Windows guest** | `0xe000000000` (896 GiB) | kept the firmware's assignment |
+| **macOS guest, 256 MB** | `0x90000000` (2.25 GiB, **below 4G**) | macOS's own allocator — works |
+| **macOS guest, 8 GiB** | `0x8408400000000000` | macOS's own allocator — **garbage** |
+
+Host regions for reference: BAR0 `0x90000000` (64 MB), BAR1 `0x6000000000` (256 MB),
+BAR3 `0x6010000000` (32 MB).
+
+### What this establishes
+
+1. **The guest's BAR address is guest-local.** The host has the card at
+   `0x6000000000`, and *no* guest uses that address — Linux picked 64 GiB, Windows
+   896 GiB, macOS 2.25 GiB. vfio translates guest-physical to host-physical through
+   the IOMMU, so the host's placement puts **no constraint** on the guest.
+2. **There is no "correct" answer to compute.** Three operating systems chose three
+   different addresses and all three are valid. So macOS is not failing to *match*
+   something — it is failing to compute *any* consistent value.
+3. **The garbage value is a low-region address in the wrong half.** `0x84084000`
+   lies inside the guest's **low** MMIO region (BAR0 is at `0x80000000`, the audio
+   function at `0x84a84000`). macOS's allocator appears to have picked an address
+   from its 32-bit region and written it into the **high dword** of the 64-bit BAR
+   slot. That is a region-mix-up, not a range or size problem.
+4. **At 256 MB macOS itself chooses to place the BAR below 4G** (`0x90000000`),
+   whereas Windows and Linux place theirs above. So macOS is comfortable with the
+   low window — which is consistent with it reaching for a low address when the
+   large BAR confuses it.
+
+### Consequence
+
+Nothing on the host needs to change, and nothing on the host *can* fix this: the
+address macOS produces is its own invention. The one lever that remains is the
+driver accepting a BAR at a size macOS *can* place — which is the 4 GiB case, where
+macOS produces the perfectly sane `0x1000000000`.
+
+## What is wrong (all measured, not inferred)
 
 **macOS's PCI resource allocator corrupts the GPU's large BAR address.** It writes a
 **low 32-bit MMIO value (`0x84084000` — BAR0's neighbourhood) into the HIGH dword**
