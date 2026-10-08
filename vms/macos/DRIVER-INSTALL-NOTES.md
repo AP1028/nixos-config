@@ -860,6 +860,62 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## FINAL SUMMARY: what is wrong, and what could actually fix it
+
+### What is wrong (all measured, not inferred)
+
+**macOS's PCI resource allocator corrupts the GPU's large BAR address.** It writes a
+**low 32-bit MMIO value (`0x84084000` — BAR0's neighbourhood) into the HIGH dword**
+of the 64-bit BAR, producing the non-canonical `0x8408400000000000`. QEMU then dies
+trying to map it. It is a 64/32-bit mix-up, not a range or capacity problem.
+
+**Every other component has been measured doing the right thing:**
+
+| component | measurement | verdict |
+|---|---|---|
+| firmware (OVMF) | assigns the 8 GiB BAR at `0xe000000000` with **no OS running** — the same address Windows picks | ✅ correct |
+| QEMU + vfio | map an 8 GiB BAR fine — Linux and Windows both boot | ✅ correct |
+| OpenCore | runs indefinitely at its own picker with the 8 GiB BAR, no crash | ✅ clear |
+| guest address space | 40 physical bits = 1 TiB; 896 GiB fits comfortably | ✅ sufficient |
+| platform/SMBIOS | `iMac19,1` and `MacPro7,1` + Cascade Lake (a real Xeon Mac) | ❌ both fail identically |
+
+**Config levers tried and failed**, each verified: `ResizeGpuBars` `-1` and `13`,
+`DevirtualiseMmio = true`, `-cpu ...,phys-bits=40`, `q35-pcihost.pci-hole64-size=256GiB`,
+`x-no-mmap=on`, all `Kernel -> Add` kexts disabled.
+
+**Consequence for the driver:**
+
+* **>= 8 GiB**: the address is garbage → unusable, and not fixable from the guest
+* **4 GiB**: the address is **sane** (`0x1000000000`), but macOS publishes **no
+  `IODeviceMemory` descriptor** above 4G, so `readBARs()` falls back to BAR3 and
+  `go(2) failed`
+
+### What could actually fix it
+
+**1. The driver-side fix at 4 GiB — the only reachable win.**
+
+Set the host BAR to **4 GiB** (macOS assigns it at a sane address, proven), then fix
+the driver's `readBARs()` / `nvrmDiscoverBar1()` (Findings 10 and 11) to:
+
+* read the BAR **size** from the Resizable BAR capability — which reads correctly at
+  *every* size (our own log shows `capability @0x134 says BAR1 = 4096 MB`), and
+* probe the BAR registers with `configRead32(0x10 + 4*bar)` when no descriptor matches
+
+`fBarLen` then resolves to 4 GiB, `fBarLen >= 4 GiB` holds, and **the grant budget
+becomes `fBarLen / 2` = 2 GiB instead of 192 MB** — a 10x improvement, reachable
+without touching macOS, QEMU or OpenCore.
+
+**2. macOS-side patching** — infeasible (boot.efi/XNU are Apple's).
+
+**3. QEMU-side** — nothing is broken to fix. The only lever is *what macOS is shown*
+(e.g. `ResizeAppleGpuBars`), and that is exactly what the driver forbids: it needs
+macOS to expose `fBarLen >= 4 GiB`. The AMD community's workaround (hide the BAR
+from macOS) and the NullMoth driver's requirement are **mutually exclusive**.
+
+**So: virtualised hardware is not the bug here.** The firmware presents the card
+correctly and two other operating systems accept it. macOS alone mis-places it, and
+the one place that can be changed is the driver's fallback for a missing descriptor.
+
 ## The firmware's assignment is PERFECT — macOS destroys it
 
 Measured with OpenCore stopped at its own picker (so **no OS runs at all**, only
