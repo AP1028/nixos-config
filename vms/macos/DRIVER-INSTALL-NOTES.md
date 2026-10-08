@@ -911,6 +911,65 @@ tag `610.57.04`, the repo's headers, and a rebuild of the affected kext plus the
 auxiliary kernel collection. That is a real project — but it is a *build*, not a
 reverse-engineering exercise, which is a very different thing.
 
+## Why the driver wants a large BAR — and who is supposed to place it
+
+This resolves an apparent contradiction between the NullMoth installer and the
+Dortania guide.
+
+**NullMoth installer (bare metal):** `ResizeGpuBars = 13` (8 GB physical BAR) and
+`ResizeAppleGpuBars = -1` (macOS sees it).
+
+**Dortania (general Hackintosh):** *"When enabling Above4G, Resizable BAR Support may
+become available. Please ensure that Booter -> Quirks -> ResizeAppleGpuBars is set
+to `0`"* — i.e. hide the BAR from macOS.
+
+These conflict only if you assume macOS must place the BAR. **It does not.** The
+author's own comment says so:
+
+> *"13 = 8 GB: the full BAR of an 8 GB card, measured 10-07 on the RTX 5060 (**NVRM
+> moves BAR1 out of the console**, display armed)"*
+
+**The driver places the large BAR itself** — `placeLargeBar1()` moves BAR1 into the
+firmware's PCI window and arms the display. macOS is only required not to interfere.
+Dortania's advice applies to ordinary Hackintoshes whose native drivers never touch
+BAR placement; it would break this driver's budget.
+
+### Why that fails in our VM
+
+From the serial log, when the driver attempted it here:
+
+```
+NVRM-xnu: bar1: parent root port not found
+```
+
+`placeLargeBar1()` **requires a PCIe root-port parent**. Our GPU sits on bus 0 by
+necessity, because macOS refuses to enumerate a device behind a root port in this
+VM (measured early on: IRQ 0, every BAR "not mapped", invisible to macOS entirely).
+
+| | bare metal | our VM |
+|---|---|---|
+| who places the large BAR | **the driver** | macOS, because the driver cannot |
+| prerequisite | root-port parent | none available |
+| outcome | large BAR, large budget | macOS corrupts it, or 192 MB |
+
+**So the deficiency is not that macOS is bad at placing large BARs — it is that we
+removed the driver's ability to do it.** The GPU had to move to bus 0 to be visible
+at all, and that is exactly what breaks `placeLargeBar1()`.
+
+### The test this implies (not yet run)
+
+The reason a root-port device was invisible was **ACPI hotplug enumeration**
+(`IOPCIHPType = 33`, measured). `hotplug='off'` is now applied to all five root
+ports and is **kept**. That combination — *root-port hotplug disabled* **and** *the
+GPU behind a root port* — has never been tested together, because the hotplug change
+came later. If macOS now enumerates a device behind a root port, then
+`placeLargeBar1()` gets the parent it needs, the **driver** places the large BAR, and
+the budget problem disappears at its root rather than being worked around.
+
+Worth trying before any driver patching: move the GPU to a root port with
+`hotplug='off'` in place, and check the serial log for `bar1: PLACED` instead of
+`parent root port not found`.
+
 ## FINAL SUMMARY: what is wrong, and what could actually fix it
 
 ### Address study: host vs Linux guest vs macOS guest
