@@ -860,6 +860,65 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## OpenCore patch project — bisect results and handover
+
+### First, what the small BAR actually costs (do not misread this)
+
+**The driver WORKS at 256 MB.** It arms, the display comes up, Metal enumerates the
+5080. What the small BAR costs is the **VRAM grant budget (192 MB)**, not function.
+So patching OpenCore is what buys a 4 GiB budget, not what makes the driver run.
+
+### Bisect: the trigger is inside OpenCore's own EFI code
+
+At an 8 GiB host BAR, every one of these still produced the non-canonical address
+`0x8408400000000000` and the QEMU crash:
+
+| change | result |
+|---|---|
+| **every `Kernel -> Add` kext disabled** | ❌ still crashes → **not a kext** |
+| `SSDT-DTGP.aml` disabled | ❌ still crashes (and it was not in `ACPI -> Add` anyway) |
+| `ResizeGpuBars = -1`, `13` | ❌ not the ReBAR write path |
+| `DevirtualiseMmio = true` | ❌ |
+| `-cpu ...,phys-bits=40` | ❌ |
+| `q35-pcihost.pci-hole64-size=256GiB` | ❌ |
+
+Active `ACPI -> Add` is only `SSDT-EC.aml` and `SSDT-USBX.aml`; the other `SSDT-*.aml`
+files sit in the directory unused. `EFI/OC/Drivers/` holds `OpenPartitionDxe.efi`,
+`OpenRuntime.efi`, `ResetNvramEntry.efi`, `ToggleSipEntry.efi`.
+
+### Confirmed: the ESP being edited is the live one
+
+`OpenCore.qcow2` p1 holds `EFI/OC` and its `config.plist` mtime tracks our edits;
+`macos.img` p1 is FAT but carries **no** `EFI/OC`. So config edits do take effect —
+the earlier confusion came from `ACPI -> Add` listing fewer tables than the
+directory contains.
+
+### Recommended next steps, cheapest first
+
+1. **Try a different OpenCore version** — build the same config on 0.9.x and 1.0.x.
+   If an older build does not crash, this is a regression and the fix is targeted.
+2. **Drop `OpenRuntime.efi`** and see whether the crash survives. macOS will not boot
+   without it, but the *crash* is the signal we need, and it is the most likely owner
+   of MMIO/memory-map handling.
+3. **Patch and build OpenCore** (OpenCorePkg + EDK2). Instrument the MMIO/PCI paths
+   in `OcRuntimeLib`/`OpenRuntime` to log every BAR address write, then find where
+   the high dword gets the low 32-bit value. Note `Library/OcDeviceMiscLib/
+   SetResizableBar.c` is the ReBAR *write* path and is already exonerated by the
+   `-1` test — the fault is elsewhere in the MMIO/memory-map handling.
+
+The twin VM XMLs for cheap A/B testing are in `/home/tianyixia/linuxvm/`
+(`linux-bar-test.xml`, `macos-nooc.xml`), and a known-good OpenCore config is at
+`/home/tianyixia/linuxvm/oc-config.working.bak`.
+
+### Historical note: Pascal and the High Sierra era
+
+**Pascal has no Resizable BAR at all** — GTX 10-series BARs are fixed at 256 MB
+(the AMD OS X / Hackintosh threads from that era show GTX 1080s reporting `256mb`).
+ReBAR only arrived with GTX 16/RTX 20 (via vBIOS) and RTX 30, and with AMD RX 6000.
+So High Sierra passthrough never faced this problem and had no workaround — there
+was no large BAR to handle. The AMD "shrink the BAR for macOS" recipe is a
+*post*-ReBAR solution to a situation Pascal never entered.
+
 ## Definitive BAR conclusion (host-resize-only, no OpenCore code patch)
 
 **You cannot get a usable BAR larger than 256 MB on this setup. 192 MB is the
