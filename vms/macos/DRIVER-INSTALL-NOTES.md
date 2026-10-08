@@ -883,6 +883,73 @@ bridge it requires.
 4. `ResizeGpuBars = -1`, `ResizeAppleGpuBars = -1` unchanged; no driver patch, no
    OpenCore change, no OVMF rebuild
 
+## Drag lag on WINDOW SWITCHING: the park leak eats the 8 GiB budget (root cause)
+
+Sanity check after the stock-config reboot. The symptom is specific: dragging is fine
+continuously, but the **first drag after switching windows** delays. Measured by
+activating apps (a real window switch) and reading the driver's counters:
+
+```
+after Finder : res_new=95   res_free=66   refused=163
+after Safari : res_new=102  res_free=73   refused=177     +14 refusals
+after Finder : res_new=105  res_free=76   refused=185     +8
+after Safari : res_new=112  res_free=83   refused=198     +13
+after Finder : res_new=119  res_free=89   refused=214     +16
+after Safari : res_new=125  res_free=96   refused=230     +16
+```
+
+**8-16 VRAM allocation refusals per window switch, climbing steadily.**
+
+### Why, from the source
+
+```c
+kexts/NVRM/fb/nvrm-fb.cpp
+1259:  const SInt64 budget = (fBarLen >= 4GiB) ? fBarLen / 2 : NVRM_VRAM_BAR1_BUDGET;
+1261:  SInt64 before = OSAddAtomic64(want, &gVramMappedBytes) + gVramParkedBytes;
+1262:  if (before + want > budget) { ...refuse... }
+```
+
+The refusal test is **`mapped + parked + want > budget`**. Live values:
+
+```
+budget : 8589934592   (8 GiB, fBarLen/2 with the 16 GiB BAR)
+mapped :  125960192   (120 MB)
+granted:  238485504   (227 MB total)   released: 112525312 (107 MB)
+```
+
+For the check to fail with only 120 MB mapped, **`gVramParkedBytes` must be ~7.9 GiB** —
+the parked allocations have consumed essentially the whole budget.
+
+`gParkedForever[24]` (line 1195) holds console/scanout-overlapping allocations and
+**never releases them**; their bytes are added to every later grant test. This is the
+same park leak identified early in this project, now shown to be the direct cause of the
+window-switch drag lag.
+
+**The parked-bytes counter is not exposed as a sysctl** — the ~7.9 GiB figure is
+inferred from the refusal condition, not read directly. Stated that way deliberately.
+
+### Why the earlier benchmark looked fine
+
+`bench.sh` measures *continuous* drag, which needs no new allocations once surfaces
+exist — so it reported the session's best figures (139.9 fps, 3.58 ms/flip) while
+window switching was failing. **Continuous-drag fps is the wrong metric for this
+symptom**; refusals-per-switch is the right one.
+
+### Consequence for the "stock config" test
+
+Reverting `nvrm610.conf` to shipped values (`NVMTL_VRAM_WS_NONIMAGE_MB=0`,
+`NVMTL_VRAM_HEADROOM_MB=256`, `NVMTL_RES2_WS=0`) **brings the drag lag back**. The stock
+configuration is the affected one; the project's conf values were mitigating this
+pressure. A stock test should expect the lag, and the leak also accelerates after
+running NMS because the game cycles many surfaces.
+
+### Practical mitigation
+
+* A **reboot clears the parked bytes** (they are in-kernel state), so the lag returns
+  progressively rather than immediately.
+* The **conf values** reduce the pressure.
+* **Running NMS accelerates it** — the game cycles many surfaces.
+
 ## Flash: FIXED by a WindowServer restart — and the trigger is a fullscreen switch
 
 The driver's own comment named the remedy, and it works:
