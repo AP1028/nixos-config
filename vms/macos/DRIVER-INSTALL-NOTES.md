@@ -860,6 +860,50 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## TESTED: OpenCore cannot supply or fix the root port's `ranges`
+
+Injecting a corrected `ranges` through OpenCore's `DeviceProperties` — the mechanism
+that *can* add typed values (data blobs) at device paths — was tried and **does not
+work**. The injection round-tripped correctly in the config (84 bytes written and read
+back inside the mount), but the running guest's root port node still carries the
+firmware's original value:
+
+```
+"ranges"  = <00000082 0000000000000000 ... 0000000000000000>   <- unchanged, still zero-size
+"IOName"  = "pci-bridge"
+```
+
+and the GPU behind it is still un-resourced (`gpu nodes: 0`, `IOFramebuffer: 0`, no
+Dock).
+
+**Reason:** IOPCIFamily reads `ranges` from the **firmware device tree**, and
+`DeviceProperties` injects into the IORegistry node — different layers. The zero-size
+`ranges` is produced by **OVMF**, which OpenCore does not rebuild.
+
+So of the three candidate mechanisms:
+
+| mechanism | verdict |
+|---|---|
+| ACPI `Add`/`Patch` (SSDT) | OVMF builds the EFI device tree from its own enumeration, not from ACPI `_CRS` |
+| `Booter`/`UEFI` quirks | no relevant quirk exists |
+| **`DeviceProperties`** | **tested — the injected value does not reach the node** ❌ |
+
+### What is left
+
+1. **OVMF / QEMU** — make the firmware emit correct `ranges` for the PCIe root ports.
+   This is where the zero-size value originates, it is fully open source, and a QEMU
+   build was pre-authorised.
+2. **The driver** — `placeLargeBar1()` tolerance for a root-complex parent, or the
+   reading-path fix. Not buildable from public sources (verified three ways).
+
+### Also worth recording about the experimental configuration
+
+With the GPU behind a root port, macOS does **not** hang: kernel comes up, SSH works,
+`loginwindow` runs, `WindowServer` starts. What it has is **zero framebuffers** — so
+with `<video>=none` there is no graphics device at all, the GUI never completes (no
+Dock), and the firmware's progress bar sits at **0%**. That is
+"a little further than a hard stall", not a working boot.
+
 ## THE ACTUAL ROOT CAUSE: QEMU's root ports advertise zero-size `ranges`
 
 Read from the running macOS guest — this is a value, not an inference:
