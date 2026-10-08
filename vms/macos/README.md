@@ -182,6 +182,95 @@ and an earlier "everyone" rule wins. It works here; upstream it needs reordering
 
 ---
 
+## Installing the driver — two ways, and the traps
+
+**Choose by what your display does, not by preference.**
+
+| what you see | what to do |
+|---|---|
+| macOS reaches a **login window** on the passed-through card | **Use 1401.app.** It is NullMoth's installer and does the whole job: files, kernel collection, OpenCore config, display-head publication. Get `1401-Mac-*.dmg` from the driver's releases, run it in the guest, reboot. |
+| macOS **boots but shows nothing** — cursor on black, frozen Apple logo, `screencapture` failing with *"could not create image from display 0"* | **Do not reach for the tar first.** Work the checks below in order. The usual cause is the OSK or a dirty GPU, not the driver. |
+
+### Trap 1 — the OSK. This one costs the most time.
+
+**A wrong or placeholder `osk` in `isa-applesmc` gives you a macOS that boots, serves SSH,
+loads all four kexts, places BAR1 at 16 GiB with the full 8 GiB budget, reports
+`applyModeSetConfig -> 1` — and has no display at all.**
+
+Every internal signal says the driver is working. The display is never initialised. The
+symptoms point everywhere except the cause:
+
+| symptom | meaning |
+|---|---|
+| `screencapture` → *"could not create image from display 0"* | macOS has no display |
+| `system_profiler SPDisplaysDataType` lists no display | same |
+| external monitor: movable cursor on black | that cursor is the **viewer's**, not the guest's |
+| QEMU console: frozen Apple logo + progress bar | last frame the guest ever sent |
+| `virsh screenshot` → black 1280x800 PNG | QEMU is fine; the guest draws nothing |
+
+**It survives an FLR, a GPU reset, a WindowServer restart, and every `<video>` model**,
+because it is upstream of all of them. No amount of driver debugging will find it.
+
+**Where this bites:** building a test domain from a config that ships a placeholder OSK.
+If you keep a redacted copy of the domain XML for sharing, that copy will not boot a
+working display. Substitute a real OSK before testing anything with it.
+
+### Trap 2 — SIP must be off before `install.sh` runs
+
+`install.sh` dies at *"back up kernel collection / Operation not permitted"*, which reads
+as a corrupt package. It is neither: the kernel collection carries the SIP `restricted`
+flag and root cannot read it with SIP on.
+
+Set `csr-active-config` (`<430A0000>` is the tested value) in OpenCore, **reboot**, verify
+`csrutil status` says `disabled`, and only then install. Check it first:
+
+```bash
+csrutil status                                       # must be: disabled
+nvram -p | grep csr-active-config                    # must not be %00%00%00%00
+lspci -nnk -s 01:00.0 | grep -i "driver in use"      # must be vfio-pci
+```
+
+### Trap 3 — a driver-phase boot needs a freshly reset GPU
+
+With vfio the guest programs the physical card, and **a guest reboot does not reset it**.
+Booting several macOS images in one session leaves state that silently prevents
+`applyModeSetConfig` from running — frames generated, panel dark, nothing pointing at the
+cause. Reset before a driver-phase boot:
+
+```bash
+sudo scripts/gpu-to-host.sh
+echo 1 | sudo tee /sys/bus/pci/devices/0000:01:00.0/reset
+sudo scripts/gpu-to-vfio.sh 16GiB
+```
+
+### Trap 4 — the tar is half an install
+
+`nullmoth-nvidia-*.tar.gz` ships `install.sh` (129 lines): files plus kernel collection.
+**1401.app additionally carries `nullmoth-setup.sh` (639 lines) which the tar does not
+contain**, and that script:
+
+* edits the OpenCore config — `boot-args`, `csr-active-config`, and the
+  `com.apple.iokit.IONDRVSupport` entry in `Kernel.Block`
+* installs `com.nullmoth.crashcheck.plist` and `com.nullmoth.recover.plist`
+* resolves which ESP actually booted, from OpenCore's own `boot-path` NVRAM variable
+* runs display bring-up diagnostics against `debug.nvaccel_heads_published`,
+  `debug.nvaccelfb`, `debug.nvrmfb_agdc`, `debug.nvaccel_iop`
+
+A tar-only install gives four loaded kexts, a placed 16 GiB BAR, an 8 GiB budget, generated
+frames, and no desktop. To run it by hand it must sit beside `nullmoth-install.sh` and be
+given every input:
+
+```bash
+sudo ./nullmoth-setup.sh \
+  --pkg  /path/to/nullmoth-nvidia-<ver>.tar.gz \
+  --sha  <its published sha256> \
+  --tool /path/to/NullMothSafe.efi \
+  --app  /path/to/1401.app/Contents/MacOS/1401
+```
+
+It refuses to run as a loose copy; `--tool` and the audited installer both come from
+`1401.app/Contents/Resources/` in the release zip.
+
 ## Verification
 
 ```bash
@@ -637,9 +726,28 @@ Useful, and recorded so it is not rediscovered. **None fixes Finding 12.**
 
 ### Backups
 
-Kept in the guest: `~/nvmtltest/nvrm610.conf.good` (conf), `~/nvmtltest/pre-1.0.9/`
-(1.0.6 kexts), `~/pkgroot109/pkgroot` (1.0.9 package), and on the host `/tmp/nm-src`
-(driver git, tags to v1.0.13), `/tmp/nm106`, `/tmp/nm109`.
+**Disk images.** One image is current; everything else is stashed, not deleted:
+
+| path | what |
+|---|---|
+| `/var/lib/libvirt/images/macos.img` | **the live image** — the one `macos.xml` uses |
+| `/var/lib/libvirt/macos-image-stash/` | `macos.img.20261008-0151.working-with-driver` (99 GiB), `macos.img.before-restore` (64 GiB), `macos.img.20261007-0535.pre-driver` (36 GiB), `macos-clean.img` (36 GiB) |
+
+The stash is 218 GiB apparent but only **46 GiB exclusive** on btrfs, because they are
+reflinks sharing extents with each other. Stashing by `mv` within the same filesystem
+costs nothing and preserves the sharing — copying would not. `btrfs filesystem du` shows
+the real cost; `du` does not.
+
+**OpenCore.** `OpenCore.qcow2` is the live ESP. `OpenCore.qcow2.20261007-0539.pre-nullmoth`
+is the stock OSX-KVM config from before any of this work — note it is *not* a known-good
+fallback: it carries a different kext set (Broadcom Bluetooth, AGPMInjector, USBPorts) and
+no display or BAR settings, and a macOS image booted against it does not display.
+
+**Driver.** In the guest: `~/nvmtltest/nvrm610.conf.good`, `~/nvmtltest/pre-1.0.9/`,
+`~/pkgroot109/pkgroot`. On the host: `/tmp/nm-src` (driver git, tags to v1.0.13),
+`/tmp/nm106`, `/tmp/nm109`. `nullmoth-setup.sh` also leaves its own
+`config.plist.nullmoth-<timestamp>` beside the live config on the ESP, and a driver backup
+under `/Library/NullMoth/backup-<timestamp>`.
 
 ---
 
