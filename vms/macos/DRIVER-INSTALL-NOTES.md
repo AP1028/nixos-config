@@ -883,6 +883,24 @@ bridge it requires.
 4. `ResizeGpuBars = -1`, `ResizeAppleGpuBars = -1` unchanged; no driver patch, no
    OpenCore change, no OVMF rebuild
 
+## Measured result (final)
+
+```
+uptime 2 min    console tianyixia    Dock running    WindowServer running
+autogo "up"     budget 4096 MB       mapped 153 / 4096 MB
+bars  bar1@0x14:0x1400000000+0x200000000   (8 GiB)
+
+bench.sh, 18 s autonomous drag:
+  flips 2438    WindowServer 16.43 s -> 6.74 ms/flip
+  grants +2   parks +0   refusals +0        <- the park/refusal thrash is gone
+  dragload 18.0 s, 12047 moves (669/s)
+  compositor flips during load: 2436 -> 135.3 fps
+```
+
+135.3 fps is the best figure measured in this project (110-116 fps at 192 MB), and
+**parks and refusals are both zero** — the thrash that the small budget caused is
+simply absent, because a 4 GiB budget is not exhausted by compositing.
+
 ## Evidence
 
 With the GPU behind a root port and the property applied:
