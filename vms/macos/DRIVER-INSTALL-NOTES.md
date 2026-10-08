@@ -860,6 +860,53 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## Root port + ROM route: exhaustively tested, and it does not work here
+
+The OSX-KVM AMD reference (guest bus 0x01 + an explicit option ROM) *should* be the
+answer. It was pushed as far as the QEMU device model allows, with **every property
+verified present in QEMU's command line** before the result was read:
+
+| lever | applied at QEMU? |
+|---|---|
+| `pcie-root-port.hotplug=off` | ✅ verified |
+| `pcie-root-port.x-do-not-expose-native-hotplug-cap=on` | ✅ verified |
+| `pcie-root-port.pref64-reserve=17179869184` (16 GiB window) | ✅ verified |
+| `pcie-root-port.mem-reserve=536870912` (512 MB window) | ✅ verified |
+| `pcie-root-port.power_controller_present=off` | ✅ verified |
+| `<rom file='/home/tianyixia/linuxvm/rtx5080.rom'/>` (162304 B, dumped from the host) | ✅ **`romfile=` verified in the cmdline** |
+| GPU at guest bus 0x01 (behind the root port) | ✅ |
+
+**Result: `10de` node count 0. No resources assigned, no IORegistry node, driver never
+attaches (`nullmoth kexts: 1` instead of 4).**
+
+This also closes the loose end from the previous round: the ROM **was** reaching QEMU,
+so the ROM row is a genuine negative, not an untested one.
+
+### What the failure actually is
+
+macOS reads the card from config space — vendor/device ID and bus/device/function are
+visible — but assigns nothing and publishes nothing. Combined with the earlier result
+that a root-port device reports `IRQ 0` and every BAR `(not mapped)`, the picture is a
+**resource-assignment refusal**, not an enumeration or visibility problem.
+
+Since no device-model property changes it — up to and including giving the port a
+16 GiB prefetchable window and a real option ROM — the obstacle is **above the device
+model**, in how macOS consumes QEMU's firmware description of the root complex. That
+points at the ACPI view of the root ports (`_PRT` interrupt routing, `_DSN`, and the
+`_CRS` windows macOS reads), which is where the earlier root-port failures most likely
+originate.
+
+### Where that leaves the route
+
+* **Not reachable from libvirt XML** — every lever the XML can express has been tried,
+  and the levers that libvirt drops were forced through `-global` and verified.
+* **Reachable from** an ACPI override (OpenCore `ACPI -> Add`, no build required) or a
+  QEMU patch — both still open, and now with a specific target: the firmware's
+  description of the root ports, not their device properties.
+
+**Meanwhile the GPU stays on bus 0** — that is the only placement macOS will resource,
+and it is exactly what denies `placeLargeBar1()` the parent bridge it needs.
+
 ## Root port IS the bare-metal topology — our VM is the anomaly
 
 An important reframing. On a real Mac, a discrete GPU sits **behind a root port**, so
