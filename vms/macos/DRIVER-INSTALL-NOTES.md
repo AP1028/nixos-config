@@ -860,6 +860,57 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## CORRECTION: the driver IS buildable — the recipe exists and the RM is open source
+
+An earlier revision of this document accepted the premise that the driver has no
+valid build recipe. **That is wrong**, and it matters, because it removes the
+strongest objection to the one fix that would actually help.
+
+* **README.md:128** — *"Requires Xcode 16, Rust (stable), Meson/Ninja, and NVIDIA's
+  `open-gpu-kernel-modules` at tag `610.57.04`."*
+* **`build/accel_build.sh <src> <out>`** builds the kexts with
+  `xcrun clang++ -fapple-kext -mkernel -nostdinc -I"$KHDR" ...` and links them with
+  `-Xlinker -kext -lkmodc++ -lkmod -lcc_kext`, against `$HOME/ogkm610` (the NVIDIA
+  **open** GPU kernel modules) plus `accel/re` headers that ship in the repo.
+* Other components have their own scripts: `build_xlate.sh` (translator),
+  `build_plugin.sh` (plugin, `RELEASE=1` strips diagnostics), `build263.sh` (NVK,
+  which applies `nvk/nvk-macos.patch` to Mesa `17ca6174`).
+
+### What is opaque, and what is not
+
+Only the **firmware blobs** are closed — `Users/Shared/nvfw/nvidia/610.57.04/`
+holds `gsp_ga10x.bin`, `gsp_tu10x.bin`, `ucodes_ga10x.bin`, `ucodes_tu10x.bin`.
+They are not where the bug is. The BAR handling lives in open source:
+
+* `kexts/NVRM/NVRM.cpp` — `readBARs()` builds the driver's BAR table
+* `kexts/NVRMFB/fb/nvrm-fb.cpp` — `nvrmDiscoverBar1()` picks `fBarLen`
+
+Both are exactly what Finding 10/11 proposes to change.
+
+### Binary hashes across releases (measured)
+
+```
+NVRM     1.0.0: 16615320 B  dfca5501ecd8e892   ┐ byte-identical
+NVRM     1.0.1: 16615320 B  dfca5501ecd8e892   ┘
+NVRM     1.0.6: 16750224 B  7eff167632642cab      only +0.8%
+NVRMFB   1.0.1 == 1.0.6     144424 B  identical
+NVRMAGDC 1.0.1 == 1.0.6      50872 B  identical
+NVAccel  1.0.1  697224 B  ->  1.0.6  231560 B     large change
+```
+
+So `NVRMFB`/`NVRMAGDC` have not moved between 1.0.1 and 1.0.6, `NVRM` changed by
+under 1%, and only `NVAccel` was substantially rebuilt. A patch to `readBARs()` or
+`nvrmDiscoverBar1()` would be a small, isolated change to a tree that is already
+known to build.
+
+### What this means for the plan
+
+The **4 GiB BAR + driver fix = 2 GiB budget (10x)** route is feasible in principle,
+not blocked. It needs, in the guest: Xcode 16, NVIDIA's `open-gpu-kernel-modules` at
+tag `610.57.04`, the repo's headers, and a rebuild of the affected kext plus the
+auxiliary kernel collection. That is a real project — but it is a *build*, not a
+reverse-engineering exercise, which is a very different thing.
+
 ## FINAL SUMMARY: what is wrong, and what could actually fix it
 
 ### What is wrong (all measured, not inferred)
