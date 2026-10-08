@@ -1,6 +1,31 @@
 # Current state and recovery (written before a host reboot)
 
-## Why this file exists
+## RESOLVED — the real cause, found by review
+
+**I had deleted the entire `<qemu:commandline>` element from `vms/macos/macos.xml`.**
+While cleaning up a failed `x-no-mmap` experiment I used the regex
+`<qemu:commandline>.*?</qemu:commandline>`, which also removed the ORIGINAL block:
+the CPU model (`-cpu Skylake-Client,...`), `isa-applesmc` (AppleSMC) and
+`-smbios type=2`. Without those QEMU starts the guest with none of them and macOS
+hangs at the Apple logo with zero CPU.
+
+That single deletion **was** the hang. Everything else I suspected was wrong:
+not the BAR size, not the OpenCore config, not the NVRAM, not the driver, not a
+wedged GPU. The host reboot appeared to fix it only because the live libvirt domain
+still carried the old definition at that moment.
+
+Restoring the element verbatim from the last working commit (`a760c26`) fixed it
+immediately: `autogo=up`, `IODisplay=1`, `budget=192MB`, Metal on the RTX 5080.
+
+**Two traps that cost hours, worth remembering:**
+
+1. `grep -c "<qemu:commandline>"` returned 2 because the string also appears in two
+   **comments**. Counting mentions is not the same as finding the element — parse
+   the XML, or match `^\s*<qemu:commandline>`.
+2. A regex cleanup of "my" edit ate a neighbouring original block. Anchor such
+   edits on the exact text added, and re-diff the whole file afterwards.
+
+## Why this file exists (superseded by the section above)
 
 A session of BAR-size experiments ended with the macOS guest hanging at the Apple
 logo with **zero CPU** — a hard hang, not a slow boot. Everything guest-side was

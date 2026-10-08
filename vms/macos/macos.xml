@@ -363,4 +363,46 @@
     <memballoon model='none'/>
   </devices>
 
+  <qemu:commandline>
+    <!-- THE 16 GiB BAR WORKAROUND UNDER TEST.
+         QEMU fails to map the GPU's 16 GiB BAR1:
+             vfio_container_dma_map(...) = -22 (Invalid argument)
+             kvm_set_user_memory_region: ... size=0x400000000 (16 GiB): Invalid argument
+         x-no-mmap makes QEMU NOT mmap the BAR and trap MMIO in userspace instead,
+         sidestepping the failing mapping path. Applied with -global (the same
+         mechanism OSX-KVM uses for its x-no-kvm-intx), because -set is processed
+         during early option parsing, before -device instances exist, and so
+         cannot reference them by id. Only vfio-pci devices are affected and this
+         domain has exactly the two GPU functions. -->
+    <!-- The CPU model, from OSX-KVM's OpenCore-Boot.sh line 37:
+             -cpu Skylake-Client,-hle,-rtm,kvm=on,vendor=GenuineIntel,
+                  +invtsc,vmware-cpuid-freq=on,+ssse3,+sse4.2,+popcnt,+avx,
+                  +aes,+xsave,+xsaveopt,check
+         Nothing in this file sets a libvirt cpu element, so this is the only
+         -cpu QEMU receives. The Penryn line (their pre-Sequoia one) wedges
+         this guest with every vCPU spinning; -hle/-rtm disable TSX.
+
+         phys-bits=40 is OUR addition, not OSX-KVM's, and it is required for the
+         GPU passthrough. The RTX 5080 exposes a large 64-bit BAR (QEMU showed a
+         24 GiB window at 0x800000000-0xbffffffff, i.e. Resizable BAR sizing).
+         Without an explicit guest physical address width, QEMU crashed the whole
+         domain on startup:
+             kvm_set_user_memory_region: KVM_SET_USER_MEMORY_REGION failed,
+               slot=13, start=0x8508000000000000, size=0x400000000: Invalid argument
+             shutting down, reason=crashed
+         The win11 dGPU domains on this host pass the same card successfully and
+         carry the equivalent setting: <maxphysaddr mode="passthrough" limit="40"/>
+         We cannot use that element because a libvirt <cpu> block would emit a
+         second, competing -cpu, so the width goes on the raw argument instead.
+         Do not drop phys-bits without re-testing GPU passthrough. -->
+    <qemu:arg value='-cpu'/>
+    <qemu:arg value='Skylake-Client,-hle,-rtm,kvm=on,vendor=GenuineIntel,+invtsc,vmware-cpuid-freq=on,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,check'/>
+    <!-- AppleSMC: OpenCore needs it to expose the SMC keys macOS reads. -->
+    <qemu:arg value='-device'/>
+    <qemu:arg value='isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc'/>
+    <!-- Board identity macOS accepts with a discrete GPU (the model the
+         NullMoth driver was tested on). -->
+    <qemu:arg value='-smbios'/>
+    <qemu:arg value='type=2'/>
+  </qemu:commandline>
 </domain>
