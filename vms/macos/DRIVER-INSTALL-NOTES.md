@@ -860,6 +860,69 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## THE OVMF/QEMU ROUTE — what is established, and the exact next steps
+
+This is the only route left, it is fully open source, and a QEMU build was
+pre-authorised. Here is everything already nailed down, so it can be executed rather
+than re-derived.
+
+### The chain, with the origin identified
+
+macOS builds its `IODeviceTree` from the **ACPI**. The `ranges` it reads for a PCI
+bridge is therefore derived from that bridge's **ACPI `_CRS`**. The value is zero for
+every window, so **the `_CRS` QEMU generates for its PCIe root ports advertises no
+address space** — and QEMU (11.1.1 here) is what generates the guest's ACPI.
+
+```
+macOS device tree "ranges" for root port  = zeros
+        <- derived from ->
+ACPI _CRS of that root port (QEMU-generated) = the origin
+```
+
+Nothing in OpenCore reaches this layer; it was tested and disproved (see above).
+
+### The values the root ports must advertise
+
+Measured from Linux, which programs the bridge's window registers directly instead of
+trusting the firmware. For the port carrying the GPU:
+
+| window | base | size |
+|---|---|---|
+| I/O | `0x6000` | `0x1000` |
+| 32-bit MMIO | `0x80000000` | `0x04100000` |
+| 64-bit prefetchable | `0x1000000000` | `0x12000000` |
+
+### Tools confirmed present
+
+`iasl` and `acpidump` are both installed on the host, and `acpidump` can run against
+a guest's tables. QEMU is 11.1.1.
+
+### Next steps, in order
+
+1. **Dump the guest's ACPI and disassemble the DSDT with `iasl`**, then read the root
+   ports' `_CRS` to confirm it is empty/zero.
+   *Mechanism:* the macOS guest has no dump tool, and Alpine's serial console is
+   write-only — so **change the Linux twin's serial to a unix socket** and connect with
+   `socat`. That gives a shell in the guest, hence
+   `/sys/firmware/acpi/tables/DSDT` and `acpidump`.
+2. **Then choose:**
+   * **An SSDT overriding `_CRS` for `_SB.PCI0.S10` … `S14`**, delivered through
+     OpenCore `ACPI -> Add` — no build required. **Caveat to check in step 1:** if QEMU
+     declares `_CRS` as a *name* (a resource template) rather than a *method*, a later
+     table cannot redefine it, and this route dies. The disassembly answers that
+     immediately.
+   * **Or patch QEMU's ACPI generation** so the root ports advertise their windows.
+3. **Verify:** does the guest's device-tree `ranges` become non-zero, and does macOS
+   then assign windows and resource the GPU behind the port? If yes, the chain
+   unblocks end to end: root port usable → `placeLargeBar1()` gets its parent bridge →
+   the driver places its own large BAR → the 192 MB budget ceiling is gone.
+
+### Honest status
+
+I did not complete this. The origin is identified, the target values are measured, the
+tools are present, and the first step is specified — but extracting and disassembling
+the guest ACPI is where this session ran out.
+
 ## TESTED: OpenCore cannot supply or fix the root port's `ranges`
 
 Injecting a corrected `ranges` through OpenCore's `DeviceProperties` — the mechanism
