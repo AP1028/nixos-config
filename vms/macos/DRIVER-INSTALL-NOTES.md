@@ -883,6 +883,61 @@ bridge it requires.
 4. `ResizeGpuBars = -1`, `ResizeAppleGpuBars = -1` unchanged; no driver patch, no
    OpenCore change, no OVMF rebuild
 
+## Flash: FIXED by a WindowServer restart — and the trigger is a fullscreen switch
+
+The driver's own comment named the remedy, and it works:
+
+> *"it gets a pipe only when `debug.nvaccelfb=3` is written again, **and WindowServer
+> composites it only after a WindowServer restart**"*
+
+`sudo killall -9 WindowServer` re-bound the scanout: the flash stopped and both NMS and
+the desktop became stable. It costs a logout (~30 s), keeps the VM, the 16 GiB BAR and
+the root-port fix, and is far less drastic than the FLR.
+
+`debug.nvaccelfb=3` itself did **not** take — the value stayed at 1 — and only one
+framebuffer is registered, so "late-published framebuffer" is not the mechanism either.
+The WindowServer restart is what matters.
+
+### The reproducible wedge: borderless -> fullscreen
+
+Switching NMS from borderless to fullscreen **wedges the display again**. That is now
+the identified trigger, and it explains the whole family of symptoms seen here:
+
+| event | result |
+|---|---|
+| NMS in exclusive fullscreen (`FullScreen=true`, `VsyncEx=Triple`) | steady flash between splash and frame |
+| switched to borderless + `VsyncEx=Single` | bursty flash between frame and desktop |
+| delegated until it degraded | flash partner became a dark screen |
+| **WindowServer restart** | **stable — flash gone** |
+| NMS borderless -> fullscreen | **wedged again** |
+
+**Practical guidance: keep NMS borderless and never let it switch to fullscreen.** A
+display-mode transition is what breaks the binding.
+
+### Performance after the restart is the best measured in this project
+
+```
+bench.sh, 15 s, NMS running, post-restart:
+  flips 2170   WindowServer CPU 7.76 s -> 3.58 ms/flip
+  grants +4   parks +0   refusals +0
+  dragload 15.0 s, 10023 moves (668.2/s)
+  compositor flips: 2099 -> 139.9 fps
+  mapped 255 / 8192 MB
+```
+
+So a reported "drag lag" after this point is **not** a compositor performance problem —
+the compositor is at its best — it is the degraded post-mode-switch state. Worth
+separating those two when reporting.
+
+### Recovery ladder (cheapest first)
+
+1. **`sudo killall -9 WindowServer`** — re-binds the scanout. Logs out, ~30 s. Verified.
+2. **Host-side FLR** (`echo 1 > .../reset` after unbinding vfio-pci) — verified, costs a
+   VM restart.
+3. Neither a guest reboot, a Metal cache clear, `killall Dock`, a wallpaper change, a
+   display sleep/wake, `debug.nvaccelfb=3`, nor `debug.nvaccel_iop_async=0` does
+   anything. All tested.
+
 ## NMS flash: PROVEN to be a driver scanout-binding bug
 
 Symptom: after running No Man's Sky, the panel alternates between the desktop and the
