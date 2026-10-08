@@ -860,6 +860,54 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## THE ACTUAL ROOT CAUSE: QEMU's root ports advertise zero-size `ranges`
+
+Read from the running macOS guest — this is a value, not an inference:
+
+```
+root port S10@2
+  "IOName"    = "pci-bridge"
+  "class-code"= <00040600>              (PCI-to-PCI bridge)
+  "ranges"    = < 00000082 00000000 00000000   00000082 00000000 00000000   00000000 00000000
+                  000000c2 00000000 00000000   000000c2 00000000 00000000   00000000 00000000
+                  00000081 00000000 00000000   00000081 00000000 00000000   00000000 00000000 >
+```
+
+Three window descriptors — 32-bit MMIO (`0x82`), 64-bit prefetchable (`0xc2`), I/O
+(`0x81`) — **and every size is zero**, with the space code repeated where the parent
+address belongs.
+
+**The bridge tells macOS it has no address space at all.** macOS, which trusts the
+firmware's device tree exactly as it does on a real Mac, therefore assigns no windows,
+and nothing behind the port can be given an address: no BARs → no `IODeviceMemory` →
+no interrupt → no IORegistry node → no driver.
+
+**Why Linux works on the same hardware:** Linux ignores `ranges` entirely and programs
+the bridge's own window registers. Measured for the port carrying the GPU:
+
+| window | base | end | size |
+|---|---|---|---|
+| I/O | `0x6000` | `0x6fff` | `0x1000` |
+| 32-bit MMIO | `0x80000000` | `0x840fffff` | `0x04100000` |
+| 64-bit prefetchable | `0x1000000000` | `0x1011ffffff` | `0x12000000` |
+
+Those are the values the root port needs and does not have.
+
+### The fix this implies
+
+Present the root ports with **correct `ranges`** — the three windows above, populated
+per port with its own base — so macOS sees the address space a real bridge would
+advertise. OpenCore's `DeviceProperties` injects typed values (data blobs included) at
+device paths, so this is potentially configuration-only, for
+`PciRoot(0x0)/Pci(0x2,0x0)` … `Pci(0x2,0x4)`.
+
+**Open question before attempting it:** whether `DeviceProperties` can override
+`ranges`, which IOPCIFamily reads from the firmware device tree rather than from the
+IORegistry node's properties. That determines whether this is an OpenCore-config fix
+or needs a firmware/QEMU change — and it should be established before constructing
+the blob, because the parent-address encoding in Apple's `ranges` format is the one
+part of the value I cannot yet derive with confidence.
+
 ## CORRECTION: `interrupt-map` was NOT the root cause
 
 The previous revision claimed the missing `interrupt-map` was the cause, and it was
