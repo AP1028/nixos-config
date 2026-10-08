@@ -860,6 +860,66 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## Driver 1.0.9 installed and verified (was 1.0.6)
+
+Updated to the newest release, `v1.0.13` (release name: *"1401 Mac 1.0.13
+(driver package 1.0.9)"*). SHA256 of `nullmoth-nvidia-1.0.9.tar.gz` matched
+`9dbfdb1b…` from the release's `SHA256SUMS.txt`.
+
+**The release's own `VALIDATION.json` is the useful part** — it states the scope:
+
+```
+scope:                    "Installer and app maintenance only; no additional GPU or application ..."
+changed_payload_files:    MANIFEST.txt, uninstall.sh, install.sh, SHA256SUMS
+unchanged_payload_files:  46
+nvidia_binary_base:       1.0.8
+```
+
+Confirmed by comparing binaries against 1.0.6:
+
+| kext | 1.0.9 | 1.0.6 | |
+|---|---|---|---|
+| `NVRM` | 16750224 | 16750224 | **identical** — the BAR code is unchanged |
+| `NVRMFB` | **145824** | 144424 | **changed, +1400 B — the vblank fix** |
+| `NVRMAGDC` | 50872 | 50872 | identical |
+| `NVAccel` | 231560 | 231560 | identical |
+
+`nvrm610.conf` **still ships the conservative values**, so the conf fix remains
+required, and the installer still resets it — re-applied after install.
+
+### Result on the baseline
+
+```
+autogo="up" (24 s)   IODisplay=1   budget=192MB   kexts=4   NVRMFB=145824
+nvrm-boot-raster = "head0 165.000Hz"     <- new, and correct for the native panel
+dragload: 14.0 s, 9227 moves (659/s), 0 redraws
+compositor flips: 1627 -> 116.2 fps      WindowServer 7.12 s -> 4.37 ms/flip
+grants +0   parks +0   refusals +0
+```
+
+That matches or beats 1.0.6 (110.6 fps / 4.34 ms) with zero parks and refusals.
+**The BAR ceiling is unchanged** — `NVRM` is byte-identical, so the root-port gate
+at `NVRM.cpp:746` behaves exactly as before, and the budget stays 192 MB.
+
+### Testing note
+
+The first benchmark after the reboot reported **0 flips**, which looks alarming but
+is a false alarm: the desktop session had not finished coming up (uptime ~1 minute;
+Dock and WindowServer present but the compositor not yet presenting). Re-running once
+the session settled gave the numbers above. Do not read a 0-flip result as a
+regression without checking session readiness first — `bench.sh` gates on the
+console user, Dock, and mapped VRAM, but a freshly booted machine can still slip
+through that gate.
+
+### What to check by eye
+
+`NVRMFB`'s change is *"every lit head gets its real vblank, not only heads that
+latch a flip"* — a presentation fix, which is the first upstream change aimed at the
+symptoms reported from this setup: the screen flashing between an old and the
+current frame, the stale idle image, and the white wallpaper since first setup.
+Those cannot be measured from here; they need a human looking at the screen,
+especially with Steam running and in No Man's Sky.
+
 ## INDEPENDENT VERIFICATION: NVRM.kext cannot be built from public sources
 
 A separate agent, given only the repo and no knowledge of our conclusions, was asked
