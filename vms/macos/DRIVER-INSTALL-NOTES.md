@@ -860,6 +860,68 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## Root port IS the bare-metal topology — our VM is the anomaly
+
+An important reframing. On a real Mac, a discrete GPU sits **behind a root port**, so
+`placeLargeBar1()` requiring a root-port parent is **not** an odd hardware assumption —
+it is the **standard Mac case**. Our VM is the one behaving abnormally.
+
+And the failure is not enumeration. Early in this project macOS clearly **saw** the
+card behind a root port:
+
+```
+Bus 1, device 0, function 0: 10de:2c59
+   IRQ 0, pin A
+   BAR0/BAR1/BAR5: (not mapped)
+```
+
+It read the vendor/device ID and bus/device/function — then **assigned no resources and
+published no IORegistry node**. That is a resource-assignment failure, which is why
+later checks show `10de` node count 0.
+
+### What AMD passthrough actually does (from OSX-KVM's reference XML)
+
+`OSX-KVM/macOS-libvirt-Catalina.xml`, whose GPU is an **RX 580**:
+
+```xml
+<address domain='0x0000' bus='0x2d' slot='0x00' function='0x0'/>
+<rom file='/mnt/disks/backups/BIOS/RX580/Ellesmere.rom'/>       <!-- explicit option ROM -->
+<address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0' multifunction='on'/>
+```
+
+**Guest bus `0x01` — behind a root port — plus an explicit option ROM.** So AMD
+passthrough uses exactly the topology the NullMoth driver wants, and it works there.
+
+### Which means: don't put the GPU behind a root port here
+
+Every combination was tested against a working baseline:
+
+| GPU placement | config | macOS result |
+|---|---|---|
+| **bus 0x00 (root complex)** | current | ✅ resourced, driver works, 192 MB budget |
+| bus 0x01 (root port) | hotplug on | ❌ no resources, no IORegistry node |
+| bus 0x01 | `hotplug=off` **forced and verified in QEMU's cmdline** | ❌ same |
+| bus 0x01 | `+ x-do-not-expose-native-hotplug-cap=on` (verified) | ❌ same |
+| bus 0x01 | `+ <rom file=...>` (RTX 5080 ROM dumped from the host, 162304 B) | ❌ same |
+
+**Conclusion: macOS's IOPCIFamily will not assign resources to a passed-through device
+behind a QEMU root port in this VM**, regardless of hotplug advertising or an explicit
+option ROM. That is the platform anomaly that forces the GPU onto bus 0 — and putting
+it on bus 0 is precisely what denies `placeLargeBar1()` the parent bridge it needs.
+
+**One loose end:** in the ROM test I did not verify at QEMU that the romfile was
+actually applied (`-device ...,romfile=`). Given the pattern in this project, that
+should be checked before treating the ROM route as disproved.
+
+### The two questions answered
+
+* **Is a root port "bare metal" for macOS?** Yes — it is the normal Mac topology. The
+  driver's requirement is correct; our VM is what deviates.
+* **What does AMD passthrough use?** Guest bus 0x01 (a root port) plus an explicit
+  option ROM — the same shape the NullMoth driver wants. It does not transfer here,
+  because the obstacle is macOS's resource assignment in this VM, not the topology
+  choice.
+
 ## CAN IT BE FIXED AT THE LIBVIRT XML LEVEL? No — and one of my tests was invalid
 
 Short answer: **no**, because what blocks us is how **QEMU generates ACPI**, and the
