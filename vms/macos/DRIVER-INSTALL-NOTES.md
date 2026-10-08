@@ -860,6 +860,67 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## ROOT CAUSE of the root-port failure: the device tree has no `interrupt-map`
+
+Tri-VM comparison, identical hardware, GPU behind a PCIe root port, all QEMU levers
+applied and verified:
+
+| guest | IRQ | BARs assigned | root port windows |
+|---|---|---|---|
+| **Linux** | **11** | all, including BAR1 above 4G at `0x1000000000` | `prefetchable memory range [0x1000000000 ...]` |
+| **macOS** | **0** | none | `assigned-addresses` = its own 4 KB register BAR only |
+
+Both guests see the same QEMU hardware and the same ACPI. Linux resources the card
+perfectly behind the root port; macOS assigns it nothing. So QEMU, the root port, the
+windows and the ACPI tables are all *usable* — the difference is inside macOS.
+
+### What macOS is missing
+
+Dumped from the running guest's device tree (`ioreg -p IODeviceTree`):
+
+```
+ranges             PRESENT (5)     <- windows ARE described, one per root port
+bus-range          ABSENT
+interrupt-map      ABSENT          <- the cause
+interrupt-map-mask ABSENT
+```
+
+The five root ports **are** published (`IOPP <class IOPCI2PCIBridge>` × 5),
+`IOPCIResourced = Yes`, and `ranges` is present. But there is **no `interrupt-map`
+and no `interrupt-map-mask`**.
+
+On a real Mac, PCI interrupt routing for bridges comes from the device tree's
+`interrupt-map`/`interrupt-map-mask`. Without it macOS cannot assign an interrupt to
+anything behind a root port — which is precisely the `IRQ 0` measured earlier — and
+IOPCIFamily then declines to resource the device. Hence: read from config space,
+published nowhere, no BARs, no driver attach.
+
+Note that `acpi-pci-routing-table` **is** present on the port, so macOS has the ACPI
+`_PRT` available — but for PCIe bridges it uses the device-tree map and does not fall
+back to it.
+
+### Why bus 0 works, and why this forces the whole problem
+
+Bus-0 devices are children of the host bridge and need no `interrupt-map` — their
+routing comes from the root complex directly. That is why the GPU on bus 0 is
+resourced, and why it is the only placement macOS will accept here.
+
+And bus 0 is exactly what denies `placeLargeBar1()` the parent bridge it needs. So one
+missing firmware property cascades into: no root port → no `placeLargeBar1()` → no
+driver-side BAR placement → dependence on macOS's placement → corrupted addresses
+above 4 GiB → 192 MB budget.
+
+### The fix direction (no build required)
+
+**Supply `interrupt-map` / `interrupt-map-mask` for the root ports.** OpenCore's
+`DeviceProperties` injects typed values into device paths, and a data blob is a valid
+type — so this is potentially reachable with **configuration, not code**, using
+`PciRoot(0x0)/Pci(0x2,0x0)` .. `Pci(0x2,0x4)` for the five ports. Alternatively an
+ACPI override, or a QEMU patch to emit the map.
+
+**This is the first failure in the chain that is upstream of everything else**, and
+the first candidate fix that does not require building the driver, QEMU or OpenCore.
+
 ## Root port + ROM route: exhaustively tested, and it does not work here
 
 The OSX-KVM AMD reference (guest bus 0x01 + an explicit option ROM) *should* be the
