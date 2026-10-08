@@ -860,6 +860,47 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## SMOKE TEST RESULT: the published build recipe is INCOMPLETE
+
+I claimed earlier (correcting an earlier still) that the driver is buildable from
+the published instructions. **A smoke test in the guest shows that is wrong**, and
+the original "upstream don't really have a valid recipe" was closer to the truth.
+
+What was tested, in the macOS guest, on a shallow clone of the driver at `v1.0.9`
+plus NVIDIA `open-gpu-kernel-modules` at tag `610.57.04`:
+
+| check | result |
+|---|---|
+| toolchain | ✅ Apple clang 17, `xcrun`, SDK, **Kernel.framework KPI headers all present** — kext compilation is possible |
+| driver source for the NullMoth parts | ✅ `kexts/` present, plus the shipped `kexts/NVRM/accel/re` headers |
+| **ogkm builds for Darwin** | ❌ **`inc/libraries/nvport/debug.h:292: error: "Unsupported target OS"`** and `PORT_BREAKPOINT` undeclared. The tree contains **zero** Darwin references; `utils.mk` branches only for Linux/FreeBSD/SunOS |
+| `accel_build.sh` prerequisite | ❌ needs `$OGKM/src/nvidia/_out/Darwin_x86_64/compile_cmds.sh`, an artifact only a Darwin ogkm build produces |
+| **which kexts do the scripts build?** | `accel_build.sh` → **NVAccel.kext**; `build_agdc.sh` → **NVRMAGDC.kext**. **Nothing builds `NVRM.kext` or `NVRMFB.kext`** |
+
+**Neither of the two kexts that contain the BAR code is buildable from the public
+repo.** `placeLargeBar1()`, `readBARs()` and `nvrmDiscoverBar1()` all live in
+`NVRM.kext` / `NVRMFB.kext`, and there is no script for either — they are produced
+by the author's Darwin-ported ogkm build, which is not published. The README points
+at `open-gpu-kernel-modules` as if a stock checkout suffices; it does not.
+
+One useful by-product: running `make -C src/nvidia` on macOS **does** create
+`_out/Darwin_x86_64/` (the path is `_out/$(uname)_$(uname -m)`), so the directory
+machinery works — the port is missing at the source level, not the build level.
+
+### What this means for the patch plan
+
+The root-port gate at `kexts/NVRM/NVRM.cpp:746` is a three-line change, and the
+patch specification stands. But **it cannot be built today** without either the
+author's ogkm Darwin port or writing one — a large project, not a smoke test.
+
+**Therefore the actionable step is upstream, not local:**
+
+1. Report the root-port gate as the blocker, with the exact line and the proposed
+   behaviour for a root-complex (no parent bridge) device. That is Findings 10/11
+   territory and now has a precise target.
+2. Ask the author to publish the NVRM/NVRMFB build scripts and the ogkm Darwin port,
+   or to make `placeLargeBar1()` tolerate a root-complex parent.
+
 ## CORRECTION: the driver IS buildable — the recipe exists and the RM is open source
 
 An earlier revision of this document accepted the premise that the driver has no
