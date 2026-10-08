@@ -274,6 +274,36 @@ echo 1 | sudo tee /sys/bus/pci/devices/0000:01:00.0/reset
 sudo scripts/gpu-to-vfio.sh 16GiB
 ```
 
+### Trap 5 — updating needs `--efi`, and a stray disk hides the ESP
+
+`nullmoth-setup.sh` verifies which partition OpenCore started from, by reading OpenCore's
+`boot-path` NVRAM variable. **If that variable is empty it stops with "OpenCore's startup
+partition could not be confirmed"** even after naming the right candidate. Pass the
+partition explicitly — `diskutil list` shows it, and it is the small EFI one:
+
+```bash
+sudo ./nullmoth-setup.sh \
+  --pkg ~/Downloads/nullmoth-nvidia-<ver>.tar.gz \
+  --sha <published sha256> \
+  --tool ~/NullMothSafe.efi \
+  --app  ~/1401-bin \
+  --efi  disk0s1
+```
+
+**And check that the guest can see the ESP at all.** An extra disk in the domain shifts the
+disk numbering, and a stray recovery medium (`BaseSystem.img`) left attached as `sdc` with
+its own `boot order` was enough to make the OpenCore ESP invisible to `diskutil` — so the
+updater reported *"no OpenCore config for this Mac on any connected disk"*. Detach anything
+that is not the macOS disk and the OpenCore disk:
+
+```
+sda  the macOS disk
+sdb  the OpenCore ESP
+```
+
+That is exactly what `macos.xml` defines. If `virsh domblklist` shows more, the running
+domain is not the one in this repo — `virsh undefine --nvram` and define it again.
+
 ### Trap 4 — the tar is half an install
 
 `nullmoth-nvidia-*.tar.gz` ships `install.sh` (129 lines): files plus kernel collection.
