@@ -860,6 +860,67 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## CAN IT BE FIXED AT THE LIBVIRT XML LEVEL? No — and one of my tests was invalid
+
+Short answer: **no**, because what blocks us is how **QEMU generates ACPI**, and the
+libvirt XML cannot change that. But the honest reason is more specific, and it
+includes a correction.
+
+### What `placeLargeBar1()` actually requires
+
+Read from the source, in order. It needs a bridge **two levels up** from the GPU:
+
+| # | requirement | behind a root port | on the root complex (our case) |
+|---|---|---|---|
+| ① | grandparent is an `IOPCIDevice` | ✔ | ✘ host bridge's parent is not one |
+| ② | its PCIe port type **= 4 (Root Port)** | ✔ | ✘ host bridge is not a root port |
+| ③ | secondary **and** subordinate bus both == ours | ✔ | ✘ host bridge spans 0–255 |
+| ④ | 64-bit prefetchable window on it | ✔ | would be satisfiable |
+
+It needs all of that because it **reprograms the parent bridge's prefetchable window**
+(`rp` 0x24/0x28/0x2c) to cover the relocated BAR1/BAR3. A bridge that spans all of PCI
+can't be reprogrammed — that would move every other device. Hence the root-port
+restriction, which is correct engineering for the topology it was written for.
+
+### The XML options, and why each fails
+
+| XML change | enumerated by macOS | ReBAR capability readable | verdict |
+|---|---|---|---|
+| GPU on bus 0 (current) | ✅ | ✅ | driver works, **placement impossible** ✗ |
+| GPU behind a PCIe root port | ❌ **invisible** | — | ✗ |
+| GPU behind a conventional PCI bridge | ✅ | ❌ **unreadable** | placement impossible ✗ |
+
+The third row is a hard limit: conventional PCI has only **256 bytes** of config
+space, and the Resizable BAR capability sits at **`0x134`**. That is why the very
+first attempt in this project logged `bar1: no Resizable BAR capability`.
+
+### The correction: `hotplug='off'` never reached QEMU
+
+I previously reported testing "GPU behind a root port **with hotplug off**" and
+concluded the enumeration barrier survives it. **That test was invalid.** Verified on
+the running domain:
+
+```
+hotplug=off occurrences in the QEMU cmdline: 0
+qemu-system-x86_64 -device pcie-root-port,help   ->  no `hotplug` property exists
+```
+
+libvirt accepted `hotplug='off'` on the controller and silently dropped it; QEMU's
+`pcie-root-port` has no such property. So the GPU was invisible **with hotplug fully
+enabled** — the hypothesis that disabling hotplug would let macOS enumerate a
+root-port device is **untested**, not disproved.
+
+**What this changes:** the root-port route is not formally closed. What *is* closed is
+that it cannot be reached from libvirt XML, because QEMU offers no property for it —
+`IOPCIHPType = 33` is produced by ACPI that QEMU emits, and the XML has no lever over
+that. Reaching it needs either a QEMU patch or an ACPI override (OpenCore's
+`ACPI -> Add`), both of which remain open.
+
+**Lesson, again:** a config change must be verified at the consumer, not the writer.
+libvirt accepting an attribute says nothing about QEMU receiving it. Same failure mode
+as the `<qemu:commandline>` block that was deleted by a cleanup regex and went
+unnoticed for hours.
+
 ## Driver 1.0.9 installed and verified (was 1.0.6)
 
 Updated to the newest release, `v1.0.13` (release name: *"1401 Mac 1.0.13
