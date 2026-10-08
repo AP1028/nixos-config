@@ -247,8 +247,12 @@
     <graphics type='spice' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
     </graphics>
+    <!-- Temporary: an emulated display so the boot can be SEEN (QEMU screendump)
+         while diagnosing. With type='none' there is no console at all, and the
+         pre-driver guest produces no serial output either, leaving no way to
+         observe it. Restore type='none' once the driver is back. -->
     <video>
-      <model type='none'/>
+      <model type='vmvga' heads='1' primary='yes'/>
     </video>
 
     <sound model='ich9'/>
@@ -337,6 +341,15 @@
            host 01:00.1 -> guest bus 0x00 slot 0x04 fn 0x1
          with managed='yes' and no rom element. -->
 
+    <!-- x-no-mmap=on is REQUIRED for a BAR1 >= 4 GiB. Above vfio's mmap
+         threshold QEMU miscomputes the guest BAR address: it writes a 32-bit
+         MMIO value into the high dword, producing a non-canonical address and
+         killing the VM at startup:
+           kvm_set_user_memory_region: failed, slot=10,
+             start=0x8408400000000000   <- 0x84084000 << 32, garbage
+           shutting down, reason=crashed
+         Both 8 GiB and 16 GiB reproduce it, with the identical bogus address.
+         At 256 MB the mmap path is not taken and this is unnecessary. -->
     <hostdev mode='subsystem' type='pci' managed='yes'>
       <driver name='vfio'/>
       <source>
@@ -354,46 +367,4 @@
     <memballoon model='none'/>
   </devices>
 
-  <qemu:commandline>
-    <!-- THE 16 GiB BAR WORKAROUND UNDER TEST.
-         QEMU fails to map the GPU's 16 GiB BAR1:
-             vfio_container_dma_map(...) = -22 (Invalid argument)
-             kvm_set_user_memory_region: ... size=0x400000000 (16 GiB): Invalid argument
-         x-no-mmap makes QEMU NOT mmap the BAR and trap MMIO in userspace instead,
-         sidestepping the failing mapping path. Applied with -global (the same
-         mechanism OSX-KVM uses for its x-no-kvm-intx), because -set is processed
-         during early option parsing, before -device instances exist, and so
-         cannot reference them by id. Only vfio-pci devices are affected and this
-         domain has exactly the two GPU functions. -->
-    <!-- The CPU model, from OSX-KVM's OpenCore-Boot.sh line 37:
-             -cpu Skylake-Client,-hle,-rtm,kvm=on,vendor=GenuineIntel,
-                  +invtsc,vmware-cpuid-freq=on,+ssse3,+sse4.2,+popcnt,+avx,
-                  +aes,+xsave,+xsaveopt,check
-         Nothing in this file sets a libvirt cpu element, so this is the only
-         -cpu QEMU receives. The Penryn line (their pre-Sequoia one) wedges
-         this guest with every vCPU spinning; -hle/-rtm disable TSX.
-
-         phys-bits=40 is OUR addition, not OSX-KVM's, and it is required for the
-         GPU passthrough. The RTX 5080 exposes a large 64-bit BAR (QEMU showed a
-         24 GiB window at 0x800000000-0xbffffffff, i.e. Resizable BAR sizing).
-         Without an explicit guest physical address width, QEMU crashed the whole
-         domain on startup:
-             kvm_set_user_memory_region: KVM_SET_USER_MEMORY_REGION failed,
-               slot=13, start=0x8508000000000000, size=0x400000000: Invalid argument
-             shutting down, reason=crashed
-         The win11 dGPU domains on this host pass the same card successfully and
-         carry the equivalent setting: <maxphysaddr mode="passthrough" limit="40"/>
-         We cannot use that element because a libvirt <cpu> block would emit a
-         second, competing -cpu, so the width goes on the raw argument instead.
-         Do not drop phys-bits without re-testing GPU passthrough. -->
-    <qemu:arg value='-cpu'/>
-    <qemu:arg value='Skylake-Client,-hle,-rtm,kvm=on,vendor=GenuineIntel,+invtsc,vmware-cpuid-freq=on,+ssse3,+sse4.2,+popcnt,+avx,+aes,+xsave,+xsaveopt,check'/>
-    <!-- AppleSMC: OpenCore needs it to expose the SMC keys macOS reads. -->
-    <qemu:arg value='-device'/>
-    <qemu:arg value='isa-applesmc,osk=ourhardworkbythesewordsguardedpleasedontsteal(c)AppleComputerInc'/>
-    <!-- Board identity macOS accepts with a discrete GPU (the model the
-         NullMoth driver was tested on). -->
-    <qemu:arg value='-smbios'/>
-    <qemu:arg value='type=2'/>
-  </qemu:commandline>
 </domain>
