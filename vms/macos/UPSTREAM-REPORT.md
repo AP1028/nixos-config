@@ -509,6 +509,30 @@ when no `IODeviceMemory` exists. That would make a >4G BAR work rather than fail
 **For users, meanwhile:** 256 MB is the only value that works. Anything larger
 produces no display and no Metal.
 
+## Finding 11 — a >= 4 GiB BAR is unusable in a VM, though it works on bare metal
+
+**Context for the author:** `app/Resources/nullmoth-setup.sh` configures an
+installed system with `ResizeGpuBars = 13` (8 GB) and `ResizeAppleGpuBars = -1`,
+i.e. a full BAR and macOS seeing all of it. That is exactly right on hardware. In
+a QEMU/KVM VM with the card passed through, the same setup cannot be reached, and
+the driver fails closed in a confusing way:
+
+* **>= 8 GiB**: QEMU dies before the guest runs, with a non-canonical address
+  (`0x8408400000000000` = a 32-bit MMIO value in the high dword). Not OpenCore's
+  doing — reproduced with `ResizeGpuBars = -1`.
+* **4 GiB**: QEMU boots, macOS assigns the BAR above 4G, and **no IODeviceMemory
+  descriptor is published**, so `bars[FB]` becomes BAR3 and `go(2) failed`. This is
+  Finding 10's descriptor dependency, and it is why a VM cannot use a large BAR.
+
+**Suggestion:** the driver already reads the size correctly from the Resizable BAR
+capability at every size (`bar1: Resizable BAR capability @0x134 says BAR1 = 4096
+MB`). Falling back to the BAR registers (`configRead32(0x10 + 4*bar)`) when no
+descriptor matches would make a >4G BAR work instead of failing, and would let VM
+users reach the same configuration the installer sets on bare metal.
+
+Also worth a line in the docs: host-set BAR sizes above 4 GiB are only viable if
+the address assignment works, so a VM user should be told to keep a small BAR.
+
 ## Appendix for the author — the full runtime lever inventory
 
 Collected while working on this, in case it saves time. Everything below is

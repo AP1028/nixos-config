@@ -804,6 +804,83 @@ parked entries under pressure (they are rejects — the retry may succeed once o
 grants are released) would fix it. See
 [UPSTREAM-REPORT.md](UPSTREAM-REPORT.md) Finding 9.
 
+## Definitive BAR conclusion (host-resize-only, no OpenCore code patch)
+
+**You cannot get a usable BAR larger than 256 MB on this setup. 192 MB is the
+ceiling.** Measured, each with the host setting the size and OpenCore NOT
+resizing (`ResizeGpuBars = -1`):
+
+| host BAR1 | QEMU | macOS | driver |
+|---|---|---|---|
+| **256 MB** | boots | assigns below 4G | **works — 192 MB budget** |
+| 2 GiB | boots | assigns above 4G | ✗ BAR1 not in `bars`, `go(2) failed` |
+| 4 GiB | boots | assigns above 4G | ✗ no descriptor → `bars[FB]` = BAR3 → `go(2) failed` |
+| 8 GiB | **crash** | — | — |
+| 16 GiB | **crash** | — | — |
+
+### Why >= 8 GiB crashes — and why it is NOT OpenCore
+
+`ResizeGpuBars` was already `-1`, so OpenCore issued no resize, and it still died:
+
+```
+kvm_set_user_memory_region: failed, slot=10,
+  start=0x8408400000000000, size=0x200000000 (8 GiB)
+```
+
+**The guest BAR address is the problem: `0x84084000 << 32`** — a 32-bit MMIO value
+in the high dword of a 64-bit BAR. `x-no-mmap=on` stops the crash but the address
+stays identical (`BAR1: 64 bit prefetchable ... at 0x8408400000000000`), so it only
+hides the symptom — and it is a **debug option** ("Disable MMAP for device. Allows
+to trace MMIO accesses (DEBUG)"), which traps every MMIO access in userspace.
+**Not a solution, and not worth its cost.**
+
+### Why 4 GiB is not usable either
+
+macOS assigns a 4 GiB BAR **above 4G** (at `0x1000000000`) and then publishes **no
+`IODeviceMemory` descriptor** for it. The driver builds its entire BAR table from
+those descriptors (`readBARs`, `nvrmDiscoverBar1`), so `bars[FB]` silently falls
+back to BAR3 and RM init fails. A >= 4 GiB BAR can never be placed below 4G (the
+below-4G window is 2 GiB), so this is unavoidable at that size.
+
+`DevirtualiseMmio = true` (the OpenCore quirk for >4G MMIO) was tested at 4 GiB and
+made no difference.
+
+### What the author's own installer does on bare metal — and why it does not apply
+
+`app/Resources/nullmoth-setup.sh` sets, for an installed system:
+
+```
+ResizeGpuBars      = 13   # 8 GB BAR, "the driver was tested with the card's full 8 GB BAR"
+ResizeAppleGpuBars = -1   # "macOS sees the full BAR"
+```
+
+So **macOS handles a full 8 GB BAR fine on real hardware** — the author ships
+exactly that. The blocker is our VM's PCI layer, not macOS and not the driver.
+Two things rule OpenCore out as the fix:
+
+* OpenCore's `SetResizableBar.c` only **writes the PCI config space** — it resizes.
+  Its docs are explicit: *"**Reduce** GPU PCI BAR sizes for compatibility with
+  macOS... Example 3: Setting ResizeAppleGpuBars to 16 GB will make **no changes**."*
+  **There is no "report a size without resizing" mode**, which was the plan.
+* On a passed-through card OpenCore's resize does not take effect anyway: with
+  `ResizeGpuBars = 13` the driver still reported `bar1@0x14:0x90000000+0x10000000`
+  (256 MB).
+
+### Where a real fix would have to go
+
+1. **QEMU/OVMF-side** — the large-BAR address computation. The value `0x84084000`
+   is a 32-bit MMIO address from the guest's low region, so the truncation happens
+   while placing a 64-bit BAR. OVMF's 64-bit MMIO window sizing
+   (`PcdPciMmio64Size`) is the lead worth chasing; the QEMU `q35-pcihost`
+   `pci-hole64-size` is already a roomy 32 GiB and is NOT the limit.
+2. **Driver-side** — Finding 10: read the BAR size from the Resizable BAR
+   capability (which reads correctly at *every* size) and probe the BAR registers
+   via `configRead32` when no descriptor matches.
+
+**Until one of those lands, keep BAR1 at 256 MB and keep the `nvrm610.conf` fix.**
+The conf workaround cannot be lifted: it compensates for the 192 MB budget, and a
+larger BAR is not reachable.
+
 ## Still open (honest list)
 
 1. **The ~0.5 s drag-start stall is not fixed.** First-use shader compilation is
