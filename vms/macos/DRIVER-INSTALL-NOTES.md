@@ -860,6 +860,67 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## CORRECTION: `interrupt-map` was NOT the root cause
+
+The previous revision claimed the missing `interrupt-map` was the cause, and it was
+committed as fact. **The evidence does not support it, and this corrects the record.**
+
+Working devices on bus 0 *also* have no `interrupt-map` — they carry
+`IOInterruptSpecifiers` / `IOInterruptControllers` instead:
+
+```
+"IOInterruptSpecifiers"  = (<1700000007000000>, ...)
+"IOInterruptControllers" = ("io-apic-0", "IOPCIMessagedInterruptController", ...)
+```
+
+So the absence of `interrupt-map` is normal for this firmware, not a defect. The
+`IRQ 0` seen on a root-port device is a **consequence** of the device never being
+resourced, not the cause of it.
+
+### What the tri-VM test actually established
+
+Identical QEMU configuration, GPU behind a PCIe root port, all levers applied and
+verified:
+
+| guest | IRQ | BARs | root port windows |
+|---|---|---|---|
+| **Linux** | **11** | **all** — BAR0 64 MB, BAR1 256 MB at `0x1000000000` (above 4G), BAR3 32 MB, BAR5 I/O | `prefetchable memory range [0x1000000000 ...]` |
+| **macOS** | **0** | **none** | `assigned-addresses` = its own 4 KB register BAR, no bus window |
+
+**Linux resources the card perfectly behind the same root port on the same QEMU.**
+That exonerates QEMU, the device model, the ACPI tables, the root port and its
+windows. The failure is entirely inside macOS's PCI resource assignment.
+
+### The corrected mechanism
+
+macOS **assigns no bus windows to QEMU's root ports.** The ports themselves are
+published (`IOPP <class IOPCI2PCIBridge>` × 5), `IOPCIResourced = Yes`, and `ranges`
+is present — but `assigned-addresses` contains only their own 4 KB register BAR. With
+no window on the parent bridge, nothing behind it can be given an address, so the
+device is read from config space and then dropped: no BARs (therefore no
+`IODeviceMemory`), no interrupt, no IORegistry node, no driver attachment.
+
+**Still unexplained: *why* macOS skips the window assignment for these bridges.** Not
+tested yet, and the next probe is the root port's `ranges` value alongside the ACPI
+`_CRS` it is derived from.
+
+### Also checked, and it does not help
+
+The **pristine OSX-KVM OpenCore config** (the pre-NullMoth backup) was compared against
+ours in the hope that it held the missing piece, since that project passes an RX 580
+through on guest bus 0x01. It does not: its `DeviceProperties` are the same
+`built-in` / `layout-id` / `AAPL,ig-platform-id` entries, and its `ACPI -> Add` holds
+only `SSDT-EC.aml` and `SSDT-USBX.aml`. It contains no root-port properties at all.
+So the OSX-KVM reference does not explain why its own root-port setup works, and
+should not be treated as a proven configuration for this environment without a
+matched test.
+
+### The injection test was not run, deliberately
+
+The planned `interrupt-map` injection was abandoned once the premise collapsed —
+injecting speculative interrupt vectors into a working system to test a hypothesis the
+evidence had already undermined is not a defensible experiment.
+
 ## ROOT CAUSE of the root-port failure: the device tree has no `interrupt-map`
 
 Tri-VM comparison, identical hardware, GPU behind a PCIe root port, all QEMU levers

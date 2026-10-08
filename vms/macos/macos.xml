@@ -351,16 +351,14 @@
       <source>
         <address domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
       </source>
-      <rom bar='on' file='/home/tianyixia/linuxvm/rtx5080.rom'/>
-      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0' multifunction='on'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x04' function='0x0' multifunction='on'/>
     </hostdev>
     <hostdev mode='subsystem' type='pci' managed='yes'>
       <driver name='vfio'/>
       <source>
         <address domain='0x0000' bus='0x01' slot='0x00' function='0x1'/>
       </source>
-      <rom bar='on' file='/home/tianyixia/linuxvm/rtx5080.rom'/>
-      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x1'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x04' function='0x1'/>
     </hostdev>
     <memballoon model='none'/>
   </devices>
@@ -406,15 +404,5 @@
          NullMoth driver was tested on). -->
     <qemu:arg value='-smbios'/>
     <qemu:arg value='type=2'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.hotplug=off'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.x-do-not-expose-native-hotplug-cap=on'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.pref64-reserve=17179869184'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.mem-reserve=536870912'/>
-    <qemu:arg value='-global'/>
-    <qemu:arg value='pcie-root-port.power_controller_present=off'/>
   </qemu:commandline>
 </domain>
