@@ -860,6 +860,56 @@ It also explains the bare-metal/VM split cleanly: the NullMoth installer sets
 because the motherboard firmware has already assigned the BAR and macOS leaves it
 alone. In a VM, macOS re-derives the assignment and gets it wrong.
 
+## The firmware's assignment is PERFECT — macOS destroys it
+
+Measured with OpenCore stopped at its own picker (so **no OS runs at all**, only
+OVMF + OpenCore) and an 8 GiB host BAR:
+
+```
+BAR1: 64 bit prefetchable memory at 0xe000000000 [0xe1ffffffff]   <- 8 GiB, sane, aligned
+BAR3: 64 bit prefetchable memory at 0xe2a0000000 [0xe2a1ffffff]
+```
+
+**The firmware assigns exactly what Windows chooses** (`0xe000000000`). There is
+nothing wrong with the firmware, QEMU, vfio or OpenCore. macOS is handed a correct
+assignment and **replaces it with `0x84084000 << 32`**.
+
+### What the garbage value actually is
+
+`0x84084000` is a **low MMIO address** — BAR0 is at `0x80000000` and the audio
+function at `0x84a84000`. So macOS writes a **low 32-bit address into the high dword
+of the 64-bit BAR**: a 64/32-bit mix-up in its PCI resource allocator, not a range
+or capacity problem.
+
+### The address-width hypothesis, tested and DISPROVED
+
+The natural theory was that macOS is handed an address it cannot represent
+(`0xe000000000` = 896 GiB needs 40 bits, and `-cpu Skylake-Client` is often a 39-bit
+part). Measured on the guest:
+
+```
+physical address bits : 40          -> 1 TiB of address space
+virtual  address bits : 48
+```
+
+**896 GiB fits comfortably inside 40 bits.** `phys-bits=40` was therefore a no-op
+(the guest already reported 40), and the theory is dead.
+
+### So: is it worth touching the QEMU stack?
+
+**Not for the BAR assignment** — that is already correct and measured. The only
+remaining place macOS could be getting confused is the **ACPI `_CRS` MMIO windows**
+it uses when re-placing devices, which OVMF generates and QEMU's runtime knobs do
+not control (OVMF's 64-bit window is a build-time PCD, which is why
+`pci-hole64-size=256GiB` did nothing). Changing those means an ACPI override or a
+rebuilt OVMF — a much deeper project than anything tried so far, and one with no
+evidence yet that it would help.
+
+**Bottom line: the bug is inside macOS's PCI resource allocator.** Every component
+we can configure has been measured doing the right thing. 256 MB with the 192 MB
+budget remains the ceiling, and the driver-side fix (Findings 10/11) remains the
+only route that could change it.
+
 ## CORRECTED AGAIN: it is macOS's boot.efi, not OpenCore
 
 The picker test settles it. With an **8 GiB host BAR**, OpenCore started and was
