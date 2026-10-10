@@ -1,0 +1,93 @@
+PROOF for DSDT-fixed.aml  (raw acpiexec output)
+==============================================
+
+### 1. acpiexec, ACPICA 20260408 (modern) - ORIGINAL
+$ acpiexec -b quit /tmp/acpi-asus/DSDT | grep -E 'dswload|Skipping parse|Objects with|successfully acquired'
+Firmware Error (ACPI): Could not resolve symbol [\_SB.PC00.XHCI.RHUB.HS07], AE_NOT_FOUND (20260408/dswload2-314)
+ACPI: Skipping parse of AML opcode: Scope (0x0010)
+Table [DSDT: Notebook] (id 01) - 5955 Objects with 190 Devices, 118 Regions,  978 Methods (552/426/36 Serial/Non/Cvt)
+ACPI: 1 ACPI AML tables successfully acquired and loaded
+
+### 2. acpiexec, ACPICA 20260408 (modern) - FIXED
+$ acpiexec -b quit /tmp/DSDT-fixed.aml | grep -E 'dswload|Skipping parse|Objects with|successfully acquired'
+  <<< ZERO load-time failures >>>
+Table [DSDT: Notebook] (id 01) - 5955 Objects with 190 Devices, 118 Regions,  978 Methods (552/426/36 Serial/Non/Cvt)
+ACPI: 1 ACPI AML tables successfully acquired and loaded
+
+### 3. full acpiexec output diff, original vs fixed (addresses normalised)
+    the ONLY differences are the filename, the table length and the 3 error lines
+1c1
+< Input file /tmp/acpi-asus/DSDT, Length ADDR (430740) bytes
+---
+> Input file /tmp/DSDT-fixed.aml, Length ADDR (430760) bytes
+12c12
+< ACPI: DSDT ADDR 069294 (v02 _ASUS_ Notebook 01072009 INTL 20210930)
+---
+> ACPI: DSDT ADDR 0692A8 (v02 _ASUS_ Notebook 01072009 INTL 20210930)
+14,16d13
+< Firmware Error (ACPI): Could not resolve symbol [\_SB.PC00.XHCI.RHUB.HS07], AE_NOT_FOUND (20260408/dswload2-314)
+< ACPI Error: AE_NOT_FOUND, During name lookup/catalog (20260408/psobject-372)
+< ACPI: Skipping parse of AML opcode: Scope (ADDR)
+    (namespace dump lines below that diff are identical)
+Namespace node count: 5966
+Namespace node count: 5966
+
+### 4. acpiexec, ACPICA 20160930 == the ACPICA version macOS embeds
+    built from github.com/acpica/acpica tag R09_30_16 (ACPI_CA_VERSION 0x20160930)
+
+--- ORIGINAL: whole table load is aborted ---
+ACPI: FACS 0x00005E0249E12090 000040
+ACPI Error: [_SB_.PC00.HDAS] Namespace lookup failure, AE_NOT_FOUND (20160930/dswload-292)
+ACPI Exception: AE_NOT_FOUND, [DSDT] table load failed (20160930/tbxfload-289)
+ACPI Error: 1 table load failures, 0 successful (20160930/tbxfload-342)
+
+--- FIXED: load phase, verbatim ---
+ACPI: FACS 0x000055CC45282090 000040
+Initializing General Purpose Events (GPEs):
+    Initialized GPE 00 to 1F [_GPE] 4 regs on interrupt 0x0 (SCI)
+    Initialized GPE 64 to 263 [_GPE] 64 regs on interrupt 0x0 (SCI)
+ACPI Warning: Unsupported module-level executable opcode 0x70 at table offset 0x6583D (20160930/psloop-285)
+ACPI Warning: Unsupported module-level executable opcode 0x70 at table offset 0x6584E (20160930/psloop-285)
+ACPI Warning: Unsupported module-level executable opcode 0x70 at table offset 0x65861 (20160930/psloop-285)
+ACPI Warning: Unsupported module-level executable opcode 0x70 at table offset 0x65884 (20160930/psloop-285)
+
+Initializing Namespace objects:
+Table [DSDT: Notebook] (id 01) - 5185 Objects with 127 Devices,  69 Regions,  732 Methods (432/300/32 Serial/Non/Cvt)
+ACPI Warning: \_GPE: Missing expected return value (20160930/nsrepair-311)
+ACPI Warning: \_GPE: Expected return object of type Integer (20160930/nspredef-380)
+ACPI: Executed 33 blocks of module-level executable AML code
+ACPI: 1 ACPI AML tables successfully acquired and loaded
+
+--- FIXED: count of load-phase (dswload/dswload2/tbxfload) failures ---
+  0  <<< ZERO table-load / namespace-pass failures >>>
+
+    The 4 'Unsupported module-level executable opcode 0x70' warnings are
+    pre-existing firmware style (bare Store at module level).  They are
+    present in the unmodified bytes:
+      orig 0x065831: 70 87 48 57 54 42 48 57   <- Store (0x70) at module level
+      orig 0x065842: 70 77 0a 08 48 4d 53 5a   <- Store (0x70) at module level
+      orig 0x065855: 70 87 88 48 57 54 42 00   <- Store (0x70) at module level
+      orig 0x065878: 70 72 77 49 54 53 5a 0a   <- Store (0x70) at module level
+
+### 5. header integrity
+  /tmp/acpi-asus/DSDT
+    size=430740  header.Length=430740  checksum byte=0x1b  sum%256=0  [OK]
+    sha256=cf7518f395e768e46768a8a2ea70ef00e25d6b8af1e22e543a24ec4bad4f45de
+  /tmp/DSDT-fixed.aml
+    size=430760  header.Length=430760  checksum byte=0x7e  sum%256=0  [OK]
+    sha256=1da5017b6a14771989b611bbb0ff3594f7f0aecce44208e11356342a2b3d1c77
+
+### 6. fixed table == original + exactly the 6 documented substitutions
+  reconstruction from pristine DSDT + 6 edits == DSDT-fixed.aml : True
+
+### 7. note on the "5185 Objects" line printed by acpiexec 20160930
+    acpiexec 20160930 prints that counter in the middle of AcpiNsLoadTable(),
+    i.e. after pass 1 + pass 2 but *before* the module level code is executed.
+    acpiexec 20260408 prints it in single pass mode, after module level code
+    already ran, which is why the same table shows 5185 there and 5955 here.
+    After full initialisation the two agree: 20160930 reports
+      "Initialized 64/118 Regions 0/90 Fields 32/77 Buffers 75/102 Packages (5964 nodes)"
+    and 20260408's namespace dump reports "Namespace node count: 5966"
+    (the 2 extra nodes are ACPICA's internal _TI_/_T97 temporaries).
+    No count regressed; 20260408 reports 5955 Objects / 190 Devices / 118 Regions
+    / 978 Methods for both the original and the fixed table.

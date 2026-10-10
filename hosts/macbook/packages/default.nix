@@ -15,6 +15,7 @@ in {
     ../../../modules/packages/steam-asahi.nix
     ../../../modules/packages/bottles-cpak.nix
     ../../../modules/packages/flatpak-netease.nix
+    ../../../modules/packages/apfs.nix
   ];
 
   programs.nix-ld.enable = true;
@@ -26,6 +27,10 @@ in {
     git
     fastfetch
     brave
+
+    # Official Discord ships no Linux aarch64 build; vesktop is the native
+    # Electron client around discord.com (Vencord built in).
+    vesktop
 
     nmap
     zenmap
@@ -65,6 +70,7 @@ in {
     kdePackages.okular
     gimp3-with-plugins
     krita
+    marktext
     # nixpkgs dropped firefox-esr-140; take it from the stable track (see the
     # package file for why zotero cannot build against firefox-esr-153).
     (pkgs.callPackage ../../../packages/zotero-fx140.nix {
