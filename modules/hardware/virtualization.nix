@@ -88,6 +88,19 @@
           definition = ../../vms/macos/macos.xml;
           active = false;
         }
+        # GPU-free macOS VMs, for non-graphics work. No PCI passthrough and
+        # no USB hostdevs, so they neither need the NVIDIA driver nor compete
+        # for the physical keyboard/mouse. Each has its own reflinked disk
+        # image and its own reflinked OpenCore ESP, so writes to one do not
+        # touch the others or the originals. 6 vCPU / 16 GiB each.
+        {
+          definition = ../../vms/macos/macos-nogpu-1.xml;
+          active = false;
+        }
+        {
+          definition = ../../vms/macos/macos-nogpu-2.xml;
+          active = false;
+        }
       ];
       networks = [
         {
