@@ -80,6 +80,21 @@ in {
     moonlight-qt
     bilibili
 
+    # Prism Launcher with the asusg16 multi-JDK set, adapted for aarch64:
+    # graalvm-ce_21 has no aarch64 build on this nixpkgs, so it is replaced
+    # by the default graalvm-ce; temurin and graalvm-oracle are native arm64.
+    (prismlauncher.override {
+      jdks = with pkgs; [
+        temurin-bin-8
+        temurin-bin-17
+        temurin-bin-21
+        temurin-bin-25
+        graalvmPackages.graalvm-oracle_17
+        graalvmPackages.graalvm-oracle_25
+        graalvmPackages.graalvm-ce
+      ];
+    })
+
     htop
     killall
     mpv
