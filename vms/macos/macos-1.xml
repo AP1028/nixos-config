@@ -1,12 +1,12 @@
-<!-- GPU-free variant of vms/macos/macos.xml: no PCI passthrough, no
+<!-- GPU-free variant of vms/macos/macos-dGPU.xml: no PCI passthrough, no
      USB hostdevs, emulated vmvga display and emulated USB input.
-     Derived from macos.xml so the OSK, the -cpu line, SMBIOS type=2
+     Derived from macos-dGPU.xml so the OSK, the -cpu line, SMBIOS type=2
      and the ICH9-LPC global stay identical. Runs the pre-driver disk
      image (no NVIDIA driver), which is why nothing here needs the card.
      6 vCPU / 16 GiB. -->
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
-  <name>macos-nogpu-2</name>
-  <uuid>a1b2c3d4-0002-4e5f-8a9b-000000000002</uuid>
+  <name>macos-1</name>
+  <uuid>a1b2c3d4-0001-4e5f-8a9b-000000000001</uuid>
   <title>macOS (OpenCore)</title>
   <description>
     macOS guest for the NullMoth NVIDIA driver work.
@@ -118,7 +118,7 @@
     <!-- 1 TiB thin volume: the virtual size only, qcow2 grows with guest writes. -->
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='writeback' discard='unmap'/>
-      <source file='/var/lib/libvirt/images/macos-nogpu-2.img'/>
+      <source file='/var/lib/libvirt/images/macos-1.img'/>
       <target dev='sda' bus='sata'/>
       <boot order='2'/>
     </disk>
@@ -126,7 +126,7 @@
     <!-- OpenCore bootloader: does the AppleSMC/board-id work the guest needs. -->
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='writeback'/>
-      <source file='/home/tianyixia/OSX-KVM/OpenCore/OpenCore-nogpu-2.qcow2'/>
+      <source file='/home/tianyixia/OSX-KVM/OpenCore/OpenCore-1.qcow2'/>
       <target dev='sdb' bus='sata'/>
       <boot order='1'/>
     </disk>
@@ -163,7 +163,7 @@
          gets the device flagged built-in, which iCloud/App Store sign-in wants
          later. -->
     <interface type='network'>
-      <mac address='52:54:00:15:0c:12'/>
+      <mac address='52:54:00:15:0c:11'/>
       <source network='default'/>
       <model type='vmxnet3'/>
       <address type='pci' domain='0x0000' bus='0x00' slot='0x03' function='0x0'/>
@@ -244,7 +244,7 @@
          sudo. Requires debug=0x8 serial=1 in the guest boot-args.
          Restore type='pty' (and the <console>) when finished. -->
     <serial type='file'>
-      <source path='/tmp/macos-nogpu-2-serial.log' append='off'/>
+      <source path='/tmp/macos-1-serial.log' append='off'/>
       <target type='isa-serial' port='0'>
         <model name='isa-serial'/>
       </target>

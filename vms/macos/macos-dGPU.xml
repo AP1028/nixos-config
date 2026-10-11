@@ -1,12 +1,6 @@
-<!-- GPU-free variant of vms/macos/macos.xml: no PCI passthrough, no
-     USB hostdevs, emulated vmvga display and emulated USB input.
-     Derived from macos.xml so the OSK, the -cpu line, SMBIOS type=2
-     and the ICH9-LPC global stay identical. Runs the pre-driver disk
-     image (no NVIDIA driver), which is why nothing here needs the card.
-     6 vCPU / 16 GiB. -->
 <domain type='kvm' xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
-  <name>macos-nogpu-1</name>
-  <uuid>a1b2c3d4-0001-4e5f-8a9b-000000000001</uuid>
+  <name>macos-dGPU</name>
+  <uuid>9b5b38a2-6667-4962-b89f-5ed53a52e499</uuid>
   <title>macOS (OpenCore)</title>
   <description>
     macOS guest for the NullMoth NVIDIA driver work.
@@ -22,8 +16,8 @@
   </metadata>
 
   <!-- 16 GiB (larger than OSX-KVM's 4096 default, deliberate). -->
-  <memory unit='KiB'>16777216</memory>
-  <currentMemory unit='KiB'>16777216</currentMemory>
+  <memory unit='KiB'>33554432</memory>
+  <currentMemory unit='KiB'>33554432</currentMemory>
   <!-- No <memoryBacking><locked/></memoryBacking>: it was here before and only
        raised the host commit; OSX-KVM does not lock the guest's RAM. -->
   <!-- 4 cores / 1 socket / 1 thread. The CPU *model* is not set here: it comes
@@ -31,12 +25,12 @@
        file, which mirrors OpenCore-Boot.sh line 37 verbatim. libvirt cannot
        express that string (kvm=on and vmware-cpuid-freq=on have no XML
        equivalent), so libvirt must not emit a -cpu of its own. -->
-  <vcpu placement='static'>6</vcpu>
+  <vcpu placement='static'>12</vcpu>
 
   <os>
     <type arch='x86_64' machine='pc-q35-10.2'>hvm</type>
     <loader readonly='yes' type='pflash'>/run/libvirt/nix-ovmf/edk2-x86_64-code.fd</loader>
-    <nvram template='/run/libvirt/nix-ovmf/edk2-i386-vars.fd'>/var/lib/libvirt/qemu/nvram/macos_VARS.fd</nvram>
+    <nvram template='/run/libvirt/nix-ovmf/edk2-i386-vars.fd'>/var/lib/libvirt/qemu/nvram/macos-dGPU_VARS.fd</nvram>
     <!-- No <boot dev='hd'/> here: libvirt forbids os/boot together with the
          per-device <boot order> elements below, and the per-device order is
          what actually puts OpenCore first. -->
@@ -118,7 +112,7 @@
     <!-- 1 TiB thin volume: the virtual size only, qcow2 grows with guest writes. -->
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='writeback' discard='unmap'/>
-      <source file='/var/lib/libvirt/images/macos-nogpu-1.img'/>
+      <source file='/var/lib/libvirt/images/macos.img'/>
       <target dev='sda' bus='sata'/>
       <boot order='2'/>
     </disk>
@@ -126,7 +120,7 @@
     <!-- OpenCore bootloader: does the AppleSMC/board-id work the guest needs. -->
     <disk type='file' device='disk'>
       <driver name='qemu' type='qcow2' cache='writeback'/>
-      <source file='/home/tianyixia/OSX-KVM/OpenCore/OpenCore-nogpu-1.qcow2'/>
+      <source file='/home/tianyixia/OSX-KVM/OpenCore/OpenCore.qcow2'/>
       <target dev='sdb' bus='sata'/>
       <boot order='1'/>
     </disk>
@@ -163,7 +157,7 @@
          gets the device flagged built-in, which iCloud/App Store sign-in wants
          later. -->
     <interface type='network'>
-      <mac address='52:54:00:15:0c:11'/>
+      <mac address='52:54:00:15:0c:0a'/>
       <source network='default'/>
       <model type='vmxnet3'/>
       <address type='pci' domain='0x0000' bus='0x00' slot='0x03' function='0x0'/>
@@ -228,11 +222,33 @@
     <input type='keyboard' bus='usb'/>
     <input type='tablet' bus='usb'/>
 
+    <!-- Host USB keyboard passed through (JZ-2.4G wireless, 3151:4011).
+         Needed because <video> is type='none', so the SPICE console has no
+         display and cannot deliver keystrokes. This gives the guest a real
+         keyboard for the OpenCore picker.
+         NOTE: the HOST loses this keyboard while the VM holds it; the laptop's
+         built-in PS/2 keyboard is unaffected (PS/2 cannot be passed through).
+         Remove this hostdev (or `virsh detach-device`) to give it back. -->
+    <hostdev mode='subsystem' type='usb' managed='yes'>
+      <source>
+        <vendor id='0x3151'/>
+        <product id='0x4011'/>
+      </source>
+      <address type='usb' bus='1' port='1'/>
+    </hostdev>
+    <!-- Logitech G502 SE HERO gaming mouse -->
+    <hostdev mode='subsystem' type='usb' managed='yes'>
+      <source>
+        <vendor id='0x046d'/>
+        <product id='0xc08b'/>
+      </source>
+      <address type='usb' bus='1' port='2'/>
+    </hostdev>
     <graphics type='spice' autoport='yes' listen='127.0.0.1'>
       <listen type='address' address='127.0.0.1'/>
     </graphics>
     <video>
-      <model type='vmvga' heads='1' primary='yes'/>
+      <model type='none'/>
     </video>
 
     <sound model='ich9'/>
@@ -244,7 +260,7 @@
          sudo. Requires debug=0x8 serial=1 in the guest boot-args.
          Restore type='pty' (and the <console>) when finished. -->
     <serial type='file'>
-      <source path='/tmp/macos-nogpu-1-serial.log' append='off'/>
+      <source path='/tmp/macos-serial.log' append='off'/>
       <target type='isa-serial' port='0'>
         <model name='isa-serial'/>
       </target>
@@ -321,6 +337,29 @@
            host 01:00.1 -> guest bus 0x00 slot 0x04 fn 0x1
          with managed='yes' and no rom element. -->
 
+    <!-- x-no-mmap=on is REQUIRED for a BAR1 >= 4 GiB. Above vfio's mmap
+         threshold QEMU miscomputes the guest BAR address: it writes a 32-bit
+         MMIO value into the high dword, producing a non-canonical address and
+         killing the VM at startup:
+           kvm_set_user_memory_region: failed, slot=10,
+             start=0x8408400000000000   <- 0x84084000 << 32, garbage
+           shutting down, reason=crashed
+         Both 8 GiB and 16 GiB reproduce it, with the identical bogus address.
+         At 256 MB the mmap path is not taken and this is unnecessary. -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <driver name='vfio'/>
+      <source>
+        <address domain='0x0000' bus='0x01' slot='0x00' function='0x0'/>
+      </source>
+      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x0' multifunction='on'/>
+    </hostdev>
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <driver name='vfio'/>
+      <source>
+        <address domain='0x0000' bus='0x01' slot='0x00' function='0x1'/>
+      </source>
+      <address type='pci' domain='0x0000' bus='0x01' slot='0x00' function='0x1'/>
+    </hostdev>
     <memballoon model='none'/>
   </devices>
 

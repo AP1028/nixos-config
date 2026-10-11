@@ -176,6 +176,34 @@ sudo ./shrink-gpu-bar.sh 17179869184      # 16 GiB
 
 ## Host setup
 
+### Which domain
+
+Three domains share this directory, differing only in what they attach to:
+
+| domain | passthrough | display | disk | ESP |
+|---|---|---|---|---|
+| **`macos-dGPU`** | RTX 5080 + its audio | `<video>=none`; the card drives the panel | `macos.img` | `OpenCore.qcow2` |
+| **`macos-1`** | none | emulated `vmvga` + SPICE | `macos-1.img` | `OpenCore-1.qcow2` |
+| **`macos-2`** | none | emulated `vmvga` + SPICE | `macos-2.img` | `OpenCore-2.qcow2` |
+
+**`macos-dGPU` is the domain this manual is about** — everything above applies to it: the
+NVIDIA driver, the 16 GiB host BAR, the GPU bound to `vfio-pci`, `<video>=none`.
+
+**`macos-1` and `macos-2` are GPU-free**, for non-graphics work: no PCI passthrough, no USB
+hostdevs, 6 vCPU / 16 GiB each, emulated display and emulated USB input. They run the
+**pre-driver disk image**, so none of the driver setup applies, and because they take input
+from SPICE rather than the physical devices they can run alongside `macos-dGPU` without
+fighting it for the keyboard and mouse.
+
+Both were generated from `macos-dGPU.xml` rather than hand-written, so the real OSK, the
+`-cpu` line, SMBIOS `type=2` and the ICH9-LPC global are identical. Each has its **own**
+reflinked disk image and its **own** reflinked ESP — the ESP separation matters because
+OpenCore writes its logs and NVRAM there, and a shared ESP would mean two running VMs
+writing to the same file.
+
+All three are registered in `modules/hardware/virtualization.nix` with `active = false`:
+defined, but not auto-started.
+
 ### Bind the GPU to vfio-pci
 
 As above. Also bind function 1 if passing the audio device through. `intel_iommu=on
@@ -185,7 +213,7 @@ iommu=pt` is already set in `modules/hardware/virtualization.nix`.
 
 ```sh
 sudo ./vms/macos/setup-macos.sh     # idempotent; creates the disk, defines the domain
-virsh -c qemu:///system start macos --console
+virsh -c qemu:///system start macos-dGPU --console
 ```
 
 First install only: in the OpenCore picker, Disk Utility → erase the large "sata" disk as
@@ -274,36 +302,6 @@ echo 1 | sudo tee /sys/bus/pci/devices/0000:01:00.0/reset
 sudo scripts/gpu-to-vfio.sh 16GiB
 ```
 
-### Trap 5 — updating needs `--efi`, and a stray disk hides the ESP
-
-`nullmoth-setup.sh` verifies which partition OpenCore started from, by reading OpenCore's
-`boot-path` NVRAM variable. **If that variable is empty it stops with "OpenCore's startup
-partition could not be confirmed"** even after naming the right candidate. Pass the
-partition explicitly — `diskutil list` shows it, and it is the small EFI one:
-
-```bash
-sudo ./nullmoth-setup.sh \
-  --pkg ~/Downloads/nullmoth-nvidia-<ver>.tar.gz \
-  --sha <published sha256> \
-  --tool ~/NullMothSafe.efi \
-  --app  ~/1401-bin \
-  --efi  disk0s1
-```
-
-**And check that the guest can see the ESP at all.** An extra disk in the domain shifts the
-disk numbering, and a stray recovery medium (`BaseSystem.img`) left attached as `sdc` with
-its own `boot order` was enough to make the OpenCore ESP invisible to `diskutil` — so the
-updater reported *"no OpenCore config for this Mac on any connected disk"*. Detach anything
-that is not the macOS disk and the OpenCore disk:
-
-```
-sda  the macOS disk
-sdb  the OpenCore ESP
-```
-
-That is exactly what `macos.xml` defines. If `virsh domblklist` shows more, the running
-domain is not the one in this repo — `virsh undefine --nvram` and define it again.
-
 ### Trap 4 — the tar is half an install
 
 `nullmoth-nvidia-*.tar.gz` ships `install.sh` (129 lines): files plus kernel collection.
@@ -331,6 +329,36 @@ sudo ./nullmoth-setup.sh \
 
 It refuses to run as a loose copy; `--tool` and the audited installer both come from
 `1401.app/Contents/Resources/` in the release zip.
+
+### Trap 5 — updating needs `--efi`, and a stray disk hides the ESP
+
+`nullmoth-setup.sh` verifies which partition OpenCore started from, by reading OpenCore's
+`boot-path` NVRAM variable. **If that variable is empty it stops with "OpenCore's startup
+partition could not be confirmed"** even after naming the right candidate. Pass the
+partition explicitly — `diskutil list` shows it, and it is the small EFI one:
+
+```bash
+sudo ./nullmoth-setup.sh \
+  --pkg ~/Downloads/nullmoth-nvidia-<ver>.tar.gz \
+  --sha <published sha256> \
+  --tool ~/NullMothSafe.efi \
+  --app  ~/1401-bin \
+  --efi  disk0s1
+```
+
+**And check that the guest can see the ESP at all.** An extra disk in the domain shifts the
+disk numbering, and a stray recovery medium (`BaseSystem.img`) left attached as `sdc` with
+its own `boot order` was enough to make the OpenCore ESP invisible to `diskutil` — so the
+updater reported *"no OpenCore config for this Mac on any connected disk"*. Detach anything
+that is not the macOS disk and the OpenCore disk:
+
+```
+sda  the macOS disk
+sdb  the OpenCore ESP
+```
+
+That is exactly what `macos-dGPU.xml` defines. If `virsh domblklist` shows more, the running
+domain is not the one in this repo — `virsh undefine --nvram` and define it again.
 
 ## Verification
 
@@ -516,10 +544,10 @@ What to do:
 # preferred — a reboot exercises the same driver teardown without the watchdog path
 ssh <guest> sudo shutdown -r now
 # then stop the domain from the host
-virsh -c qemu:///system destroy macos
+virsh -c qemu:///system destroy macos-dGPU
 
 # if you already clicked Shut Down and it is wedged, it will not recover
-virsh -c qemu:///system destroy macos
+virsh -c qemu:///system destroy macos-dGPU
 ```
 
 A hard destroy is safe here: the panic has already stopped all writers, and APFS is
@@ -830,7 +858,7 @@ Useful, and recorded so it is not rediscovered. **None fixes Finding 12.**
 
 | path | what |
 |---|---|
-| `/var/lib/libvirt/images/macos.img` | **the live image** — the one `macos.xml` uses |
+| `/var/lib/libvirt/images/macos.img` | **the live image**, used by `macos-dGPU` |
 | `/var/lib/libvirt/macos-image-stash/` | `macos.img.20261008-0151.working-with-driver` (99 GiB), `macos.img.before-restore` (64 GiB), `macos.img.20261007-0535.pre-driver` (36 GiB), `macos-clean.img` (36 GiB) |
 
 The stash is 218 GiB apparent but only **46 GiB exclusive** on btrfs, because they are
@@ -891,8 +919,8 @@ The domain's serial is written to a file; `strings` it for driver logs.
 | OpenCore | `~/OSX-KVM/OpenCore/OpenCore.qcow2` | bootloader; supplies AppleSMC + board-id |
 | Recovery media | `~/OSX-KVM/BaseSystem.img` | Apple recovery build `082-33203`, raw 3.2 GB |
 | Firmware | `/run/libvirt/nix-ovmf/edk2-x86_64-code.fd` | OVMF from nixpkgs |
-| NVRAM | `/var/lib/libvirt/qemu/nvram/macos_VARS.fd` | created on first boot |
-| Domain XML | `vms/macos/macos.xml` | registered via `modules/hardware/virtualization.nix` |
+| NVRAM | `/var/lib/libvirt/qemu/nvram/macos-dGPU_VARS.fd` | created on first boot; named after the domain |
+| Domain XML | `vms/macos/macos-dGPU.xml` | registered via `modules/hardware/virtualization.nix` |
 
 Nothing is pinned to a macOS release: swapping `BaseSystem.img` for a newer recovery image
 is the only step a newer release would need.

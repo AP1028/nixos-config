@@ -85,7 +85,7 @@
         # macOS, for the NullMoth NVIDIA driver work. No passthrough
         # yet: it boots on QEMU's virtual VGA, which is enough to install.
         {
-          definition = ../../vms/macos/macos.xml;
+          definition = ../../vms/macos/macos-dGPU.xml;
           active = false;
         }
         # GPU-free macOS VMs, for non-graphics work. No PCI passthrough and
@@ -94,11 +94,11 @@
         # image and its own reflinked OpenCore ESP, so writes to one do not
         # touch the others or the originals. 6 vCPU / 16 GiB each.
         {
-          definition = ../../vms/macos/macos-nogpu-1.xml;
+          definition = ../../vms/macos/macos-1.xml;
           active = false;
         }
         {
-          definition = ../../vms/macos/macos-nogpu-2.xml;
+          definition = ../../vms/macos/macos-2.xml;
           active = false;
         }
       ];
