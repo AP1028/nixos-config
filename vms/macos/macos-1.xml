@@ -321,6 +321,34 @@
            host 01:00.1 -> guest bus 0x00 slot 0x04 fn 0x1
          with managed='yes' and no rom element. -->
 
+    <!-- Intel CNVi WiFi passthrough (host 00:14.3, [8086:7740] "Arrow Lake CNVi
+         WiFi"; iwlwifi identifies it as "Intel(R) Wi-Fi 7 BE201 320MHz").
+
+         ON BUS 0x00, for the same reason the NIC above is: macOS on q35 only
+         enumerates PCI devices sitting directly on the root complex. A device
+         behind a PCIe root port shows up as "BAR: not mapped", IRQ 0, and is
+         silently ignored (see the long note on the NVIDIA hostdev and on the
+         NIC). Slot 0x05 is free on the root bus: 0x02.0-0x02.4 are root ports,
+         0x03 is the NIC, 0x06 is the XHCI controller, 0x07.x are the
+         SSDT-mandated USB controllers, 0x1b is audio, 0x1f is SATA/SMBus.
+         (0x04 is where the NVIDIA hostdev goes when that is restored.)
+
+         managed='yes' lets libvirt do the vfio bind itself. The card is alone in
+         IOMMU group 12, so nothing else comes along with it.
+
+         The host has no use for this card: the uplink is USB ethernet
+         (enp0s20f0u1u4c2). See ../../../Projects/macos/wifi-vfio/README.md for
+         the scripts, and note the outcome recorded there: this device
+         ENUMERATES in the guest but still cannot associate, because
+         OpenIntelWireless has no driver for the BZ/GL (Wi-Fi 7) family and its
+         IWX hal tops out at the AX210. -->
+    <hostdev mode='subsystem' type='pci' managed='yes'>
+      <source>
+        <address domain='0x0000' bus='0x00' slot='0x14' function='0x3'/>
+      </source>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x05' function='0x0'/>
+    </hostdev>
+
     <memballoon model='none'/>
   </devices>
 

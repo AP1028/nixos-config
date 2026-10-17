@@ -49,6 +49,15 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # ArtCraft Crafting Apps (storytold): 12 prebuilt pure-Rust creative apps
+    # (photocraft, filmcraft, soundcraft, ...), packaged with autoPatchelf.
+    # NixOS module provides programs.craftapps + the /usr/share/fonts link the
+    # apps' text tools require (they ignore fontconfig).
+    nix-craftapps = {
+      url = "github:olafkfreund/nix-craftapps";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     nixos-23-11.url = "github:nixos/nixpkgs/nixos-23.11";
 
     vscode-server = {
@@ -157,6 +166,7 @@
           home-manager.nixosModules.home-manager
           nixvirt.nixosModules.default
           inputs.pwsp.nixosModules.default
+          inputs.nix-craftapps.nixosModules.default
         ];
       };
 

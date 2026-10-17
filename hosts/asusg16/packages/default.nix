@@ -13,6 +13,8 @@ in {
   imports = [
     ../../../modules/packages/common
 
+    ./craftapps.nix
+
     ../../../modules/packages/graalvm.nix
     ../../../modules/packages/wechat.nix
     ../../../modules/packages/steam.nix
