@@ -28,6 +28,7 @@ in {
     ../../../modules/packages/codex.nix
     ../../../modules/packages/wpsoffice.nix
     ../../../modules/packages/controller-rebind.nix
+    ../../../modules/packages/apfs.nix
   ];
 
   environment.systemPackages = with pkgs; [
