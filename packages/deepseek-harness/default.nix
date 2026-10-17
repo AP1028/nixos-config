@@ -1,5 +1,5 @@
-# DeepSeek Harness (dsh) — built from the upstream monorepo at dsh-v0.2.0-rc.2
-# (commit 639ed015397290b3745d163aafe02ffee4aa3f84).
+# DeepSeek Harness (dsh) — built from the upstream monorepo at dsh-v0.2.1-rc.2
+# (commit 687f282e8625c6b8d11ff58211a90524be2e4317).
 #
 # Uses the upstream pnpm-lock.yaml via fetchPnpmDeps and builds the TS/web
 # workspace with pnpmBuildHook. The whole tree is shipped because dsh resolves
@@ -144,13 +144,13 @@ stdenv.mkDerivation (finalAttrs: let
 in
 {
   pname = "deepseek-harness";
-  version = "0.2.0-rc.2";
+  version = "0.2.1-rc.2";
 
   src = fetchFromGitHub {
     owner = "deepseek-ai";
     repo = "deepseek-harness";
-    rev = "639ed015397290b3745d163aafe02ffee4aa3f84";
-    hash = "sha256-ZtO+bdoYbIkIgLTge5Eh7KYwTVh8FpFAAvx58dSY1PI=";
+    rev = "687f282e8625c6b8d11ff58211a90524be2e4317";
+    hash = "sha256-WcPs3q4NFTRnH2y1Rc/o7/rvJAOe8s7isoTQYf8APFU=";
   };
 
   # fetchPnpmDeps downloads the entire dependency tree (several GB of
@@ -170,7 +170,7 @@ in
     inherit (finalAttrs) pname version src;
     pnpm = pnpm_11;
     fetcherVersion = 4;
-    hash = "sha256-+7jFaROKpN8XHFpulloK2lb0GsYXbEdMs/V7ZO9leKE=";
+    hash = "sha256-C9Aw9AS4r7zubaEuT6mLXQ+AhhMVlTxPZRKTpzRUkcU=";
   }).overrideAttrs (old: {
     installPhase = ''
       runHook preInstall
@@ -275,6 +275,17 @@ in
         "const fileId = virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length)" \
         "const fileId = resolvePath(virtualId.slice(GLOBAL_CSS_VIRTUAL_PREFIX.length, -CSS_VIRTUAL_SUFFIX.length))"
 
+    # The DevTools frontend build (new in 0.2.1) has the same problem: its CSS
+    # virtual ids embed the absolute build path in rolldown's region comments.
+    # Keep them relative to the frontend root and resolve them again on load.
+    substituteInPlace packages/experimental/inspector/scripts/devtools/vite.ts \
+      --replace-fail \
+        'return `''${VIRTUAL}css:''${file.slice(0, -3)}.mjs`' \
+        'return `''${VIRTUAL}css:''${sourcePath.slice(0, -3)}.mjs`' \
+      --replace-fail \
+        'const path = id.slice(`''${VIRTUAL}css:`.length, -4)' \
+        'const path = join(front, id.slice(`''${VIRTUAL}css:`.length, -4))'
+
     # The primary-runtime staging directory contains the extracted Python
     # distribution's read-only directories, which Node's recursive rmSync
     # cannot unlink; GNU rm chmods them before removing.
@@ -301,7 +312,7 @@ in
   preBuild = ''
     # Source tarballs do not include .git; supply the pinned commit hash that
     # scripts/client-build-environment.ts embeds into client artifacts.
-    export DSH_CLIENT_COMMIT_HASH=639ed01
+    export DSH_CLIENT_COMMIT_HASH=687f282
   '';
 
   postBuild = ''
@@ -385,12 +396,18 @@ in
     patchelf --set-interpreter ${stdenv.cc.bintools.dynamicLinker} \
       --set-rpath "$runtimeLibPath" \
       $out/libexec/dsh-desktop/primary-runtime/dependencies/node/bin/node
-    # python, python3, and python3.12 are hardlinks in the archive; patchelf
-    # replaces the file, breaking the link, so patch each name separately.
-    for pythonBin in python python3 python3.12; do
-      patchelf --set-interpreter ${stdenv.cc.bintools.dynamicLinker} \
-        --add-rpath "$runtimeLibPath" \
-        "$out/libexec/dsh-desktop/primary-runtime/dependencies/python/bin/$pythonBin"
+    # python and python3 are now relative symlinks to the versioned
+    # interpreter (upstream smoke checks rely on that), so patch only the
+    # regular versioned binary; patching a symlink would replace it.
+    for pythonBin in $out/libexec/dsh-desktop/primary-runtime/dependencies/python/bin/python3.*; do
+      case "$pythonBin" in
+        *-config) continue ;;
+      esac
+      if [ -f "$pythonBin" ] && [ ! -L "$pythonBin" ]; then
+        patchelf --set-interpreter ${stdenv.cc.bintools.dynamicLinker} \
+          --add-rpath "$runtimeLibPath" \
+          "$pythonBin"
+      fi
     done
 
     # Release metadata the shell validates before starting the host: only the
@@ -558,7 +575,9 @@ in
     test -f "$app/desktop-runtime.json"
     test -x "$out/bin/dsh-desktop"
     test -f "$out/share/applications/dsh-desktop.desktop"
-    test -f "$desktop/office-skills/scripts/check_office.py"
+    for skill in office office-docx office-export-pdf office-pptx office-recalculate office-render office-xlsx; do
+      test -f "$desktop/office-skills/$skill/SKILL.md"
+    done
 
     # The patched bundled interpreters must run without nix-ld. The wheels need
     # libstdc++ and zlib, which the runtime Node would normally provide through
