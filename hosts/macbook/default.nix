@@ -14,6 +14,7 @@
     ./networking
     ./packages
     ./system
+    ./services/sillytavern.nix
 
     # Android (LineageOS 23.0) in an LXC container, on 16 KiB-page images.
     ./waydroid.nix
