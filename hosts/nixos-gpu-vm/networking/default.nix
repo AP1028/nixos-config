@@ -3,7 +3,38 @@
   networking.networkmanager = {
     enable = true;
     plugins = [pkgs.networkmanager-openvpn];
-    unmanaged = ["interface-name:ens18" "interface-name:ens19"];
+    ensureProfiles.profiles = {
+      ens18 = {
+        connection = {
+          id = "ens18";
+          type = "ethernet";
+          interface-name = "ens18";
+          autoconnect = "true";
+        };
+        ipv4 = {
+          method = "manual";
+          addresses = "192.168.3.200/24";
+          gateway = "192.168.3.1";
+          dns = "192.168.3.1";
+        };
+        ipv6.method = "ignore";
+      };
+      ens19 = {
+        connection = {
+          id = "ens19";
+          type = "ethernet";
+          interface-name = "ens19";
+          autoconnect = "true";
+        };
+        ethernet.mtu = 9000;
+        ipv4 = {
+          method = "manual";
+          addresses = "10.0.0.200/24";
+          never-default = "true";
+        };
+        ipv6.method = "ignore";
+      };
+    };
   };
   networking.useDHCP = false;
 
