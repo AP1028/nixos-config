@@ -170,6 +170,7 @@ in {
         krfb
         kscreen
         kwriteconfig
+        pkgs.kdePackages.plasma-nm
         pkgs.python3
       ]
       ++ lib.optional (cfg.sunshine.enable && config.services.sunshine.enable) (
