@@ -1,6 +1,10 @@
 {pkgs, ...}: {
   networking.hostName = "nixos-gpu-vm";
-  networking.networkmanager.enable = false;
+  networking.networkmanager = {
+    enable = true;
+    plugins = [pkgs.networkmanager-openvpn];
+    unmanaged = ["interface-name:ens18" "interface-name:ens19"];
+  };
   networking.useDHCP = false;
 
   # Gigabit management NIC — takes over the old gpu-host LAN identity
