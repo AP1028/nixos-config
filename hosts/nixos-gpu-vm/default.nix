@@ -34,6 +34,7 @@
     ./vllm-manager
     ./llamacpp
     ./services/files-gpu.nix
+    ./services/openvpn-pad-us.nix
 
     ./packages
   ];

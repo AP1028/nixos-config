@@ -10,6 +10,7 @@
     bilibili
     firefox
     moonlight-qt
+    openvpn
 
     (python3.withPackages (ps: [ps.numpy]))
   ];
