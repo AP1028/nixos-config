@@ -238,7 +238,10 @@ in {
     systemd.user.services.sunshine = lib.mkIf (cfg.sunshine.enable && config.services.sunshine.enable) {
       wants = ["plasma-workspace.target"];
       after = ["plasma-workspace.target"];
-      environment.LD_LIBRARY_PATH = "/run/opengl-driver/lib";
+      environment = {
+        LD_LIBRARY_PATH = "/run/opengl-driver/lib";
+        __EGL_VENDOR_LIBRARY_FILENAMES = "/run/opengl-driver/share/glvnd/egl_vendor.d/50_mesa.json";
+      };
     };
   };
 }
