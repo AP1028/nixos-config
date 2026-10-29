@@ -196,6 +196,7 @@ in {
     };
 
     systemd.user.services.plasma-xdg-desktop-portal-kde = {
+      overrideStrategy = "asDropin";
       wants = [
         "xdg-desktop-portal.service"
         "xdg-permission-store.service"
