@@ -233,9 +233,12 @@ in {
       ping_timeout = "30000";
     };
 
+    services.sunshine.capSysAdmin = lib.mkIf cfg.sunshine.enable (lib.mkForce false);
+
     systemd.user.services.sunshine = lib.mkIf (cfg.sunshine.enable && config.services.sunshine.enable) {
       wants = ["plasma-workspace.target"];
       after = ["plasma-workspace.target"];
+      environment.LD_LIBRARY_PATH = "/run/opengl-driver/lib";
     };
   };
 }
