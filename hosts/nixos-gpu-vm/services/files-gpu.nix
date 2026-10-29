@@ -54,11 +54,11 @@
           plain="''${f%.gz}"
           zcat "$f" > "$plain"
 
-          if ! grep -q 'history:RK(Nt.baseURL)' "$plain"; then
+          if ! grep -Eq 'history:[A-Za-z0-9_$]+\([A-Za-z0-9_$]+\.baseURL\)' "$plain"; then
             echo "files-gpu: quantum router history pattern not found; update the patch" >&2
             exit 1
           fi
-          if ! grep -q '`''${Nt.baseURL}files/' "$plain"; then
+          if ! grep -Eq '`\$\{[A-Za-z0-9_$]+\.baseURL\}files/' "$plain"; then
             echo "files-gpu: quantum item-href pattern not found; update the patch" >&2
             exit 1
           fi
@@ -66,15 +66,15 @@
             echo "files-gpu: quantum router route pattern not found; update the patch" >&2
             exit 1
           fi
-          if ! grep -q '`''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}`' "$plain"; then
+          if ! grep -Eq '`\$\{window\.location\.origin\}\$\{[A-Za-z0-9_$]+\.baseURL\}\$\{o\.startsWith\("/"\)\?o\.slice\(1\):o\}`' "$plain"; then
             echo "files-gpu: quantum new-tab pattern not found; update the patch" >&2
             exit 1
           fi
 
           # vue-router history base: browser URLs are /files/files-gpu/Public,
           # not /files/files-gpu//files/files-gpu/Public. API/static keep
-          # using Nt.baseURL (/files/files-gpu/).
-          sed -i 's/history:RK(Nt.baseURL)/history:RK("\/")/' "$plain"
+          # using the app baseURL (/files/files-gpu/).
+          sed -E -i 's#history:([A-Za-z0-9_$]+)\([A-Za-z0-9_$]+\.baseURL\)#history:\1("/")#g' "$plain"
 
           # Route NAVIGATIONS are backtick template literals (e.g.
           # /files/{source}) that the quoted-string seds below cannot
@@ -90,7 +90,7 @@
           sed -i 's#\x60/files/#\x60/files/files-gpu/#g' "$plain"
 
           # Folder item hrefs: one /files/files-gpu/ prefix.
-          sed -i 's#\x60''${Nt.baseURL}files/#\x60/files/files-gpu/#g' "$plain"
+          sed -E -i 's#\x60\$\{[A-Za-z0-9_$]+\.baseURL\}files/#\x60/files/files-gpu/#g' "$plain"
 
           # The file-listing ROUTE is hardcoded "/files/:path" upstream. The
           # file-vm instance relies on that (served at /files/); this twin is
@@ -101,7 +101,7 @@
           sed -i 's#"/files"#"/files/files-gpu"#g' "$plain"
 
           # "Open in new tab": fullPath already carries /files/files-gpu/.
-          sed -i 's#\x60''${window.location.origin}''${Nt.baseURL}''${o.startsWith("/")?o.slice(1):o}\x60#\x60''${window.location.origin}''${o}\x60#g' "$plain"
+          sed -E -i 's#\x60\$\{window\.location\.origin\}\$\{[A-Za-z0-9_$]+\.baseURL\}\$\{o\.startsWith\("/"\)\?o\.slice\(1\):o\}#\x60\$\{window\.location\.origin\}\$\{o\}#g' "$plain"
 
           gzip -9 -n -c "$plain" > "$f.new"
           mv "$f.new" "$f"
@@ -112,12 +112,22 @@
         # the content without changing the name. Browsers cache the asset for
         # 24h, so publish the patched bundle under a new name and point the
         # SPA template at it.
-        if ! grep -q 'index-RkHXvfmg.js' http/embed/public/index.html; then
+        renamed=0
+        for f in http/embed/assets/index-*.js.gz; do
+          asset=''${f##*/}
+          asset=''${asset%.gz}
+          if ! grep -q "$asset" http/embed/public/index.html; then
+            continue
+          fi
+          patched="''${asset%.js}-files-gpu5-patched.js"
+          mv "$f" "http/embed/assets/$patched.gz"
+          sed -i "s/''${asset%.js}/''${patched%.js}/g" http/embed/public/index.html
+          renamed=1
+        done
+        if [ "$renamed" -ne 1 ]; then
           echo "files-gpu: quantum index template asset pattern not found; update the patch" >&2
           exit 1
         fi
-        mv http/embed/assets/index-RkHXvfmg.js.gz http/embed/assets/index-RkHXvfmg-files-gpu4-patched.js.gz
-        sed -i 's/index-RkHXvfmg\.js/index-RkHXvfmg-files-gpu4-patched.js/g' http/embed/public/index.html
       '';
   });
 
