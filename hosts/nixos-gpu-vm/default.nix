@@ -21,6 +21,9 @@
     ../../modules/hardware/common.nix
     ../../modules/packages/common/vm-common.nix
 
+    ../../modules/desktop
+    ../../modules/desktop/headless-virtual-desktop.nix
+    ../../modules/services/sunshine.nix
     ../../modules/services/vscode-server.nix
     ../../modules/services/openssh.nix
     ../../modules/services/firewall-open.nix
@@ -34,6 +37,12 @@
 
     ./packages
   ];
+
+  services.headlessVirtualDesktop = {
+    enable = true;
+    renderDevice = "/dev/dri/gpu0";
+    resolution = "2560x1440";
+  };
 
   # nixpkgs added its own `services.comfyui` module (2026-08); the comfyui-nix
   # flake module declares the same option, so keep only comfyui-nix's.
