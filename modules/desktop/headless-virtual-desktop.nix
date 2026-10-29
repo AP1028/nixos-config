@@ -163,6 +163,8 @@ in {
       user = cfg.user;
     };
 
+    users.users.${cfg.user}.extraGroups = ["uinput"];
+
     environment.systemPackages =
       [
         krfb
