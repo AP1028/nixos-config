@@ -47,11 +47,13 @@
     ${kwriteconfig}/bin/kwriteconfig6 --file krfbrc --group Security --key desktopPassword "$obscured"
     ${kwriteconfig}/bin/kwriteconfig6 --file krfbrc --group FrameBuffer --key preferredFrameBufferPlugin pw
 
-    ${pkgs.glib}/bin/gdbus call --session \
-      --dest org.freedesktop.impl.portal.PermissionStore \
-      --object-path /org/freedesktop/impl/portal/PermissionStore \
-      --method org.freedesktop.impl.portal.PermissionStore.SetPermission \
-      kde-authorized true remote-desktop org.kde.krfb "['yes']" >/dev/null || true
+    for app in "" "org.kde.krfb"; do
+      ${pkgs.glib}/bin/gdbus call --session \
+        --dest org.freedesktop.impl.portal.PermissionStore \
+        --object-path /org/freedesktop/impl/portal/PermissionStore \
+        --method org.freedesktop.impl.portal.PermissionStore.SetPermission \
+        kde-authorized true remote-desktop "$app" "['yes']" >/dev/null || true
+    done
   '';
 
   setupOutputs = pkgs.writeShellScript "headless-virtual-desktop-setup" ''
@@ -193,14 +195,31 @@ in {
       };
     };
 
+    systemd.user.services.plasma-xdg-desktop-portal-kde = {
+      wants = [
+        "xdg-desktop-portal.service"
+        "xdg-permission-store.service"
+      ];
+      after = [
+        "xdg-desktop-portal.service"
+        "xdg-permission-store.service"
+      ];
+    };
+
     systemd.user.services."app-org.kde.krfb" = {
       description = "KDE desktop sharing (VNC) for the headless virtual desktop";
       wantedBy = ["plasma-workspace.target"];
       partOf = ["plasma-workspace.target"];
-      wants = ["plasma-xdg-desktop-portal-kde.service"];
+      wants = [
+        "plasma-xdg-desktop-portal-kde.service"
+        "xdg-desktop-portal.service"
+        "xdg-permission-store.service"
+      ];
       after = [
         "plasma-workspace.target"
         "plasma-xdg-desktop-portal-kde.service"
+        "xdg-desktop-portal.service"
+        "xdg-permission-store.service"
         "headless-virtual-desktop-setup.service"
       ];
       serviceConfig = {
