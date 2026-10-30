@@ -30,6 +30,7 @@
 
     ../../modules/services/audio.nix
     ../../modules/services/openssh.nix
+    ../../modules/services/strongswan.nix
     ../../modules/services/clash-verge.nix
     (import ../../modules/services/iptables-clash-openwrt.nix {interface = "wlan0";})
 

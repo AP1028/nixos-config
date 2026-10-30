@@ -1,4 +1,8 @@
-{pkgs, inputs, ...}: let
+{
+  pkgs,
+  inputs,
+  ...
+}: let
   wechat-uos-wrapped = pkgs.symlinkJoin {
     name = "wechat-uos-desktop-fix";
     paths = [pkgs.wechat-uos];
@@ -13,13 +17,14 @@ in {
   imports = [
     ../../../modules/packages/opencode.nix
     ../../../modules/packages/steam-asahi.nix
-    ../../../modules/packages/bottles-cpak.nix
+    ../../../modules/packages/bottles-asahi.nix
     ../../../modules/packages/flatpak-netease.nix
     ../../../modules/packages/apfs.nix
   ];
 
   programs.nix-ld.enable = true;
   programs.steam-asahi.enable = true;
+  programs.bottles-asahi.enable = true;
   services.flatpak.enable = true;
 
   environment.systemPackages = with pkgs; [
@@ -101,7 +106,7 @@ in {
 
     # DeepSeek Harness (dsh CLI + Electron desktop). Native aarch64 build:
     # upstream ships linux-arm64 runtime and native-addon assets.
-    (pkgs.callPackage ../../../packages/deepseek-harness { })
+    (pkgs.callPackage ../../../packages/deepseek-harness {})
 
     openvpn
     tigervnc
@@ -114,6 +119,6 @@ in {
     # Cadence-close DE freeze (docs/cadence-freeze.md). hiPrio shadows the real
     # xwayland's bin/Xwayland in /run/current-system/sw/bin, the path kwin
     # launches. Active after the next login.
-    (pkgs.lib.hiPrio (pkgs.callPackage ../../../packages/patched-xwayland.nix { }))
+    (pkgs.lib.hiPrio (pkgs.callPackage ../../../packages/patched-xwayland.nix {}))
   ];
 }
